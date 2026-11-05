@@ -1,6 +1,5 @@
 import { PerspectiveCamera, Scene, WebGLRenderer } from "three";
 import { createPlayerControls } from "./ward/controls";
-import { nearestRoomIndex, PLAYER_START, ROOMS } from "./ward/layout";
 import { createLighting } from "./ward/lighting";
 import { buildFacilities } from "./ward/facilities";
 import { buildHospital } from "./ward/hospital";
@@ -13,11 +12,11 @@ import { buildWinter } from "./ward/winter";
 
 const MAX_FRAME_SECONDS = 0.05;
 const SLOT_CHECK_SECONDS = 60;
-const PORTRAIT_FOV = 62;
-const LANDSCAPE_FOV = 48;
-/** 캐릭터를 화면 아래쪽에 두어 병실이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
-const PORTRAIT_VIEW_SHIFT = 0.24;
-const LANDSCAPE_VIEW_SHIFT = 0.12;
+const PORTRAIT_FOV = 68;
+const LANDSCAPE_FOV = 54;
+/** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
+const PORTRAIT_VIEW_SHIFT = 0.14;
+const LANDSCAPE_VIEW_SHIFT = 0.08;
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
 function isPhoneLike(): boolean {
@@ -34,9 +33,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, phone ? 1.75 : 2));
 
   const scene = new Scene();
-  const camera = new PerspectiveCamera(PORTRAIT_FOV, 1, 0.3, 520);
-  // 하늘과 먼 산까지 보이도록 조금 낮은 각도에서 시작해요.
-  camera.position.set(PLAYER_START.x, 6.2, PLAYER_START.z + 11.5);
+  const camera = new PerspectiveCamera(PORTRAIT_FOV, 1, 0.12, 520);
 
   const softCircle = createSoftCircleTexture();
   const room = buildWard(scene, softCircle);
@@ -52,6 +49,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     steamPerRoom: phone ? 3 : 5,
   });
   const lighting = createLighting(scene, {
+    ceiling: room.ceiling,
     ceilingPanel: room.ceilingPanel,
     sleepLamp: room.sleepLamp,
     windowGlass: room.windowGlass,
@@ -105,7 +103,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     const motionDt = reduceMotion.matches ? 0 : dt;
     winter.update(motionDt, player.x, player.z);
     sky.update(motionDt);
-    lighting.setFocusX(ROOMS[nearestRoomIndex(player.x)].x);
+    lighting.setFocus(player.x, player.z);
     lighting.update(dt);
     renderer.render(scene, camera);
   });

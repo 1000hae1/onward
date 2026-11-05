@@ -7,15 +7,16 @@ import {
   PlaneGeometry,
   SRGBColorSpace,
 } from "three";
-import type { Matrix4, Object3D } from "three";
-import { HOSPITAL_BLOCKS, HOSPITAL_LINKS } from "./layout";
-import type { HospitalBlock } from "./layout";
+import type { BufferGeometry, Matrix4, Object3D } from "three";
+import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
+import { BUILDING, BUILDING_HEIGHT, ENTRANCE, FLOOR_COUNT, FLOOR_HEIGHT } from "./layout";
 import { addInstances, createRandom, transform } from "./parts";
 
-const FLOOR_HEIGHT = 3.4;
-const WINDOW_SPACING = 4;
-const WINDOW_WIDTH = 2.4;
+const WINDOW_SPACING = 3.6;
+const WINDOW_WIDTH = 2.2;
 const WINDOW_HEIGHT = 1.6;
+const CANOPY_HALF_WIDTH = 4;
+const CANOPY_Y = 3.5;
 
 /** 저녁에는 불이 켜지고 소등 뒤에는 꺼지는 창의 비율이에요. */
 const EVENING_ONLY_RATIO = 0.42;
@@ -29,30 +30,31 @@ export interface HospitalHandles {
   windowAllNight: MeshBasicMaterial;
 }
 
-function blockBox(block: HospitalBlock): Matrix4 {
-  return transform(
-    (block.minX + block.maxX) / 2,
-    block.height / 2,
-    (block.minZ + block.maxZ) / 2,
-    0,
-    block.maxX - block.minX,
-    block.height,
-    block.maxZ - block.minZ,
-  );
+function outerWall(
+  x: number,
+  z: number,
+  width: number,
+  bottom: number,
+  top: number,
+  rotationY: number,
+): BufferGeometry {
+  const geometry = new PlaneGeometry(width, top - bottom);
+  geometry.applyMatrix4(transform(x, (bottom + top) / 2, z, rotationY));
+  return geometry;
 }
 
-/** 한 면의 창문 자리를 층과 칸마다 계산해요. rotationY는 창이 바라보는 방향이에요. */
+/** 한 면의 창문 자리를 층과 칸마다 계산해요. */
 function windowsOnFace(
   from: number,
   to: number,
-  floors: number,
-  place: (along: number, y: number) => Matrix4,
+  place: (along: number, y: number, floor: number) => Matrix4 | null,
 ): Matrix4[] {
   const matrices: Matrix4[] = [];
-  for (let floor = 0; floor < floors; floor++) {
-    const y = FLOOR_HEIGHT * (floor + 0.55);
+  for (let floor = 0; floor < FLOOR_COUNT; floor++) {
+    const y = FLOOR_HEIGHT * (floor + 0.52);
     for (let along = from + WINDOW_SPACING / 2; along < to; along += WINDOW_SPACING) {
-      matrices.push(place(along, y));
+      const matrix = place(along, y, floor);
+      if (matrix) matrices.push(matrix);
     }
   }
   return matrices;
@@ -77,47 +79,60 @@ function createSignTexture(): CanvasTexture {
   return texture;
 }
 
-/** 병동을 둘러싼 본관과 별관이에요. 창마다 그리지 않고 한 번에 그려서 가벼워요. */
+/**
+ * 밖에서 보이는 병원 건물이에요. 바깥벽은 바깥에서만 보이는 면이라,
+ * 병실 안에서는 벽에 가리지 않고 창밖 풍경이 그대로 보여요.
+ */
 export function buildHospital(parent: Object3D): HospitalHandles {
-  const unitBox = new BoxGeometry(1, 1, 1);
-  const blocks = [...HOSPITAL_BLOCKS, ...HOSPITAL_LINKS];
-  addInstances(
-    parent,
-    unitBox,
-    new MeshLambertMaterial({ color: "#e8e6df" }),
-    blocks.map(blockBox),
-  );
-  // 지붕에 쌓인 눈이에요.
-  addInstances(
-    parent,
-    unitBox,
-    new MeshLambertMaterial({ color: "#f7fafb" }),
-    blocks.map((block) =>
-      transform(
-        (block.minX + block.maxX) / 2,
-        block.height + 0.12,
-        (block.minZ + block.maxZ) / 2,
-        0,
-        block.maxX - block.minX + 0.4,
-        0.24,
-        block.maxZ - block.minZ + 0.4,
-      ),
-    ),
-  );
+  const width = BUILDING.maxX - BUILDING.minX;
+  const depth = BUILDING.maxZ - BUILDING.minZ;
+  const centerZ = (BUILDING.minZ + BUILDING.maxZ) / 2;
+  const top = BUILDING_HEIGHT;
 
-  const [main, leftWing, rightWing] = HOSPITAL_BLOCKS;
-  const mainFloors = Math.floor(main.height / FLOOR_HEIGHT);
-  const wingFloors = Math.floor(leftWing.height / FLOOR_HEIGHT);
-  // 안뜰을 향한 세 면에 창을 내요. 바깥쪽 면은 카메라에서 보이지 않아요.
+  const entranceWidth = ENTRANCE.maxX - ENTRANCE.minX;
+  const frontSide = (BUILDING.maxX - ENTRANCE.maxX);
+  const walls = mergeGeometries([
+    // 현관 자리를 비운 앞면
+    outerWall((BUILDING.minX + ENTRANCE.minX) / 2, BUILDING.maxZ, frontSide, 0, top, 0),
+    outerWall((BUILDING.maxX + ENTRANCE.maxX) / 2, BUILDING.maxZ, frontSide, 0, top, 0),
+    outerWall(0, BUILDING.maxZ, entranceWidth, ENTRANCE.height, top, 0),
+    // 뒷면과 양옆
+    outerWall(0, BUILDING.minZ, width, 0, top, Math.PI),
+    outerWall(BUILDING.minX, centerZ, depth, 0, top, -Math.PI / 2),
+    outerWall(BUILDING.maxX, centerZ, depth, 0, top, Math.PI / 2),
+  ]);
+  parent.add(new Mesh(walls, new MeshLambertMaterial({ color: "#eceae3" })));
+
+  const box = new BoxGeometry(1, 1, 1);
+  // 눈 덮인 지붕이에요. 천장 아래에서는 보이지 않아요.
+  addInstances(parent, box, new MeshLambertMaterial({ color: "#f7fafb" }), [
+    transform(0, top + 0.15, centerZ, 0, width + 0.6, 0.3, depth + 0.6),
+  ]);
+  // 층을 나누는 가로띠예요.
+  const bands: Matrix4[] = [];
+  for (let floor = 1; floor < FLOOR_COUNT; floor++) {
+    const y = floor * FLOOR_HEIGHT;
+    bands.push(transform(0, y, BUILDING.maxZ + 0.04, 0, width, 0.14, 0.08));
+    bands.push(transform(0, y, BUILDING.minZ - 0.04, 0, width, 0.14, 0.08));
+    bands.push(transform(BUILDING.minX - 0.04, y, centerZ, 0, 0.08, 0.14, depth));
+    bands.push(transform(BUILDING.maxX + 0.04, y, centerZ, 0, 0.08, 0.14, depth));
+  }
+  addInstances(parent, box, new MeshLambertMaterial({ color: "#c9cdd0" }), bands);
+
   const windows = [
-    ...windowsOnFace(main.minX, main.maxX, mainFloors, (along, y) =>
-      transform(along, y, main.minZ - 0.05, Math.PI),
+    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, (along, y, floor) =>
+      floor === 0 && Math.abs(along) < CANOPY_HALF_WIDTH + WINDOW_WIDTH / 2
+        ? null
+        : transform(along, y, BUILDING.maxZ + 0.02, 0),
     ),
-    ...windowsOnFace(leftWing.minZ, leftWing.maxZ - 2, wingFloors, (along, y) =>
-      transform(leftWing.maxX + 0.05, y, along, Math.PI / 2),
+    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, (along, y) =>
+      transform(along, y, BUILDING.minZ - 0.02, Math.PI),
     ),
-    ...windowsOnFace(rightWing.minZ, rightWing.maxZ - 2, wingFloors, (along, y) =>
-      transform(rightWing.minX - 0.05, y, along, -Math.PI / 2),
+    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, (along, y) =>
+      transform(BUILDING.minX - 0.02, y, along, -Math.PI / 2),
+    ),
+    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, (along, y) =>
+      transform(BUILDING.maxX + 0.02, y, along, Math.PI / 2),
     ),
   ];
 
@@ -140,18 +155,23 @@ export function buildHospital(parent: Object3D): HospitalHandles {
   addInstances(parent, windowGeometry, windowEveningOnly, eveningOnly);
   addInstances(parent, windowGeometry, windowAllNight, allNight);
 
-  // 본관 정면의 현관 지붕과 이름표예요. 실제 병원의 이름이나 표장은 쓰지 않아요.
-  addInstances(parent, unitBox, new MeshLambertMaterial({ color: "#c9cdd0" }), [
-    transform(0, 4.2, main.minZ - 3, 0, 16, 0.4, 6),
-    transform(-7, 2, main.minZ - 5.4, 0, 0.5, 4, 0.5),
-    transform(7, 2, main.minZ - 5.4, 0, 0.5, 4, 0.5),
+  // 현관 지붕과 기둥이에요.
+  const canopyDepth = 3.2;
+  addInstances(parent, box, new MeshLambertMaterial({ color: "#c9cdd0" }), [
+    transform(0, CANOPY_Y, BUILDING.maxZ + canopyDepth / 2, 0, CANOPY_HALF_WIDTH * 2, 0.3, canopyDepth),
+    transform(-CANOPY_HALF_WIDTH + 0.4, CANOPY_Y / 2, BUILDING.maxZ + canopyDepth - 0.3, 0, 0.3, CANOPY_Y, 0.3),
+    transform(CANOPY_HALF_WIDTH - 0.4, CANOPY_Y / 2, BUILDING.maxZ + canopyDepth - 0.3, 0, 0.3, CANOPY_Y, 0.3),
   ]);
+  addInstances(parent, box, new MeshLambertMaterial({ color: "#f7fafb" }), [
+    transform(0, CANOPY_Y + 0.2, BUILDING.maxZ + canopyDepth / 2, 0, CANOPY_HALF_WIDTH * 2 + 0.1, 0.12, canopyDepth + 0.1),
+  ]);
+
+  // 이름표예요. 실제 병원의 이름이나 표장은 쓰지 않아요.
   const sign = new Mesh(
-    new PlaneGeometry(20, 5),
+    new PlaneGeometry(7, 1.75),
     new MeshBasicMaterial({ map: createSignTexture() }),
   );
-  sign.position.set(0, main.height - 2.2, main.minZ - 0.1);
-  sign.rotation.y = Math.PI;
+  sign.position.set(0, FLOOR_HEIGHT + 1.6, BUILDING.maxZ + 0.1);
   parent.add(sign);
 
   return { windowDark, windowEveningOnly, windowAllNight };

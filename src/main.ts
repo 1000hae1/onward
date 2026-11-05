@@ -1,4 +1,4 @@
-const WARD_LABEL = "onWard 3병동 · 1/30";
+const WARD_LABEL = "onWard 1병동 · 1/36";
 
 const loading = document.querySelector<HTMLElement>("#loading");
 if (loading) loading.textContent = "병동을 여는 중";

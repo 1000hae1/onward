@@ -1,13 +1,20 @@
 import { Color, DirectionalLight, Fog, HemisphereLight, PointLight } from "three";
-import type { MeshBasicMaterial, PointsMaterial, Scene, SpriteMaterial } from "three";
+import type {
+  MeshBasicMaterial,
+  MeshLambertMaterial,
+  PointsMaterial,
+  Scene,
+  SpriteMaterial,
+} from "three";
 import type { HospitalHandles } from "./hospital";
 import type { LandscapeHandles } from "./landscape";
-import { ROOM, WALL_HEIGHT } from "./layout";
+import { lightSpots } from "./layout";
 import type { SkyHandles } from "./sky";
 import type { TimeSlot } from "./time-of-day";
 
 const TRANSITION_SECONDS = 6;
 const FOCUS_FOLLOW_RATE = 2.5;
+const ROOM_LIGHT_Y = 3.1;
 const FOG_NEAR = 50;
 const FOG_FAR = 230;
 
@@ -22,6 +29,7 @@ const COLOR_KEYS = [
   "hemiSky",
   "hemiGround",
   "sun",
+  "roomLight",
   "panel",
   "lamp",
   "gardenLamp",
@@ -35,8 +43,8 @@ const COLOR_KEYS = [
 const NUMBER_KEYS = [
   "hemi",
   "sunIntensity",
-  "ceiling",
-  "sleep",
+  "roomLightIntensity",
+  "ceilingGlow",
   "glass",
   "starOpacity",
   "sunGlowOpacity",
@@ -84,11 +92,12 @@ const LOOKS: Record<TimeSlot, Look> = {
     cloud: "#ffffff",
     hemiSky: "#ffffff",
     hemiGround: "#eae4da",
-    hemi: 2.2,
+    hemi: 2.05,
     sun: "#fff8ec",
     sunIntensity: 0.8,
-    ceiling: 2,
-    sleep: 0,
+    roomLight: "#fff0d8",
+    roomLightIntensity: 0.9,
+    ceilingGlow: 0.2,
     panel: "#fff6e0",
     lamp: "#d8cab8",
     gardenLamp: "#e8e6df",
@@ -115,8 +124,9 @@ const LOOKS: Record<TimeSlot, Look> = {
     hemi: 1.15,
     sun: "#ff9f6b",
     sunIntensity: 0.25,
-    ceiling: 7,
-    sleep: 0,
+    roomLight: "#ffe2b8",
+    roomLightIntensity: 7,
+    ceilingGlow: 0.16,
     panel: "#ffe2b0",
     lamp: "#c9b49c",
     gardenLamp: "#ffd48a",
@@ -143,8 +153,9 @@ const LOOKS: Record<TimeSlot, Look> = {
     hemi: 0.7,
     sun: "#6d80b0",
     sunIntensity: 0,
-    ceiling: 0,
-    sleep: 1.15,
+    roomLight: "#ffb56b",
+    roomLightIntensity: 1.5,
+    ceilingGlow: 0.015,
     panel: "#2a2c3a",
     lamp: "#ffc27a",
     gardenLamp: "#ffc98a",
@@ -161,6 +172,7 @@ const LOOKS: Record<TimeSlot, Look> = {
 };
 
 export interface LightingTargets {
+  ceiling: MeshLambertMaterial;
   ceilingPanel: MeshBasicMaterial;
   sleepLamp: MeshBasicMaterial;
   windowGlass: MeshBasicMaterial;
@@ -174,14 +186,14 @@ export interface LightingTargets {
 export interface Lighting {
   /** immediate가 true이면 전환 없이 바로 바꿔요. */
   setSlot(slot: TimeSlot, immediate: boolean): void;
-  /** 빛이 비출 병실의 중심 x 좌표를 정해요. 빛은 그쪽으로 천천히 옮겨 가요. */
-  setFocusX(x: number): void;
+  /** 캐릭터가 있는 자리를 알려 줘요. 빛은 그 공간으로 천천히 옮겨 가요. */
+  setFocus(x: number, z: number): void;
   update(dt: number): void;
 }
 
 /**
  * 낮, 저녁, 소등의 조명과 하늘, 풍경 색을 맡아요. 빛의 개수는 고정이고 밝기만 바꿔서 셰이더를 다시 만들지 않아요.
- * 병실마다 빛을 두면 휴대폰에 무거워서, 천장등과 수면등은 캐릭터가 있는 병실만 비춰요.
+ * 병실마다 빛을 두면 휴대폰에 무거워서, 움직이는 빛 두 개가 캐릭터가 있는 공간만 비춰요.
  */
 export function createLighting(scene: Scene, targets: LightingTargets): Lighting {
   const current = cloneLook(LOOKS.day);
@@ -199,33 +211,17 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
 
   // 창밖에서 들어오는 빛이에요.
   const sun = new DirectionalLight();
-  sun.position.set(1.5, 6, ROOM.minZ - 6);
+  sun.position.set(-6, 12, 10);
   scene.add(sun);
 
-  const ceilingLights = [-2.5, 2.5].map((z) => {
-    const light = new PointLight("#ffe2b8", 0, 0, 1.4);
-    light.position.set(0, WALL_HEIGHT - 0.25, z);
+  const startSpots = lightSpots(0, 0);
+  const lights = startSpots.map((spot) => {
+    const light = new PointLight("#ffffff", 0, 0, 1.1);
+    light.position.set(spot.x, ROOM_LIGHT_Y, spot.z);
     scene.add(light);
     return light;
   });
-
-  // 수면등은 빛 두 개로 양쪽 줄을 함께 비춰요.
-  const sleepOffsets = [ROOM.minX + 1.4, ROOM.maxX - 1.4];
-  const sleepLights = sleepOffsets.map((x) => {
-    const light = new PointLight("#ffb56b", 0, 0, 0.8);
-    light.position.set(x, 1.9, 0);
-    scene.add(light);
-    return light;
-  });
-
-  let focusX = 0;
-  let targetFocusX = 0;
-  const placeLights = (): void => {
-    for (const light of ceilingLights) light.position.x = focusX;
-    sleepLights.forEach((light, index) => {
-      light.position.x = focusX + sleepOffsets[index];
-    });
-  };
+  let targetSpots = startSpots;
 
   const apply = (): void => {
     const { colors, numbers } = current;
@@ -244,9 +240,12 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
     hemi.intensity = numbers.hemi;
     sun.color.copy(colors.sun);
     sun.intensity = numbers.sunIntensity;
-    for (const light of ceilingLights) light.intensity = numbers.ceiling;
-    for (const light of sleepLights) light.intensity = numbers.sleep;
+    for (const light of lights) {
+      light.color.copy(colors.roomLight);
+      light.intensity = numbers.roomLightIntensity;
+    }
 
+    targets.ceiling.emissiveIntensity = numbers.ceilingGlow;
     targets.ceilingPanel.color.copy(colors.panel);
     targets.sleepLamp.color.copy(colors.lamp);
     targets.windowGlass.opacity = numbers.glass;
@@ -279,15 +278,15 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
       from = cloneLook(current);
       progress = 0;
     },
-    setFocusX(x) {
-      targetFocusX = x;
+    setFocus(x, z) {
+      targetSpots = lightSpots(x, z);
     },
     update(dt) {
-      if (focusX !== targetFocusX) {
-        focusX += (targetFocusX - focusX) * (1 - Math.exp(-dt * FOCUS_FOLLOW_RATE));
-        if (Math.abs(targetFocusX - focusX) < 0.01) focusX = targetFocusX;
-        placeLights();
-      }
+      const follow = 1 - Math.exp(-dt * FOCUS_FOLLOW_RATE);
+      lights.forEach((light, index) => {
+        light.position.x += (targetSpots[index].x - light.position.x) * follow;
+        light.position.z += (targetSpots[index].z - light.position.z) * follow;
+      });
       if (progress >= 1) return;
       progress = Math.min(1, progress + dt / TRANSITION_SECONDS);
       const eased = progress * progress * (3 - 2 * progress);

@@ -1,6 +1,9 @@
 /**
- * 병동 치수와 배치예요. 단위는 미터이고, x는 복도를 따라가는 방향, z는 창문(-)에서 복도(+) 방향이에요.
- * ROOM, DOOR, WINDOW는 병실 하나의 중심을 기준으로 한 값이고, 나머지 목록은 병동 전체 좌표예요.
+ * 병원 건물의 치수와 배치예요. 단위는 미터이고, 현관은 +z 쪽, 복도 끝 창은 -z 쪽이에요.
+ * 복도는 z축을 따라 가운데로 나 있고, 병실은 복도 양옆(x의 +와 -)에 있어요.
+ *
+ * ROOM, DOOR, WINDOW는 병실 하나의 안쪽 좌표예요. 이 좌표에서 +z는 복도 쪽 문, -z는 창문이에요.
+ * 나머지 목록은 모두 건물 전체 좌표예요.
  */
 
 export interface Rect {
@@ -16,93 +19,124 @@ export interface Placement {
   rotationY: number;
 }
 
-export interface WardRoom {
+export interface WardRoom extends Placement {
   /** 병실 번호예요. */
   number: number;
   index: number;
-  /** 병실 중심의 x 좌표예요. */
-  x: number;
 }
 
 export interface BedPlacement extends Placement {
   roomIndex: number;
-  /** 병실 안에서의 침대 번호예요. 0~2번은 왼쪽 줄, 3~5번은 오른쪽 줄이에요. */
+  /** 병실 안에서의 침대 번호예요. 0~2번과 3~5번이 서로 마주 봐요. */
   index: number;
 }
 
-export const WALL_HEIGHT = 2.8;
+/** 카메라 시선을 막는 벽과 천장이에요. */
+export interface WallBox extends Rect {
+  minY: number;
+  maxY: number;
+}
+
+export const WALL_HEIGHT = 3.6;
+export const WALL_THICKNESS = 0.2;
+export const FLOOR_HEIGHT = 4;
+export const FLOOR_COUNT = 4;
+/** 밖에서 보이는 건물 높이예요. 들어갈 수 있는 곳은 1층뿐이에요. */
+export const BUILDING_HEIGHT = FLOOR_HEIGHT * FLOOR_COUNT;
 
 export const ROOM: Rect = { minX: -3.5, maxX: 3.5, minZ: -5, maxZ: 5 };
-export const DOOR = { minX: -0.7, maxX: 0.7, minZ: 5, maxZ: 5.2, height: 2.2 };
-export const WINDOW = { minX: -2.4, maxX: 2.4, minY: 0.9, maxY: 2.4 };
+export const DOOR = { minX: -0.7, maxX: 0.7, minZ: 5, maxZ: 5.2, height: 2.4 };
+export const WINDOW = { minX: -2.4, maxX: 2.4, minY: 0.9, maxY: 2.9 };
 
-/** 병실 사이에 칸막이 두께 0.2m가 있어요. */
-const ROOM_PITCH = 7.2;
-const ROOM_NUMBERS = [301, 302, 303, 304, 305];
-const CENTER_ROOM_INDEX = (ROOM_NUMBERS.length - 1) / 2;
-
-export const ROOMS: readonly WardRoom[] = ROOM_NUMBERS.map((number, index) => ({
-  number,
-  index,
-  x: (index - CENTER_ROOM_INDEX) * ROOM_PITCH,
-}));
+const CORRIDOR_HALF_WIDTH = 1.4;
+const ROOM_CENTER_X = CORRIDOR_HALF_WIDTH + WALL_THICKNESS + ROOM.maxZ;
+const OUTER_WALL_X = ROOM_CENTER_X + ROOM.maxZ;
+export const ROW_PITCH = 7.2;
+const ROWS_Z = [-ROW_PITCH, 0, ROW_PITCH];
+const FAR_ROOM_EDGE_Z = ROWS_Z[0] + ROOM.minX;
+const NEAR_ROOM_EDGE_Z = ROWS_Z[2] + ROOM.maxX;
 
 export const CORRIDOR: Rect = {
-  minX: ROOMS[0].x + ROOM.minX,
-  maxX: ROOMS[ROOMS.length - 1].x + ROOM.maxX,
-  minZ: DOOR.maxZ,
-  maxZ: 7.4,
+  minX: -CORRIDOR_HALF_WIDTH,
+  maxX: CORRIDOR_HALF_WIDTH,
+  minZ: FAR_ROOM_EDGE_Z - 0.1,
+  maxZ: NEAR_ROOM_EDGE_Z + WALL_THICKNESS,
 };
-
-/** 복도 가운데 안쪽의 간호사실이에요. 들어갈 수는 없어요. */
-export const NURSE_STATION: Rect = { minX: -3.5, maxX: 3.5, minZ: CORRIDOR.maxZ, maxZ: 10.4 };
-/** 복도 오른쪽 끝의 엘리베이터 홀이에요. */
-export const ELEVATOR_HALL: Rect = {
-  minX: 14,
-  maxX: CORRIDOR.maxX,
+export const LOBBY: Rect = {
+  minX: -OUTER_WALL_X,
+  maxX: OUTER_WALL_X,
   minZ: CORRIDOR.maxZ,
-  maxZ: 10.4,
+  maxZ: 16.8,
 };
-export const ELEVATOR_DOOR_Z = [8.2, 9.6];
-
-/** 병동 건물이 차지하는 자리예요. 눈은 이 안에 내리지 않아요. */
-const WARD_FOOTPRINT: Rect = {
-  minX: CORRIDOR.minX - 0.1,
-  maxX: CORRIDOR.maxX + 0.1,
-  minZ: ROOM.minZ - 0.3,
-  maxZ: NURSE_STATION.maxZ + 0.3,
+/** 건물 바깥벽까지 포함한 자리예요. */
+export const BUILDING: Rect = {
+  minX: -OUTER_WALL_X - WALL_THICKNESS,
+  maxX: OUTER_WALL_X + WALL_THICKNESS,
+  minZ: CORRIDOR.minZ - WALL_THICKNESS,
+  maxZ: LOBBY.maxZ + WALL_THICKNESS,
 };
+/** 활짝 열린 현관이에요. */
+export const ENTRANCE = { minX: -1.5, maxX: 1.5, minZ: LOBBY.maxZ, maxZ: BUILDING.maxZ, height: 2.9 };
+/** 현관 앞마당이에요. 지금은 이 안에서만 걸을 수 있어요. */
+export const YARD: Rect = { minX: -9, maxX: 9, minZ: BUILDING.maxZ, maxZ: 42 };
+/** 복도 끝의 큰 창이에요. x와 높이 범위예요. */
+export const CORRIDOR_WINDOW = { minX: -1.1, maxX: 1.1, minY: 0.6, maxY: 3 };
+/** 복도와 로비 사이 위쪽 벽이 시작되는 높이예요. */
+export const HEADER_Y = 3;
 
-export function isInsideWard(x: number, z: number): boolean {
-  return (
-    x >= WARD_FOOTPRINT.minX &&
-    x <= WARD_FOOTPRINT.maxX &&
-    z >= WARD_FOOTPRINT.minZ &&
-    z <= WARD_FOOTPRINT.maxZ
-  );
-}
+const ROOM_SLOTS = [
+  { number: 101, side: -1, z: ROWS_Z[0] },
+  { number: 102, side: -1, z: ROWS_Z[1] },
+  { number: 103, side: -1, z: ROWS_Z[2] },
+  { number: 104, side: 1, z: ROWS_Z[0] },
+  { number: 105, side: 1, z: ROWS_Z[1] },
+  { number: 106, side: 1, z: ROWS_Z[2] },
+];
 
-export const CAMERA_MAX_DISTANCE = 24;
-
-export interface HospitalBlock extends Rect {
-  height: number;
-}
+export const ROOMS: readonly WardRoom[] = ROOM_SLOTS.map((slot, index) => ({
+  number: slot.number,
+  index,
+  x: slot.side * ROOM_CENTER_X,
+  z: slot.z,
+  // 병실 안쪽 좌표의 +z(문)가 복도를 향하도록 돌려요.
+  rotationY: (-slot.side * Math.PI) / 2,
+}));
 
 /**
- * 병동을 둘러싼 병원 건물이에요. 창문 쪽은 정원과 숲을 향해 트여 있어요.
- * 크게 축소해 둘러봐도 카메라가 건물에 부딪히지 않을 만큼 떨어져 있어요.
+ * 로비 오른쪽의 간호사실이에요. 카운터가 현관 쪽을 보고 있고, 복도 입구는 막지 않아요.
+ * 카운터 안쪽으로는 들어갈 수 없어요.
  */
-export const HOSPITAL_BLOCKS: readonly HospitalBlock[] = [
-  { minX: -60, maxX: 60, minZ: 36, maxZ: 52, height: 34 },
-  { minX: -60, maxX: -44, minZ: -12, maxZ: 36, height: 20 },
-  { minX: 44, maxX: 60, minZ: -12, maxZ: 36, height: 20 },
+export const NURSE_STATION: Rect = {
+  minX: 1.9,
+  maxX: 8.7,
+  minZ: LOBBY.minZ + 1.05,
+  maxZ: LOBBY.minZ + 2.75,
+};
+export const NURSE_STATION_CENTER_X = (NURSE_STATION.minX + NURSE_STATION.maxX) / 2;
+
+const nurseAt = (offsetX: number, offsetZ: number): Placement => {
+  const x = NURSE_STATION_CENTER_X + offsetX;
+  const z = NURSE_STATION.minZ + offsetZ;
+  // 현관에서 들어오는 사람을 바라봐요. rotationY 0은 +z 쪽이에요.
+  return { x, z, rotationY: Math.atan2(-x, ENTRANCE.minZ - z) };
+};
+
+/** 카운터 안쪽의 병아리 간호사예요. */
+export const NURSES: readonly Placement[] = [
+  nurseAt(-2.1, 0.75),
+  nurseAt(0, 0.65),
+  nurseAt(2.1, 0.75),
 ];
 
-/** 병동 복도와 양쪽 별관을 잇는 낮은 연결 통로예요. */
-export const HOSPITAL_LINKS: readonly HospitalBlock[] = [
-  { minX: -44, maxX: CORRIDOR.minX, minZ: CORRIDOR.minZ, maxZ: CORRIDOR.maxZ, height: 3.2 },
-  { minX: CORRIDOR.maxX, maxX: 44, minZ: CORRIDOR.minZ, maxZ: CORRIDOR.maxZ, height: 3.2 },
-];
+/** 병실 안쪽 좌표를 건물 전체 좌표로 바꿔요. */
+export function roomToWorld(room: Placement, localX: number, localZ: number): { x: number; z: number } {
+  const cos = Math.cos(room.rotationY);
+  const sin = Math.sin(room.rotationY);
+  return {
+    x: room.x + localX * cos + localZ * sin,
+    z: room.z - localX * sin + localZ * cos,
+  };
+}
 
 export const BED_LENGTH = 2.1;
 export const BED_WIDTH = 1;
@@ -110,108 +144,199 @@ export const NIGHTSTAND_SIZE = 0.56;
 export const NIGHTSTAND_HEIGHT = 0.62;
 export const TABLE_RADIUS = 0.55;
 export const TABLE_HEIGHT = 0.7;
-
-export const PLAYER_RADIUS = 0.22;
-/** 가운데 병실(303호) 문 바로 앞에서 시작해요. 더 뒤로 가면 간호사실 카운터에 가려요. */
-export const PLAYER_START = { x: 0, z: 5.6 };
-
-const BED_ROWS_Z = [-3.2, 0, 3.2];
-const BED_X = 2.3;
-const NIGHTSTAND_X = 3.05;
-const NIGHTSTAND_OFFSET_Z = -0.85;
-
-/** 머리는 벽을, 발은 통로를 향해요. */
-export const BEDS: readonly BedPlacement[] = ROOMS.flatMap((room) => [
-  ...BED_ROWS_Z.map((z, row) => ({
-    roomIndex: room.index,
-    index: row,
-    x: room.x - BED_X,
-    z,
-    rotationY: 0,
-  })),
-  ...BED_ROWS_Z.map((z, row) => ({
-    roomIndex: room.index,
-    index: row + 3,
-    x: room.x + BED_X,
-    z,
-    rotationY: Math.PI,
-  })),
-]);
-
-/** 침대마다 머리맡 창문 쪽에 협탁을 하나씩 둬요. */
-export const NIGHTSTANDS: readonly Placement[] = BEDS.map((bed) => ({
-  x: ROOMS[bed.roomIndex].x + (bed.index < 3 ? -NIGHTSTAND_X : NIGHTSTAND_X),
-  z: bed.z + NIGHTSTAND_OFFSET_Z,
-  rotationY: 0,
-}));
-
-/** 병실마다 가운데에 탁자가 하나씩 있어요. */
-export const TABLES: readonly { x: number; z: number }[] = ROOMS.map((room) => ({
-  x: room.x,
-  z: 0,
-}));
-
 export const FRIDGE_WIDTH = 0.6;
 export const FRIDGE_DEPTH = 0.6;
 export const FRIDGE_HEIGHT = 1.35;
-
-/** 병실마다 오른쪽 벽의 창가 침대와 가운데 협탁 사이에 냉장고를 하나씩 둬요. 문은 통로 쪽을 봐요. */
-export const FRIDGES: readonly { x: number; z: number }[] = ROOMS.map((room) => ({
-  x: room.x + ROOM.maxX - FRIDGE_DEPTH / 2 - 0.03,
-  z: -1.9,
-}));
-
+/** 침대 둘레 커튼 레일의 높이예요. 그 위는 천장까지 막대로 이어져요. */
+export const CURTAIN_RAIL_Y = 2.8;
+/** 침대 가운데에서 레일까지의 거리예요. */
+export const CURTAIN_RAIL_SIDE = 1.35;
+/** 레일이 끝나는 침대 발치 쪽 위치예요. 병실 가운데에서 잰 거리예요. */
+export const CURTAIN_RAIL_FOOT_X = 1.05;
+const CURTAIN_BUNCH_HALF = 0.2;
 export const IV_STAND_RADIUS = 0.13;
 export const IV_POLE_HEIGHT = 1.8;
 /** 수액 줄이 폴대에서 침대까지 뻗는 거리예요. */
 export const IV_TUBE_REACH = Math.hypot(0.65, 0.33);
 
-/** 침대마다 머리맡 복도 쪽에 링거 폴대를 둬요. rotationY는 수액 줄이 침대로 향하는 방향이에요. */
-export const IV_STANDS: readonly Placement[] = BEDS.map((bed) => {
-  const towardBedX = bed.index < 3 ? 0.65 : -0.65;
-  const towardBedZ = -0.33;
-  return {
-    x: bed.x - towardBedX - (bed.index < 3 ? 0.1 : -0.1),
-    z: bed.z + 0.68,
-    rotationY: Math.atan2(-towardBedZ, towardBedX),
-  };
+export const PLAYER_RADIUS = 0.22;
+/** 앞마당에서 현관을 바라보며 시작해요. */
+export const PLAYER_START = { x: 0, z: 36 };
+
+export const BED_LOCAL_ROWS_Z = [-3.2, 0, 3.2];
+const BED_LOCAL_X = 2.3;
+const NIGHTSTAND_LOCAL_X = 3.05;
+const NIGHTSTAND_OFFSET_Z = -0.85;
+const SLEEP_LAMP_LOCAL_X = ROOM.maxX - 0.07;
+
+const placeInRoom = (
+  room: WardRoom,
+  localX: number,
+  localZ: number,
+  localRotationY = 0,
+): Placement => ({
+  ...roomToWorld(room, localX, localZ),
+  rotationY: room.rotationY + localRotationY,
 });
+
+/** 머리는 벽을, 발은 병실 가운데를 향해요. */
+export const BEDS: readonly BedPlacement[] = ROOMS.flatMap((room) => [
+  ...BED_LOCAL_ROWS_Z.map((z, row) => ({
+    roomIndex: room.index,
+    index: row,
+    ...placeInRoom(room, -BED_LOCAL_X, z),
+  })),
+  ...BED_LOCAL_ROWS_Z.map((z, row) => ({
+    roomIndex: room.index,
+    index: row + 3,
+    ...placeInRoom(room, BED_LOCAL_X, z, Math.PI),
+  })),
+]);
+
+const bedLocal = (index: number): { sign: number; z: number } => ({
+  sign: index < 3 ? -1 : 1,
+  z: BED_LOCAL_ROWS_Z[index % 3],
+});
+
+/** 침대마다 머리맡 창문 쪽에 협탁을 하나씩 둬요. */
+export const NIGHTSTANDS: readonly Placement[] = BEDS.map((bed) => {
+  const { sign, z } = bedLocal(bed.index);
+  return placeInRoom(ROOMS[bed.roomIndex], sign * NIGHTSTAND_LOCAL_X, z + NIGHTSTAND_OFFSET_Z);
+});
+
+/** 침대마다 머리맡 벽에 수면등이 있어요. */
+export const SLEEP_LAMPS: readonly Placement[] = BEDS.map((bed) => {
+  const { sign, z } = bedLocal(bed.index);
+  return placeInRoom(ROOMS[bed.roomIndex], sign * SLEEP_LAMP_LOCAL_X, z + NIGHTSTAND_OFFSET_Z);
+});
+
+/** 침대마다 머리맡 문 쪽에 링거 폴대를 둬요. rotationY는 수액 줄이 침대로 향하는 방향이에요. */
+export const IV_STANDS: readonly Placement[] = BEDS.map((bed) => {
+  const { sign, z } = bedLocal(bed.index);
+  const towardBedX = -sign * 0.65;
+  const towardBedZ = -0.33;
+  return placeInRoom(
+    ROOMS[bed.roomIndex],
+    sign * (BED_LOCAL_X + 0.75),
+    z + 0.68,
+    Math.atan2(-towardBedZ, towardBedX),
+  );
+});
+
+/** 침대마다 걷어 묶은 커튼 다발이에요. 머리맡 벽 쪽 모서리에 있어서 지나다니는 데 걸리지 않아요. */
+export const CURTAIN_BUNCHES: readonly Placement[] = BEDS.map((bed) => {
+  const { sign, z } = bedLocal(bed.index);
+  return placeInRoom(
+    ROOMS[bed.roomIndex],
+    sign * (ROOM.maxX - CURTAIN_BUNCH_HALF - 0.02),
+    z - CURTAIN_RAIL_SIDE,
+  );
+});
+
+/** 병실마다 가운데에 탁자가 하나씩 있어요. */
+export const TABLES: readonly { x: number; z: number }[] = ROOMS.map((room) => ({
+  x: room.x,
+  z: room.z,
+}));
+
+/** 병실마다 창가 침대와 가운데 협탁 사이의 벽에 냉장고를 둬요. 문은 병실 가운데를 봐요. */
+export const FRIDGES: readonly Placement[] = ROOMS.map((room) =>
+  placeInRoom(room, ROOM.maxX - FRIDGE_DEPTH / 2 - 0.03, -1.9),
+);
+
+/** 로비의 성탄 나무와 긴 의자, 현관 양옆 화분이에요. */
+export const LOBBY_TREE = { x: -8, z: 15.2, radius: 0.85 };
+export const LOBBY_BENCHES: readonly { x: number; z: number }[] = [
+  { x: 8, z: 14.4 },
+  { x: 8, z: 15.9 },
+];
+export const LOBBY_BENCH = { length: 2.4, depth: 0.55 };
+export const ENTRANCE_PLANTERS: readonly { x: number; z: number }[] = [
+  { x: -4.6, z: 16.3 },
+  { x: 4.6, z: 16.3 },
+];
+/** 현관 양옆의 겨울 정원이에요. 눈 덮인 화단이라 들어갈 수는 없어요. */
+export const ENTRANCE_GARDENS: readonly Rect[] = [-1, 1].map((side) => ({
+  minX: side > 0 ? 3.9 : -8.6,
+  maxX: side > 0 ? 8.6 : -3.9,
+  minZ: BUILDING.maxZ + 1,
+  maxZ: BUILDING.maxZ + 8.5,
+}));
+export const YARD_LAMPS: readonly { x: number; z: number }[] = [
+  { x: -3.4, z: 21 },
+  { x: 3.4, z: 21 },
+  { x: -3.4, z: 28 },
+  { x: 3.4, z: 28 },
+  { x: -3.4, z: 35 },
+  { x: 3.4, z: 35 },
+];
 
 function rectAround(x: number, z: number, halfX: number, halfZ: number): Rect {
   return { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
 }
 
 export function roomRect(room: WardRoom): Rect {
-  return {
-    minX: room.x + ROOM.minX,
-    maxX: room.x + ROOM.maxX,
-    minZ: ROOM.minZ,
-    maxZ: ROOM.maxZ,
-  };
+  return rectAround(room.x, room.z, ROOM.maxZ, ROOM.maxX);
 }
 
-/** 지나갈 수 없는 가구들이에요. */
+/** 지나갈 수 없는 가구들이에요. 병실이 90도 돌아 있어서 침대의 긴 쪽은 z축을 따라요. */
 export const OBSTACLES: readonly Rect[] = [
-  ...BEDS.map((bed) => rectAround(bed.x, bed.z, BED_LENGTH / 2, BED_WIDTH / 2)),
+  ...BEDS.map((bed) => rectAround(bed.x, bed.z, BED_WIDTH / 2, BED_LENGTH / 2)),
   ...NIGHTSTANDS.map((stand) =>
     rectAround(stand.x, stand.z, NIGHTSTAND_SIZE / 2, NIGHTSTAND_SIZE / 2),
   ),
   ...TABLES.map((table) => rectAround(table.x, table.z, TABLE_RADIUS, TABLE_RADIUS)),
-  ...FRIDGES.map((fridge) => rectAround(fridge.x, fridge.z, FRIDGE_DEPTH / 2, FRIDGE_WIDTH / 2)),
+  ...FRIDGES.map((fridge) => rectAround(fridge.x, fridge.z, FRIDGE_WIDTH / 2, FRIDGE_DEPTH / 2)),
   ...IV_STANDS.map((stand) => rectAround(stand.x, stand.z, IV_STAND_RADIUS, IV_STAND_RADIUS)),
+  ...CURTAIN_BUNCHES.map((bunch) =>
+    rectAround(bunch.x, bunch.z, CURTAIN_BUNCH_HALF, CURTAIN_BUNCH_HALF),
+  ),
+  NURSE_STATION,
+  ...ENTRANCE_GARDENS,
+  rectAround(LOBBY_TREE.x, LOBBY_TREE.z, LOBBY_TREE.radius, LOBBY_TREE.radius),
+  ...LOBBY_BENCHES.map((bench) =>
+    rectAround(bench.x, bench.z, LOBBY_BENCH.length / 2, LOBBY_BENCH.depth / 2),
+  ),
+  ...ENTRANCE_PLANTERS.map((planter) => rectAround(planter.x, planter.z, 0.3, 0.3)),
+  ...YARD_LAMPS.map((lamp) => rectAround(lamp.x, lamp.z, 0.1, 0.1)),
 ];
+
+const doorRectOf = (room: WardRoom): Rect => {
+  const side = Math.sign(room.x);
+  const inner = CORRIDOR_HALF_WIDTH;
+  const outer = CORRIDOR_HALF_WIDTH + WALL_THICKNESS;
+  return {
+    minX: side > 0 ? inner : -outer,
+    maxX: side > 0 ? outer : -inner,
+    minZ: room.z + DOOR.minX,
+    maxZ: room.z + DOOR.maxX,
+  };
+};
+
+export const DOOR_RECTS: readonly Rect[] = ROOMS.map(doorRectOf);
+
+const CORRIDOR_LOBBY_LINK: Rect = {
+  minX: CORRIDOR.minX,
+  maxX: CORRIDOR.maxX,
+  minZ: CORRIDOR.maxZ - 0.01,
+  maxZ: LOBBY.minZ + 0.01,
+};
+const ENTRANCE_RECT: Rect = {
+  minX: ENTRANCE.minX,
+  maxX: ENTRANCE.maxX,
+  minZ: ENTRANCE.minZ,
+  maxZ: ENTRANCE.maxZ,
+};
 
 /** 바닥을 눌렀을 때 이동 요청으로 받아 주는 영역이에요. */
 export const FLOOR_AREAS: readonly Rect[] = [
   ...ROOMS.map(roomRect),
-  ...ROOMS.map((room) => ({
-    minX: room.x + DOOR.minX,
-    maxX: room.x + DOOR.maxX,
-    minZ: DOOR.minZ,
-    maxZ: DOOR.maxZ,
-  })),
+  ...DOOR_RECTS,
   CORRIDOR,
-  ELEVATOR_HALL,
+  CORRIDOR_LOBBY_LINK,
+  LOBBY,
+  ENTRANCE_RECT,
+  YARD,
 ];
 
 function shrink(rect: Rect): Rect {
@@ -223,26 +348,133 @@ function shrink(rect: Rect): Rect {
   };
 }
 
+const CONNECTOR_REACH = PLAYER_RADIUS + 0.1;
+
 /** 캐릭터 중심이 머물 수 있는 영역이에요. 벽에서 캐릭터 반지름만큼 떨어져 있어요. */
 export const WALK_AREAS: readonly Rect[] = [
   ...ROOMS.map((room) => shrink(roomRect(room))),
-  ...ROOMS.map((room) => ({
-    minX: room.x + DOOR.minX + PLAYER_RADIUS,
-    maxX: room.x + DOOR.maxX - PLAYER_RADIUS,
-    minZ: ROOM.maxZ - PLAYER_RADIUS - 0.1,
-    maxZ: CORRIDOR.minZ + PLAYER_RADIUS + 0.1,
+  ...DOOR_RECTS.map((door) => ({
+    minX: door.minX - CONNECTOR_REACH,
+    maxX: door.maxX + CONNECTOR_REACH,
+    minZ: door.minZ + PLAYER_RADIUS,
+    maxZ: door.maxZ - PLAYER_RADIUS,
   })),
   shrink(CORRIDOR),
   {
-    minX: ELEVATOR_HALL.minX + PLAYER_RADIUS,
-    maxX: ELEVATOR_HALL.maxX - PLAYER_RADIUS,
-    minZ: CORRIDOR.maxZ - PLAYER_RADIUS - 0.1,
-    maxZ: ELEVATOR_HALL.maxZ - PLAYER_RADIUS,
+    minX: CORRIDOR.minX + PLAYER_RADIUS,
+    maxX: CORRIDOR.maxX - PLAYER_RADIUS,
+    minZ: CORRIDOR.maxZ - CONNECTOR_REACH,
+    maxZ: LOBBY.minZ + CONNECTOR_REACH,
   },
+  shrink(LOBBY),
+  {
+    minX: ENTRANCE.minX + PLAYER_RADIUS,
+    maxX: ENTRANCE.maxX - PLAYER_RADIUS,
+    minZ: ENTRANCE.minZ - CONNECTOR_REACH,
+    maxZ: ENTRANCE.maxZ + CONNECTOR_REACH,
+  },
+  shrink(YARD),
 ];
 
-/** x 좌표에서 가장 가까운 병실의 순번을 돌려줘요. */
-export function nearestRoomIndex(x: number): number {
-  const index = Math.round(x / ROOM_PITCH + CENTER_ROOM_INDEX);
-  return Math.min(ROOMS.length - 1, Math.max(0, index));
+/** 건물이 차지하는 자리예요. 눈은 이 안에 내리지 않아요. */
+export function isInsideWard(x: number, z: number): boolean {
+  return x >= BUILDING.minX && x <= BUILDING.maxX && z >= BUILDING.minZ && z <= BUILDING.maxZ;
+}
+
+const wallBox = (
+  minX: number,
+  maxX: number,
+  minZ: number,
+  maxZ: number,
+  minY = 0,
+  maxY = WALL_HEIGHT,
+): WallBox => ({ minX, maxX, minZ, maxZ, minY, maxY });
+
+/** 왼쪽(-1)이나 오른쪽(1)의 x 범위를 작은 값부터 돌려줘요. */
+const mirrored = (side: number, from: number, to: number): [number, number] =>
+  side > 0 ? [from, to] : [-to, -from];
+
+function corridorWallBoxes(side: number): WallBox[] {
+  const [minX, maxX] = mirrored(side, CORRIDOR_HALF_WIDTH, CORRIDOR_HALF_WIDTH + WALL_THICKNESS);
+  const openings = [
+    ...ROOMS.filter((room) => Math.sign(room.x) === side).map((room) => ({
+      minZ: room.z + DOOR.minX,
+      maxZ: room.z + DOOR.maxX,
+      headerY: DOOR.height,
+    })),
+  ].sort((a, b) => a.minZ - b.minZ);
+
+  const boxes: WallBox[] = [];
+  let z = CORRIDOR.minZ;
+  for (const opening of openings) {
+    boxes.push(wallBox(minX, maxX, z, opening.minZ));
+    boxes.push(wallBox(minX, maxX, opening.minZ, opening.maxZ, opening.headerY));
+    z = opening.maxZ;
+  }
+  boxes.push(wallBox(minX, maxX, z, CORRIDOR.maxZ));
+  return boxes;
+}
+
+function buildWallBoxes(): WallBox[] {
+  const boxes: WallBox[] = [...corridorWallBoxes(-1), ...corridorWallBoxes(1)];
+  for (const side of [-1, 1]) {
+    const [partitionMinX, partitionMaxX] = mirrored(
+      side,
+      CORRIDOR_HALF_WIDTH + WALL_THICKNESS,
+      OUTER_WALL_X,
+    );
+    for (const z of [ROWS_Z[0] + ROOM.maxX, ROWS_Z[1] + ROOM.maxX]) {
+      boxes.push(wallBox(partitionMinX, partitionMaxX, z, z + WALL_THICKNESS));
+    }
+    // 로비와 병실 사이의 벽
+    const [lobbyMinX, lobbyMaxX] = mirrored(side, CORRIDOR_HALF_WIDTH, OUTER_WALL_X);
+    boxes.push(wallBox(lobbyMinX, lobbyMaxX, NEAR_ROOM_EDGE_Z, LOBBY.minZ));
+    // 바깥벽
+    const [outerMinX, outerMaxX] = mirrored(side, OUTER_WALL_X, BUILDING.maxX);
+    boxes.push(wallBox(outerMinX, outerMaxX, BUILDING.minZ, BUILDING.maxZ, 0, BUILDING_HEIGHT));
+  }
+  // 복도 끝 바깥벽
+  boxes.push(wallBox(BUILDING.minX, BUILDING.maxX, BUILDING.minZ, CORRIDOR.minZ, 0, BUILDING_HEIGHT));
+  // 현관이 있는 앞벽과 현관 위쪽
+  boxes.push(wallBox(BUILDING.minX, ENTRANCE.minX, LOBBY.maxZ, BUILDING.maxZ, 0, BUILDING_HEIGHT));
+  boxes.push(wallBox(ENTRANCE.maxX, BUILDING.maxX, LOBBY.maxZ, BUILDING.maxZ, 0, BUILDING_HEIGHT));
+  boxes.push(
+    wallBox(ENTRANCE.minX, ENTRANCE.maxX, LOBBY.maxZ, BUILDING.maxZ, ENTRANCE.height, BUILDING_HEIGHT),
+  );
+  // 복도와 로비 사이 위쪽 벽
+  boxes.push(wallBox(CORRIDOR.minX, CORRIDOR.maxX, NEAR_ROOM_EDGE_Z, LOBBY.minZ, HEADER_Y));
+  // 천장과 그 위 건물
+  boxes.push(
+    wallBox(BUILDING.minX, BUILDING.maxX, BUILDING.minZ, BUILDING.maxZ, WALL_HEIGHT, BUILDING_HEIGHT),
+  );
+  return boxes;
+}
+
+export const WALL_BOXES: readonly WallBox[] = buildWallBoxes();
+
+/** 빛 두 개를 둘 자리예요. 캐릭터가 있는 공간을 고르게 비추도록 정해요. */
+export function lightSpots(x: number, z: number): readonly [
+  { x: number; z: number },
+  { x: number; z: number },
+] {
+  const room = ROOMS.find((candidate) => {
+    const rect = roomRect(candidate);
+    return x >= rect.minX && x <= rect.maxX && z >= rect.minZ && z <= rect.maxZ;
+  });
+  if (room) {
+    return [
+      { x: room.x - 2.5, z: room.z },
+      { x: room.x + 2.5, z: room.z },
+    ];
+  }
+  if (z < CORRIDOR.maxZ) {
+    return [
+      { x: 0, z: z - 3 },
+      { x: 0, z: z + 3 },
+    ];
+  }
+  return [
+    { x: -5, z: (LOBBY.minZ + LOBBY.maxZ) / 2 },
+    { x: 5, z: (LOBBY.minZ + LOBBY.maxZ) / 2 },
+  ];
 }

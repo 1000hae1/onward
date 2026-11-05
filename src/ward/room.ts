@@ -2,6 +2,7 @@ import {
   CanvasTexture,
   CatmullRomCurve3,
   CircleGeometry,
+  BoxGeometry,
   CylinderGeometry,
   Mesh,
   MeshBasicMaterial,
@@ -17,32 +18,42 @@ import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.j
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
   BED_LENGTH,
+  BED_LOCAL_ROWS_Z,
   BED_WIDTH,
   BEDS,
+  BUILDING,
   CORRIDOR,
+  CORRIDOR_WINDOW,
+  CURTAIN_BUNCHES,
+  CURTAIN_RAIL_FOOT_X,
+  CURTAIN_RAIL_SIDE,
+  CURTAIN_RAIL_Y,
   DOOR,
-  ELEVATOR_HALL,
+  DOOR_RECTS,
+  ENTRANCE,
   FRIDGE_DEPTH,
   FRIDGE_HEIGHT,
   FRIDGE_WIDTH,
   FRIDGES,
+  HEADER_Y,
   IV_POLE_HEIGHT,
   IV_STAND_RADIUS,
   IV_STANDS,
   IV_TUBE_REACH,
+  LOBBY,
   NIGHTSTAND_HEIGHT,
   NIGHTSTAND_SIZE,
   NIGHTSTANDS,
-  NURSE_STATION,
   ROOM,
   ROOMS,
+  SLEEP_LAMPS,
   TABLE_HEIGHT,
   TABLE_RADIUS,
   TABLES,
   WALL_HEIGHT,
   WINDOW,
 } from "./layout";
-import type { Rect, WardRoom } from "./layout";
+import type { WardRoom } from "./layout";
 import { addInstances, repeatAt, transform } from "./parts";
 
 const SHADOW_Y = 0.012;
@@ -51,124 +62,123 @@ const WALLPAPER_COLOR = "#ffffff";
 const BED_FRAME_COLOR = "#f3e8d2";
 const FURNITURE_COLOR = "#f4efe5";
 const TRIM_COLOR = "#dfdcd5";
+const RAIL_COLOR = "#c9cdd0";
 
 const lambert = (color: string): MeshLambertMaterial => new MeshLambertMaterial({ color });
 
-/** 같은 구성을 병실마다 반복해요. */
-const inEveryRoom = (locals: readonly Matrix4[]): Matrix4[] =>
-  repeatAt(ROOMS.map((room) => transform(room.x, 0, 0)), locals);
+const roomBase = (room: WardRoom): Matrix4 => transform(room.x, 0, room.z, room.rotationY);
+
+/** 병실 안쪽 좌표의 구성을 병실마다 반복해요. */
+const inEveryRoom = (locals: readonly Matrix4[]): Matrix4[] => repeatAt(ROOMS.map(roomBase), locals);
 
 export interface RoomHandles {
   /** 시간대에 따라 밝기가 바뀌는 재질들이에요. */
+  ceiling: MeshLambertMaterial;
   ceilingPanel: MeshBasicMaterial;
   sleepLamp: MeshBasicMaterial;
   windowGlass: MeshBasicMaterial;
 }
 
-/** 벽 한 면이에요. u는 벽을 따라가는 좌표이고, 안쪽에서만 보이는 면으로 만들어요. */
-interface WallSide {
-  place(u: number): { x: number; z: number };
-  rotationY: number;
-}
+type Facing = "+x" | "-x" | "+z" | "-z";
 
-const farWall = (roomX: number): WallSide => ({
-  place: (u) => ({ x: roomX + u, z: ROOM.minZ }),
-  rotationY: 0,
-});
-const nearWall = (roomX: number): WallSide => ({
-  place: (u) => ({ x: roomX + u, z: ROOM.maxZ }),
-  rotationY: Math.PI,
-});
-const leftWall = (roomX: number): WallSide => ({
-  place: (u) => ({ x: roomX + ROOM.minX, z: u }),
-  rotationY: Math.PI / 2,
-});
-const rightWall = (roomX: number): WallSide => ({
-  place: (u) => ({ x: roomX + ROOM.maxX, z: u }),
-  rotationY: -Math.PI / 2,
-});
-
-const CORRIDOR_BACK: WallSide = {
-  place: (u) => ({ x: u, z: CORRIDOR.maxZ }),
-  rotationY: Math.PI,
-};
-const CORRIDOR_LEFT: WallSide = {
-  place: (u) => ({ x: CORRIDOR.minX, z: u }),
-  rotationY: Math.PI / 2,
-};
-const CORRIDOR_RIGHT: WallSide = {
-  place: (u) => ({ x: CORRIDOR.maxX, z: u }),
-  rotationY: -Math.PI / 2,
+const FACING_ROTATION: Record<Facing, number> = {
+  "+z": 0,
+  "-z": Math.PI,
+  "+x": Math.PI / 2,
+  "-x": -Math.PI / 2,
 };
 
+/**
+ * 벽 한 조각이에요. facing 쪽에서만 보이는 면이고, fixed는 벽이 놓인 좌표,
+ * from과 to는 벽을 따라가는 좌표예요.
+ */
 function wallPiece(
-  side: WallSide,
-  u1: number,
-  u2: number,
+  facing: Facing,
+  fixed: number,
+  from: number,
+  to: number,
   y1: number,
   y2: number,
 ): BufferGeometry {
-  const { x, z } = side.place((u1 + u2) / 2);
-  const geometry = new PlaneGeometry(Math.abs(u2 - u1), y2 - y1);
-  geometry.applyMatrix4(transform(x, (y1 + y2) / 2, z, side.rotationY));
+  const middle = (from + to) / 2;
+  const onX = facing === "+x" || facing === "-x";
+  const geometry = new PlaneGeometry(Math.abs(to - from), y2 - y1);
+  geometry.applyMatrix4(
+    transform(onX ? fixed : middle, (y1 + y2) / 2, onX ? middle : fixed, FACING_ROTATION[facing]),
+  );
   return geometry;
 }
 
-/** 벽은 안쪽 면만 그려요. 카메라가 벽 바깥으로 나가도 벽이 시야를 가리지 않아요. */
-function buildWalls(parent: Object3D): void {
-  const pieces: BufferGeometry[] = [];
-
-  for (const room of ROOMS) {
-    const far = farWall(room.x);
-    const near = nearWall(room.x);
-    pieces.push(
-      wallPiece(leftWall(room.x), ROOM.minZ, ROOM.maxZ, 0, WALL_HEIGHT),
-      wallPiece(rightWall(room.x), ROOM.minZ, ROOM.maxZ, 0, WALL_HEIGHT),
-      // 창문 벽
-      wallPiece(far, ROOM.minX, ROOM.maxX, 0, WINDOW.minY),
-      wallPiece(far, ROOM.minX, WINDOW.minX, WINDOW.minY, WALL_HEIGHT),
-      wallPiece(far, WINDOW.maxX, ROOM.maxX, WINDOW.minY, WALL_HEIGHT),
-      wallPiece(far, WINDOW.minX, WINDOW.maxX, WINDOW.maxY, WALL_HEIGHT),
-      // 출입구 벽
-      wallPiece(near, ROOM.minX, DOOR.minX, 0, WALL_HEIGHT),
-      wallPiece(near, DOOR.maxX, ROOM.maxX, 0, WALL_HEIGHT),
-      wallPiece(near, DOOR.minX, DOOR.maxX, DOOR.height, WALL_HEIGHT),
-    );
-  }
-
-  // 복도 뒷벽은 간호사실과 엘리베이터 홀 자리만큼 트여 있어요.
-  const recessWalls = (rect: Rect): BufferGeometry[] => [
-    wallPiece(
-      { place: (u) => ({ x: u, z: rect.maxZ }), rotationY: Math.PI },
-      rect.minX,
-      rect.maxX,
-      0,
-      WALL_HEIGHT,
-    ),
-    wallPiece(
-      { place: (u) => ({ x: rect.minX, z: u }), rotationY: Math.PI / 2 },
-      rect.minZ,
-      rect.maxZ,
-      0,
-      WALL_HEIGHT,
-    ),
-    wallPiece(
-      { place: (u) => ({ x: rect.maxX, z: u }), rotationY: -Math.PI / 2 },
-      rect.minZ,
-      rect.maxZ,
-      0,
-      WALL_HEIGHT,
-    ),
+/** 병실 안쪽 네 면이에요. 병실 좌표로 만든 뒤 제자리로 옮겨요. */
+function roomWallPieces(room: WardRoom): BufferGeometry[] {
+  const pieces = [
+    wallPiece("+x", ROOM.minX, ROOM.minZ, ROOM.maxZ, 0, WALL_HEIGHT),
+    wallPiece("-x", ROOM.maxX, ROOM.minZ, ROOM.maxZ, 0, WALL_HEIGHT),
+    // 창문 벽
+    wallPiece("+z", ROOM.minZ, ROOM.minX, ROOM.maxX, 0, WINDOW.minY),
+    wallPiece("+z", ROOM.minZ, ROOM.minX, WINDOW.minX, WINDOW.minY, WALL_HEIGHT),
+    wallPiece("+z", ROOM.minZ, WINDOW.maxX, ROOM.maxX, WINDOW.minY, WALL_HEIGHT),
+    wallPiece("+z", ROOM.minZ, WINDOW.minX, WINDOW.maxX, WINDOW.maxY, WALL_HEIGHT),
+    // 문이 있는 벽
+    wallPiece("-z", ROOM.maxZ, ROOM.minX, DOOR.minX, 0, WALL_HEIGHT),
+    wallPiece("-z", ROOM.maxZ, DOOR.maxX, ROOM.maxX, 0, WALL_HEIGHT),
+    wallPiece("-z", ROOM.maxZ, DOOR.minX, DOOR.maxX, DOOR.height, WALL_HEIGHT),
   ];
-  pieces.push(
-    wallPiece(CORRIDOR_BACK, CORRIDOR.minX, NURSE_STATION.minX, 0, WALL_HEIGHT),
-    wallPiece(CORRIDOR_BACK, NURSE_STATION.maxX, ELEVATOR_HALL.minX, 0, WALL_HEIGHT),
-    wallPiece(CORRIDOR_LEFT, CORRIDOR.minZ, CORRIDOR.maxZ, 0, WALL_HEIGHT),
-    wallPiece(CORRIDOR_RIGHT, CORRIDOR.minZ, CORRIDOR.maxZ, 0, WALL_HEIGHT),
-    ...recessWalls(NURSE_STATION),
-    ...recessWalls(ELEVATOR_HALL),
-  );
+  const base = roomBase(room);
+  for (const piece of pieces) piece.applyMatrix4(base);
+  return pieces;
+}
 
+/** 복도 한쪽 벽이에요. 병실 문과 간호사실 입구 자리는 비워요. */
+function corridorSidePieces(side: number): BufferGeometry[] {
+  const fixed = side * CORRIDOR.maxX;
+  const facing: Facing = side > 0 ? "-x" : "+x";
+  const openings = [
+    ...ROOMS.filter((room) => Math.sign(room.x) === side).map((room) => ({
+      minZ: room.z + DOOR.minX,
+      maxZ: room.z + DOOR.maxX,
+      headerY: DOOR.height,
+    })),
+  ].sort((a, b) => a.minZ - b.minZ);
+
+  const pieces: BufferGeometry[] = [];
+  let z = CORRIDOR.minZ;
+  for (const opening of openings) {
+    pieces.push(wallPiece(facing, fixed, z, opening.minZ, 0, WALL_HEIGHT));
+    pieces.push(wallPiece(facing, fixed, opening.minZ, opening.maxZ, opening.headerY, WALL_HEIGHT));
+    z = opening.maxZ;
+  }
+  pieces.push(wallPiece(facing, fixed, z, CORRIDOR.maxZ, 0, WALL_HEIGHT));
+  return pieces;
+}
+
+function buildInteriorWalls(parent: Object3D): void {
+  const window = CORRIDOR_WINDOW;
+  const pieces: BufferGeometry[] = [
+    ...ROOMS.flatMap(roomWallPieces),
+    ...corridorSidePieces(-1),
+    ...corridorSidePieces(1),
+
+    // 복도 끝의 큰 창이 있는 벽
+    wallPiece("+z", CORRIDOR.minZ, CORRIDOR.minX, CORRIDOR.maxX, 0, window.minY),
+    wallPiece("+z", CORRIDOR.minZ, CORRIDOR.minX, CORRIDOR.maxX, window.maxY, WALL_HEIGHT),
+    wallPiece("+z", CORRIDOR.minZ, CORRIDOR.minX, window.minX, window.minY, window.maxY),
+    wallPiece("+z", CORRIDOR.minZ, window.maxX, CORRIDOR.maxX, window.minY, window.maxY),
+
+    // 복도와 로비 사이 위쪽 벽. 양쪽에서 보여요.
+    wallPiece("+z", LOBBY.minZ, CORRIDOR.minX, CORRIDOR.maxX, HEADER_Y, WALL_HEIGHT),
+    wallPiece("-z", LOBBY.minZ, CORRIDOR.minX, CORRIDOR.maxX, HEADER_Y, WALL_HEIGHT),
+
+    // 로비 네 면
+    wallPiece("+z", LOBBY.minZ, LOBBY.minX, CORRIDOR.minX, 0, WALL_HEIGHT),
+    wallPiece("+z", LOBBY.minZ, CORRIDOR.maxX, LOBBY.maxX, 0, WALL_HEIGHT),
+    wallPiece("+x", LOBBY.minX, LOBBY.minZ, LOBBY.maxZ, 0, WALL_HEIGHT),
+    wallPiece("-x", LOBBY.maxX, LOBBY.minZ, LOBBY.maxZ, 0, WALL_HEIGHT),
+    wallPiece("-z", LOBBY.maxZ, LOBBY.minX, ENTRANCE.minX, 0, WALL_HEIGHT),
+    wallPiece("-z", LOBBY.maxZ, ENTRANCE.maxX, LOBBY.maxX, 0, WALL_HEIGHT),
+    wallPiece("-z", LOBBY.maxZ, ENTRANCE.minX, ENTRANCE.maxX, ENTRANCE.height, WALL_HEIGHT),
+
+  ];
   parent.add(new Mesh(mergeGeometries(pieces), lambert(WALLPAPER_COLOR)));
 }
 
@@ -185,57 +195,64 @@ function floorPiece(
   return geometry;
 }
 
-function buildFloorsAndCeilings(parent: Object3D): MeshBasicMaterial {
-  // 벽이 서는 자리예요. 위에서 볼 때 병실 사이로 바깥이 비치지 않게 막아요.
-  parent.add(
-    new Mesh(
-      mergeGeometries([
-        floorPiece(CORRIDOR.minX, CORRIDOR.maxX, ROOM.minZ, CORRIDOR.maxZ, FOUNDATION_Y),
-      ]),
-      lambert("#ecebe6"),
-    ),
-  );
-
+function buildFloorsAndCeiling(parent: Object3D): {
+  panel: MeshBasicMaterial;
+  ceiling: MeshLambertMaterial;
+} {
   const addMerged = (pieces: BufferGeometry[], color: string): void => {
     parent.add(new Mesh(mergeGeometries(pieces), lambert(color)));
   };
+
+  // 벽이 서는 자리예요. 문틈이나 벽 사이로 바깥이 비치지 않게 막아요.
   addMerged(
-    ROOMS.map((room) => floorPiece(room.x + ROOM.minX, room.x + ROOM.maxX, ROOM.minZ, ROOM.maxZ)),
+    [floorPiece(BUILDING.minX, BUILDING.maxX, BUILDING.minZ, BUILDING.maxZ, FOUNDATION_Y)],
+    "#ecebe6",
+  );
+  addMerged(
+    ROOMS.map((room) => {
+      const piece = floorPiece(ROOM.minX, ROOM.maxX, ROOM.minZ, ROOM.maxZ);
+      piece.applyMatrix4(roomBase(room));
+      return piece;
+    }),
     "#d8d4c9",
   );
   addMerged(
-    ROOMS.map((room) => floorPiece(room.x + DOOR.minX, room.x + DOOR.maxX, DOOR.minZ, DOOR.maxZ)),
+    [
+      ...DOOR_RECTS.map((door) => floorPiece(door.minX, door.maxX, door.minZ, door.maxZ)),
+      floorPiece(ENTRANCE.minX, ENTRANCE.maxX, ENTRANCE.minZ, ENTRANCE.maxZ),
+    ],
     "#c4c1b8",
   );
   addMerged(
     [
       floorPiece(CORRIDOR.minX, CORRIDOR.maxX, CORRIDOR.minZ, CORRIDOR.maxZ),
-      floorPiece(NURSE_STATION.minX, NURSE_STATION.maxX, NURSE_STATION.minZ, NURSE_STATION.maxZ),
-      floorPiece(ELEVATOR_HALL.minX, ELEVATOR_HALL.maxX, ELEVATOR_HALL.minZ, ELEVATOR_HALL.maxZ),
+      floorPiece(LOBBY.minX, LOBBY.maxX, LOBBY.minZ, LOBBY.maxZ),
     ],
     "#cfcdc6",
   );
 
-  // 천장은 아래에서만 보여요. 위에서 내려다볼 때는 병실 안이 그대로 보여요.
-  const ceilingGeometry = new PlaneGeometry(ROOM.maxX - ROOM.minX, ROOM.maxZ - ROOM.minZ);
+  // 건물 전체를 덮는 천장이에요. 아래에서만 보이는 면이에요.
+  const ceilingGeometry = new PlaneGeometry(BUILDING.maxX - BUILDING.minX, BUILDING.maxZ - BUILDING.minZ);
   ceilingGeometry.rotateX(Math.PI / 2);
-  addInstances(
-    parent,
-    ceilingGeometry,
-    lambert(WALLPAPER_COLOR),
-    inEveryRoom([transform(0, WALL_HEIGHT, 0)]),
-  );
+  ceilingGeometry.translate(0, WALL_HEIGHT, (BUILDING.minZ + BUILDING.maxZ) / 2);
+  // 천장은 위에서 오는 빛을 받지 못해 어두워지므로, 시간대별로 스스로 밝혀요.
+  const ceilingMaterial = new MeshLambertMaterial({ color: WALLPAPER_COLOR, emissive: "#ffffff" });
+  parent.add(new Mesh(ceilingGeometry, ceilingMaterial));
 
   const panelMaterial = new MeshBasicMaterial({ color: "#fff3d6" });
   const panelGeometry = new CircleGeometry(0.42, 20);
   panelGeometry.rotateX(Math.PI / 2);
-  addInstances(
-    parent,
-    panelGeometry,
-    panelMaterial,
-    inEveryRoom([transform(0, WALL_HEIGHT - 0.01, -2.5), transform(0, WALL_HEIGHT - 0.01, 2.5)]),
-  );
-  return panelMaterial;
+  const panelY = WALL_HEIGHT - 0.01;
+  addInstances(parent, panelGeometry, panelMaterial, [
+    ...inEveryRoom([transform(0, panelY, -2.5), transform(0, panelY, 2.5)]),
+    transform(0, panelY, -7.2),
+    transform(0, panelY, 0),
+    transform(0, panelY, 7.2),
+    transform(-6, panelY, (LOBBY.minZ + LOBBY.maxZ) / 2),
+    transform(0, panelY, (LOBBY.minZ + LOBBY.maxZ) / 2),
+    transform(6, panelY, (LOBBY.minZ + LOBBY.maxZ) / 2),
+  ]);
+  return { panel: panelMaterial, ceiling: ceilingMaterial };
 }
 
 function buildWindows(parent: Object3D): MeshBasicMaterial {
@@ -245,20 +262,19 @@ function buildWindows(parent: Object3D): MeshBasicMaterial {
   const centerY = (WINDOW.minY + WINDOW.maxY) / 2;
   const z = ROOM.minZ;
 
-  const rail = new RoundedBoxGeometry(width + 0.2, 0.1, 0.14, 2, 0.04);
+  // 병실 창틀
   addInstances(
     parent,
-    rail,
+    new RoundedBoxGeometry(width + 0.2, 0.1, 0.14, 2, 0.04),
     frame,
     inEveryRoom([
       transform(0, WINDOW.maxY + 0.02, z),
       transform(0, WINDOW.minY - 0.02, z + 0.04),
     ]),
   );
-  const post = new RoundedBoxGeometry(0.1, height, 0.12, 2, 0.04);
   addInstances(
     parent,
-    post,
+    new RoundedBoxGeometry(0.1, height, 0.12, 2, 0.04),
     frame,
     inEveryRoom([
       transform(WINDOW.minX - 0.02, centerY, z),
@@ -266,6 +282,28 @@ function buildWindows(parent: Object3D): MeshBasicMaterial {
       transform(-0.8, centerY, z, 0, 0.6, 1, 0.8),
       transform(0.8, centerY, z, 0, 0.6, 1, 0.8),
     ]),
+  );
+
+  // 복도 끝 창틀
+  const corridor = CORRIDOR_WINDOW;
+  const corridorCenterY = (corridor.minY + corridor.maxY) / 2;
+  addInstances(
+    parent,
+    new RoundedBoxGeometry(corridor.maxX - corridor.minX + 0.2, 0.1, 0.14, 2, 0.04),
+    frame,
+    [
+      transform(0, corridor.maxY + 0.02, CORRIDOR.minZ),
+      transform(0, corridor.minY - 0.02, CORRIDOR.minZ + 0.04),
+    ],
+  );
+  addInstances(
+    parent,
+    new RoundedBoxGeometry(0.1, corridor.maxY - corridor.minY, 0.12, 2, 0.04),
+    frame,
+    [
+      transform(corridor.minX - 0.02, corridorCenterY, CORRIDOR.minZ),
+      transform(corridor.maxX + 0.02, corridorCenterY, CORRIDOR.minZ),
+    ],
   );
 
   const glassMaterial = new MeshBasicMaterial({
@@ -277,9 +315,20 @@ function buildWindows(parent: Object3D): MeshBasicMaterial {
   });
   const glass = addInstances(
     parent,
-    new PlaneGeometry(width, height),
+    new PlaneGeometry(1, 1),
     glassMaterial,
-    inEveryRoom([transform(0, centerY, z - 0.01)]),
+    [
+      ...inEveryRoom([transform(0, centerY, z - 0.01, 0, width, height, 1)]),
+      transform(
+        0,
+        corridorCenterY,
+        CORRIDOR.minZ - 0.01,
+        0,
+        corridor.maxX - corridor.minX,
+        corridor.maxY - corridor.minY,
+        1,
+      ),
+    ],
   );
   glass.renderOrder = 2;
   return glassMaterial;
@@ -331,17 +380,36 @@ function buildDoorways(parent: Object3D): void {
       plateGeometry,
       new MeshBasicMaterial({ map: createDoorPlateTexture(room) }),
     );
-    plate.position.set(room.x, DOOR.height + 0.21, DOOR.maxZ + 0.05);
+    plate.position.set(0, DOOR.height + 0.3, DOOR.maxZ + 0.01);
+    plate.applyMatrix4(roomBase(room));
     parent.add(plate);
   }
+}
 
-  // 복도 손잡이
-  const rail = (fromX: number, toX: number): Matrix4 =>
-    transform((fromX + toX) / 2, 0.9, CORRIDOR.maxZ - 0.06, 0, toX - fromX, 1, 1);
-  addInstances(parent, new RoundedBoxGeometry(1, 0.07, 0.08, 1, 0.03), lambert("#c9cdd0"), [
-    rail(CORRIDOR.minX + 0.15, NURSE_STATION.minX - 0.15),
-    rail(NURSE_STATION.maxX + 0.15, ELEVATOR_HALL.minX - 0.15),
-  ]);
+/** 복도 양쪽 벽의 안전 손잡이예요. 문과 입구 자리는 비워요. */
+function buildCorridorRails(parent: Object3D): void {
+  const rails: Matrix4[] = [];
+  for (const side of [-1, 1]) {
+    const openings = [
+      ...ROOMS.filter((room) => Math.sign(room.x) === side).map((room) => ({
+        minZ: room.z + DOOR.minX,
+        maxZ: room.z + DOOR.maxX,
+      })),
+    ].sort((a, b) => a.minZ - b.minZ);
+    let z = CORRIDOR.minZ + 0.15;
+    const add = (from: number, to: number): void => {
+      if (to - from < 0.3) return;
+      rails.push(
+        transform(side * (CORRIDOR.maxX - 0.04), 0.9, (from + to) / 2, 0, 1, 1, to - from),
+      );
+    };
+    for (const opening of openings) {
+      add(z, opening.minZ - 0.15);
+      z = opening.maxZ + 0.15;
+    }
+    add(z, CORRIDOR.maxZ - 0.15);
+  }
+  addInstances(parent, new RoundedBoxGeometry(0.08, 0.07, 1, 1, 0.03), lambert(RAIL_COLOR), rails);
 }
 
 function buildBeds(parent: Object3D): void {
@@ -387,22 +455,18 @@ function buildNightstands(parent: Object3D): MeshBasicMaterial {
 
   // 머리맡 벽에 수면등을 달아요.
   const lampMaterial = new MeshBasicMaterial({ color: "#ffc27a" });
-  const lampGeometry = new SphereGeometry(0.075, 12, 8);
   addInstances(
     parent,
-    lampGeometry,
+    new SphereGeometry(0.075, 12, 8),
     lampMaterial,
-    BEDS.map((bed, index) => {
-      const wallOffset = bed.index < 3 ? ROOM.minX + 0.07 : ROOM.maxX - 0.07;
-      return transform(ROOMS[bed.roomIndex].x + wallOffset, 1.3, NIGHTSTANDS[index].z);
-    }),
+    SLEEP_LAMPS.map((lamp) => transform(lamp.x, 1.3, lamp.z)),
   );
   return lampMaterial;
 }
 
 function buildTables(parent: Object3D): void {
   const top = lambert(FURNITURE_COLOR);
-  const stand = lambert("#c9cdd0");
+  const stand = lambert(RAIL_COLOR);
   addInstances(
     parent,
     new CylinderGeometry(TABLE_RADIUS, TABLE_RADIUS - 0.03, 0.05, 24),
@@ -423,9 +487,9 @@ function buildTables(parent: Object3D): void {
   );
 }
 
-/** 병실마다 한 대씩 있는 작은 냉장고예요. 문은 통로 쪽(-x)을 봐요. */
+/** 병실마다 한 대씩 있는 작은 냉장고예요. 문은 병실 안쪽 좌표의 -x를 봐요. */
 function buildFridges(parent: Object3D): void {
-  const bases = FRIDGES.map((fridge) => transform(fridge.x, 0, fridge.z));
+  const bases = FRIDGES.map((fridge) => transform(fridge.x, 0, fridge.z, fridge.rotationY));
   const frontX = -FRIDGE_DEPTH / 2;
   const seamY = FRIDGE_HEIGHT * 0.68;
 
@@ -510,6 +574,57 @@ function buildIvStands(parent: Object3D): void {
   );
 }
 
+/** 침대 둘레의 천장 레일과, 걷어서 묶어 둔 커튼이에요. 지금은 치지 않아요. */
+function buildCurtains(parent: Object3D): void {
+  const metal = lambert(RAIL_COLOR);
+  const rails: Matrix4[] = [];
+  const rods: Matrix4[] = [];
+  for (const sign of [-1, 1]) {
+    const wallX = sign * ROOM.maxX;
+    const footX = sign * CURTAIN_RAIL_FOOT_X;
+    const sideLength = Math.abs(wallX - footX);
+    for (const z of BED_LOCAL_ROWS_Z) {
+      // 벽에서 나와 침대 양옆을 지나 발치에서 만나는 ㄷ자 레일이에요.
+      for (const offset of [-CURTAIN_RAIL_SIDE, CURTAIN_RAIL_SIDE]) {
+        rails.push(transform((wallX + footX) / 2, CURTAIN_RAIL_Y, z + offset, 0, sideLength, 1, 1));
+        rods.push(transform(footX, (CURTAIN_RAIL_Y + WALL_HEIGHT) / 2, z + offset));
+      }
+      rails.push(
+        transform(footX, CURTAIN_RAIL_Y, z, Math.PI / 2, CURTAIN_RAIL_SIDE * 2 + 0.04, 1, 1),
+      );
+    }
+  }
+  addInstances(parent, new BoxGeometry(1, 0.035, 0.035), metal, inEveryRoom(rails));
+  addInstances(
+    parent,
+    new CylinderGeometry(0.012, 0.012, WALL_HEIGHT - CURTAIN_RAIL_Y, 6),
+    metal,
+    inEveryRoom(rods),
+  );
+
+  // 주름이 잡히도록 세 겹을 나란히 두고, 가운데를 끈으로 묶어요.
+  const top = CURTAIN_RAIL_Y;
+  const bottom = 0.5;
+  const height = top - bottom;
+  const bases = CURTAIN_BUNCHES.map((bunch) => transform(bunch.x, 0, bunch.z, bunch.rotationY));
+  addInstances(
+    parent,
+    new CylinderGeometry(0.075, 0.095, height, 8),
+    lambert("#bcd6d0"),
+    repeatAt(bases, [
+      transform(-0.1, bottom + height / 2, 0),
+      transform(0, bottom + height / 2, 0.02),
+      transform(0.1, bottom + height / 2, 0),
+    ]),
+  );
+  addInstances(
+    parent,
+    new RoundedBoxGeometry(0.4, 0.07, 0.24, 1, 0.02),
+    lambert("#8fb3ab"),
+    repeatAt(bases, [transform(0, 1.55, 0)]),
+  );
+}
+
 /** 가구 아래 바닥에 깔리는 부드러운 그림자예요. 실시간 그림자보다 훨씬 가벼워요. */
 function buildContactShadows(parent: Object3D, softCircle: Texture): void {
   const material = new MeshBasicMaterial({
@@ -522,7 +637,7 @@ function buildContactShadows(parent: Object3D, softCircle: Texture): void {
   const geometry = new PlaneGeometry(1, 1);
   geometry.rotateX(-Math.PI / 2);
   addInstances(parent, geometry, material, [
-    ...BEDS.map((bed) => transform(bed.x, SHADOW_Y, bed.z, 0, BED_LENGTH + 0.8, 1, BED_WIDTH + 0.8)),
+    ...BEDS.map((bed) => transform(bed.x, SHADOW_Y, bed.z, 0, BED_WIDTH + 0.8, 1, BED_LENGTH + 0.8)),
     ...NIGHTSTANDS.map((stand) => transform(stand.x, SHADOW_Y, stand.z, 0, 1.1)),
     ...TABLES.map((table) => transform(table.x, SHADOW_Y, table.z, 0, TABLE_RADIUS * 3)),
     ...FRIDGES.map((fridge) => transform(fridge.x, SHADOW_Y, fridge.z, 0, 1.2)),
@@ -530,17 +645,19 @@ function buildContactShadows(parent: Object3D, softCircle: Texture): void {
   ]);
 }
 
-/** 병실 다섯 개와 긴 복도를 만들어요. */
+/** 건물 안쪽을 만들어요. 병실 다섯 개, 가운데 복도, 로비예요. */
 export function buildWard(parent: Object3D, softCircle: Texture): RoomHandles {
-  const ceilingPanel = buildFloorsAndCeilings(parent);
-  buildWalls(parent);
+  const { panel: ceilingPanel, ceiling } = buildFloorsAndCeiling(parent);
+  buildInteriorWalls(parent);
   const windowGlass = buildWindows(parent);
   buildDoorways(parent);
+  buildCorridorRails(parent);
   buildBeds(parent);
   const sleepLamp = buildNightstands(parent);
   buildTables(parent);
   buildFridges(parent);
   buildIvStands(parent);
+  buildCurtains(parent);
   buildContactShadows(parent, softCircle);
-  return { ceilingPanel, sleepLamp, windowGlass };
+  return { ceiling, ceilingPanel, sleepLamp, windowGlass };
 }
