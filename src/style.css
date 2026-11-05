@@ -10,6 +10,9 @@ body {
   height: 100%;
   margin: 0;
   overflow: hidden;
+  overscroll-behavior: none;
+  -webkit-user-select: none;
+  user-select: none;
 }
 
 #scene {
@@ -18,6 +21,27 @@ body {
   width: 100%;
   height: 100%;
   display: block;
+  touch-action: none;
+}
+
+#hud {
+  position: fixed;
+  top: calc(env(safe-area-inset-top) + 0.75rem);
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.4rem 0.95rem;
+  border-radius: 999px;
+  background: rgba(27, 36, 51, 0.62);
+  color: #f6efe2;
+  font-size: 0.9375rem;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+  pointer-events: none;
+}
+
+#hud[hidden],
+#loading[hidden] {
+  display: none;
 }
 
 #loading {
