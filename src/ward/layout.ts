@@ -168,6 +168,10 @@ const BED_LOCAL_X = 2.3;
 const NIGHTSTAND_LOCAL_X = 3.05;
 const NIGHTSTAND_OFFSET_Z = -0.85;
 const SLEEP_LAMP_LOCAL_X = ROOM.maxX - 0.07;
+const BED_APPROACH_LOCAL_X = 1.9;
+const BED_APPROACH_OFFSET_Z = 0.75;
+const BED_REST_LOCAL_X = -0.19;
+const BED_TAP_HEIGHT = 1.1;
 
 const placeInRoom = (
   room: WardRoom,
@@ -270,6 +274,32 @@ export const YARD_LAMPS: readonly { x: number; z: number }[] = [
   { x: -3.4, z: 35 },
   { x: 3.4, z: 35 },
 ];
+
+/** 눕기 전에 서는 침대 곁 자리예요. 문 쪽 옆면이라 링거와 협탁에 걸리지 않아요. */
+export function bedApproach(bed: BedPlacement): { x: number; z: number } {
+  const { sign, z } = bedLocal(bed.index);
+  return roomToWorld(ROOMS[bed.roomIndex], sign * BED_APPROACH_LOCAL_X, z + BED_APPROACH_OFFSET_Z);
+}
+
+/** 누웠을 때 엉덩이가 놓이는 자리예요. 머리가 베개에 닿도록 침대 머리 쪽으로 치우쳐요. */
+export function bedRest(bed: BedPlacement): { x: number; z: number } {
+  return roomToWorld(bed, BED_REST_LOCAL_X, 0);
+}
+
+/** 눕는 방향이에요. 얼굴의 정면 방향이 침대 발치를 향해요. */
+export function bedRestYaw(bed: BedPlacement): number {
+  return bed.rotationY + Math.PI / 2;
+}
+
+/** 탭으로 침대를 고르는 상자예요. 누운 아바타를 눌러도 잡히도록 위로 넉넉해요. */
+export const BED_BOXES: readonly WallBox[] = BEDS.map((bed) => ({
+  minX: bed.x - BED_WIDTH / 2,
+  maxX: bed.x + BED_WIDTH / 2,
+  minZ: bed.z - BED_LENGTH / 2,
+  maxZ: bed.z + BED_LENGTH / 2,
+  minY: 0,
+  maxY: BED_TAP_HEIGHT,
+}));
 
 function rectAround(x: number, z: number, halfX: number, halfZ: number): Rect {
   return { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };

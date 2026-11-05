@@ -1,8 +1,6 @@
 import {
-  CapsuleGeometry,
   Mesh,
   MeshBasicMaterial,
-  MeshLambertMaterial,
   PerspectiveCamera,
   PlaneGeometry,
   Plane,
@@ -14,16 +12,44 @@ import {
 } from "three";
 import type { Scene, Texture } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
+import { createAvatar } from "../avatar/avatar";
+import {
+  BED_TRANSITION_SECONDS,
+  composePose,
+  createPose,
+  gestureDuration,
+  STRIDE_LENGTH,
+} from "../avatar/pose";
+import type { Gesture } from "../avatar/pose";
+import type { AvatarChoice } from "../avatar/species";
+import {
+  arrivedAtBed,
+  becomeVisitor,
+  bedProgress,
+  canStartGesture,
+  createLocalBedGate,
+  FREE,
+  tapBed,
+  tapFloor,
+  tickFlow,
+} from "./bed-flow";
+import type { BedFlow, FlowStep, WalkOrder } from "./bed-flow";
 import {
   cameraAngleToSee,
   easeDistance,
   enteredThroughFront,
   firstBlocked,
   glancePhase,
+  pickBed,
   pullCamera,
   turnToward,
 } from "./camera-view";
 import {
+  BED_BOXES,
+  bedApproach,
+  bedRest,
+  bedRestYaw,
+  BEDS,
   FLOOR_AREAS,
   LOBBY,
   NURSE_STATION,
@@ -39,6 +65,15 @@ import type { Point } from "./movement";
 
 const WALK_SPEED = 1.8;
 const TARGET_HEIGHT = 1.1;
+/** 걷는 방향으로 몸을 돌리는 빠르기예요. */
+const BODY_TURN_RATE = 10;
+/** 걷기 동작이 시작되고 잦아드는 빠르기예요. */
+const WALK_BLEND_RATE = 9;
+/** 눕는 동안 카메라가 침대 발치 쪽으로 돌아가는 빠르기예요. */
+const BED_CAMERA_TURN_RATE = 2.6;
+const FLOOR_SHADOW_Y = 0.014;
+/** 침대에 누우면 그림자가 이불 위로 올라와요. */
+const BED_SHADOW_Y = 0.655;
 const CAMERA_START_BACK = 4.6;
 const CAMERA_START_UP = 0.55;
 const CAMERA_MIN_DISTANCE = 1.4;
@@ -67,17 +102,24 @@ const TAP_REACH = 80;
 
 export interface PlayerControls {
   update(dt: number): void;
-  /** 캐릭터의 현재 위치예요. */
+  /** 캐릭터의 현재 위치예요. 누워 있으면 침대 위 자리예요. */
   readonly x: number;
   readonly z: number;
+  /** 손 모으기와 목례를 지금 할 수 있는지 알려 줘요. */
+  readonly canGesture: boolean;
+  setChoice(choice: AvatarChoice): void;
+  playGesture(gesture: Gesture): void;
+  /** 모습을 고르는 동안에는 얼굴이 보이도록 카메라 쪽을 바라봐요. */
+  setFacingCamera(facing: boolean): void;
 }
 
-/** 임시 캐릭터와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동이에요. */
+/** 아바타와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동, 침대를 탭하면 눕기예요. */
 export function createPlayerControls(
   scene: Scene,
   camera: PerspectiveCamera,
   canvas: HTMLCanvasElement,
   softCircle: Texture,
+  initialChoice: AvatarChoice,
 ): PlayerControls {
   const nav = createNavGrid({
     areas: WALK_AREAS,
@@ -86,12 +128,8 @@ export function createPlayerControls(
     cellSize: 0.2,
   });
 
-  const player = new Mesh(
-    new CapsuleGeometry(PLAYER_RADIUS - 0.02, 0.42, 4, 14),
-    new MeshLambertMaterial({ color: "#7fb3a6", emissive: "#20403a" }),
-  );
-  player.position.set(PLAYER_START.x, 0.41, PLAYER_START.z);
-  scene.add(player);
+  const avatar = createAvatar(initialChoice);
+  scene.add(avatar.root);
 
   const shadowGeometry = new PlaneGeometry(0.8, 0.8);
   shadowGeometry.rotateX(-Math.PI / 2);
@@ -165,8 +203,26 @@ export function createPlayerControls(
     { passive: true, capture: true },
   );
 
+  /** 걸어 다니는 자리예요. 누워 있는 동안에는 침대 곁 자리에 머물러요. */
   let position: Point = { x: PLAYER_START.x, z: PLAYER_START.z };
+  /** 화면에 보이는 자리예요. 침대에 오르내리는 동안 position과 달라요. */
+  let shownX = position.x;
+  let shownZ = position.z;
   let path: Point[] = [];
+
+  const bedGate = createLocalBedGate();
+  let flow: BedFlow = FREE;
+  let outfit = initialChoice.outfit;
+  /** 처음에는 현관을 바라봐요. */
+  let yaw = Math.PI;
+  /** 멈춘 뒤 돌아볼 곳이 있으면 그 각도예요. */
+  let yawGoal: number | null = null;
+  let walkPhase = 0;
+  let walkWeight = 0;
+  let gesture: Gesture | null = null;
+  let gestureElapsed = 0;
+  let facingCamera = false;
+  const pose = createPose();
   /** 로비에 들어서며 간호사실을 비추는 중이면 경과 시간과 돌아갈 각도를 담아요. */
   let glance: { elapsed: number; returnAngle: number } | null = null;
 
@@ -207,26 +263,63 @@ export function createPlayerControls(
     return onFloor ? { x: hit.x, z: hit.z } : null;
   };
 
-  const moveTo = (clientX: number, clientY: number): void => {
+  /** 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요. */
+  const startWalk = (order: WalkOrder): void => {
+    const spot = order.kind === "bed" ? bedApproach(BEDS[order.bed]) : order.point;
+    const goal = nav.nearestFree(spot);
+    const nextPath = goal ? nav.findPath(position, goal) : [];
+    if (!goal || nextPath.length === 0) {
+      if (flow.kind === "heading") flow = FREE;
+      return;
+    }
+    path = nextPath;
+    gesture = null;
+    yawGoal = null;
+    marker.position.x = goal.x;
+    marker.position.z = goal.z;
+    marker.visible = true;
+    markerAge = 0;
+  };
+
+  const applyStep = (step: FlowStep): void => {
+    flow = step.flow;
+    if (step.release !== undefined) bedGate.release(step.release);
+    if (step.walk) startWalk(step.walk);
+    if (step.bowAtBed !== undefined) {
+      const bed = BEDS[step.bowAtBed];
+      yawGoal = Math.atan2(bed.x - position.x, bed.z - position.z);
+      gesture = "bow";
+      gestureElapsed = 0;
+    }
+  };
+
+  const handleTap = (clientX: number, clientY: number): void => {
     const rect = canvas.getBoundingClientRect();
     pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
       -((clientY - rect.top) / rect.height) * 2 + 1,
     );
     raycaster.setFromCamera(pointer, camera);
-    const tapped = tappedSpot(raycaster.ray.origin, raycaster.ray.direction);
-    if (!tapped) return;
+    const { origin, direction } = raycaster.ray;
 
-    const goal = nav.nearestFree(tapped);
+    const reach = origin.clone().addScaledVector(direction, TAP_REACH);
+    const bed = pickBed(origin, reach, BED_BOXES, WALL_BOXES);
+    if (bed !== null) {
+      applyStep(
+        tapBed(
+          flow,
+          bed,
+          { canLie: outfit === "patient", isFree: bedGate.isFree(bed) },
+          BED_TRANSITION_SECONDS,
+        ),
+      );
+      return;
+    }
+
+    const tapped = tappedSpot(origin, direction);
+    const goal = tapped && nav.nearestFree(tapped);
     if (!goal) return;
-    const nextPath = nav.findPath(position, goal);
-    if (nextPath.length === 0) return;
-
-    path = nextPath;
-    marker.position.x = goal.x;
-    marker.position.z = goal.z;
-    marker.visible = true;
-    markerAge = 0;
+    applyStep(tapFloor(flow, goal, BED_TRANSITION_SECONDS));
   };
 
   // 여러 손가락이 닿았던 제스처는 탭으로 보지 않아요.
@@ -251,7 +344,7 @@ export function createPlayerControls(
     tapStart = null;
     const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
     if (moved <= TAP_MAX_MOVE_PX && event.timeStamp - start.time <= TAP_MAX_MS) {
-      moveTo(event.clientX, event.clientY);
+      handleTap(event.clientX, event.clientY);
     }
   });
   canvas.addEventListener("pointercancel", (event) => {
@@ -262,42 +355,115 @@ export function createPlayerControls(
 
   return {
     get x() {
-      return position.x;
+      return shownX;
     },
     get z() {
-      return position.z;
+      return shownZ;
+    },
+    get canGesture() {
+      return canStartGesture(flow);
+    },
+    setChoice(choice) {
+      avatar.setChoice(choice);
+      outfit = choice.outfit;
+      if (outfit === "visitor") applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
+    },
+    playGesture(next) {
+      if (!canStartGesture(flow) || gesture === next) return;
+      // 걷던 중이면 멈춰 서서 해요.
+      flow = FREE;
+      path = [];
+      gesture = next;
+      gestureElapsed = 0;
+    },
+    setFacingCamera(facing) {
+      facingCamera = facing;
     },
     update(dt) {
+      const stillMotion = reduceMotion.matches;
+      applyStep(tickFlow(flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
+
+      let walked = 0;
       if (path.length > 0) {
         const step = stepAlong(position, path, WALK_SPEED * dt);
         const dx = step.position.x - position.x;
         const dz = step.position.z - position.z;
         position = step.position;
         path = step.path;
-        player.position.x = position.x;
-        player.position.z = position.z;
-        shadow.position.x = position.x;
-        shadow.position.z = position.z;
-        desired.x += dx;
-        desired.z += dz;
-        controls.target.x += dx;
-        controls.target.z += dz;
+        walked = Math.hypot(dx, dz);
+        if (walked > 0) {
+          yawGoal = Math.atan2(dx, dz);
+          walkPhase += (walked / STRIDE_LENGTH) * Math.PI * 2;
+        }
 
         // 걷는 동안 카메라가 캐릭터 뒤로 천천히 돌아가요. 드래그 중이면 사용자의 시선을 따라요.
-        const walked = Math.hypot(dx, dz);
         const glancing =
           glance !== null &&
           glancePhase(glance.elapsed, GLANCE_LOOK_SECONDS, GLANCE_RETURN_SECONDS) === "look";
-        if (walked > 0 && !dragging && !glancing && !reduceMotion.matches) {
+        if (walked > 0 && !dragging && !glancing && !stillMotion) {
           orbitToward(Math.atan2(-dx, -dz), 1 - Math.exp(-dt * FOLLOW_TURN_RATE));
         }
 
-        if (
-          !reduceMotion.matches &&
-          enteredThroughFront(position.z - dz, position.z, LOBBY.maxZ)
-        ) {
+        if (!stillMotion && enteredThroughFront(position.z - dz, position.z, LOBBY.maxZ)) {
           glance = { elapsed: 0, returnAngle: cameraAngle() };
         }
+
+        if (path.length === 0 && flow.kind === "heading") {
+          const granted = flow.lie && bedGate.request(flow.bed);
+          applyStep(arrivedAtBed(flow, granted));
+        }
+      }
+
+      if (facingCamera && path.length === 0 && flow.kind === "free") yawGoal = cameraAngle();
+      if (yawGoal !== null) yaw = turnToward(yaw, yawGoal, 1 - Math.exp(-dt * BODY_TURN_RATE));
+
+      const walkGoal = path.length > 0 && !stillMotion ? 1 : 0;
+      walkWeight += (walkGoal - walkWeight) * (1 - Math.exp(-dt * WALK_BLEND_RATE));
+
+      if (gesture) {
+        gestureElapsed += dt;
+        if (gestureElapsed >= gestureDuration(gesture)) gesture = null;
+      }
+
+      composePose(pose, {
+        walkPhase,
+        walkWeight,
+        gesture,
+        gestureElapsed,
+        bedProgress: bedProgress(flow, BED_TRANSITION_SECONDS),
+        carrying: outfit === "visitor",
+      });
+
+      // 침대에 오르내리는 동안에는 곁 자리와 침대 위 자리 사이를 옮겨 가요.
+      let nextX = position.x;
+      let nextZ = position.z;
+      let shownYaw = yaw;
+      if (flow.kind === "entering" || flow.kind === "lying" || flow.kind === "leaving") {
+        const bed = BEDS[flow.bed];
+        const rest = bedRest(bed);
+        nextX += (rest.x - nextX) * pose.bedTravel;
+        nextZ += (rest.z - nextZ) * pose.bedTravel;
+        shownYaw = turnToward(yaw, bedRestYaw(bed), pose.bedTurn);
+      }
+      const movedX = nextX - shownX;
+      const movedZ = nextZ - shownZ;
+      shownX = nextX;
+      shownZ = nextZ;
+      avatar.place(shownX, shownZ, shownYaw);
+      avatar.apply(pose);
+      shadow.position.x = shownX;
+      shadow.position.z = shownZ;
+      shadow.position.y = FLOOR_SHADOW_Y + (BED_SHADOW_Y - FLOOR_SHADOW_Y) * pose.bedLift;
+      desired.x += movedX;
+      desired.z += movedZ;
+      controls.target.x += movedX;
+      controls.target.z += movedZ;
+
+      // 눕는 동안 머리 뒤에 붙지 않게, 카메라가 발치 쪽에서 얼굴을 보도록 돌아가요.
+      if (flow.kind === "entering" && !dragging && !stillMotion) {
+        // 로비에서 시작한 간호사실 보기가 남아 있으면 카메라를 도로 돌려놓으니 끝내요.
+        glance = null;
+        orbitToward(bedRestYaw(BEDS[flow.bed]), 1 - Math.exp(-dt * BED_CAMERA_TURN_RATE));
       }
 
       // 드래그하면 사용자의 시선을 바로 따라요.
@@ -333,7 +499,7 @@ export function createPlayerControls(
       );
       camera.position.sub(controls.target).setLength(viewDistance).add(controls.target);
       camera.quaternion.copy(rig.quaternion);
-      player.visible = viewDistance > HIDE_PLAYER_DISTANCE;
+      avatar.root.visible = viewDistance > HIDE_PLAYER_DISTANCE;
     },
   };
 }
