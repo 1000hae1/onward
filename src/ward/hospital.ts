@@ -72,7 +72,7 @@ function createSignTexture(): CanvasTexture {
     context.font = '600 74px "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
     context.textAlign = "center";
     context.textBaseline = "middle";
-    context.fillText("onWard", canvas.width / 2, canvas.height / 2 + 4);
+    context.fillText("온기병동", canvas.width / 2, canvas.height / 2 + 4);
   }
   const texture = new CanvasTexture(canvas);
   texture.colorSpace = SRGBColorSpace;
