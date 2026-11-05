@@ -177,6 +177,13 @@ export function becomeVisitor(flow: BedFlow, duration: number): FlowStep {
   }
 }
 
+/** 침대에서 일어나라는 뜻이에요. 눕던 중이면 누운 만큼만 되돌아요. */
+export function getUp(flow: BedFlow, duration: number): FlowStep {
+  if (flow.kind === "lying") return startLeaving(flow.bed, duration, null);
+  if (flow.kind === "entering") return startLeaving(flow.bed, flow.elapsed, null);
+  return { flow };
+}
+
 /** 지금 손 모으기나 목례를 시작할 수 있는지 알려 줘요. 침대에 오르내릴 때와 누운 동안은 안 돼요. */
 export function canStartGesture(flow: BedFlow): boolean {
   return flow.kind === "free" || flow.kind === "heading";

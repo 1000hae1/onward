@@ -1,7 +1,13 @@
-import { PerspectiveCamera, Scene, WebGLRenderer } from "three";
-import { DEFAULT_CHOICE } from "./avatar/species";
-import { createAvatarPanel, loadAvatarChoice } from "./ui/avatar-panel";
-import type { AvatarPanel } from "./ui/avatar-panel";
+import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { createCats } from "./cat/cats";
+import { createActionBar } from "./ui/action-bar";
+import type { ActionBar } from "./ui/action-bar";
+import { createEntryScreen } from "./ui/entry-screen";
+import { createHeadLabels } from "./ui/head-labels";
+import { defaultProfile, loadProfile, saveProfile } from "./ui/profile";
+import type { Profile } from "./ui/profile";
+import { createSettings } from "./ui/settings";
+import { createOfferings } from "./ward/offerings";
 import { createPlayerControls } from "./ward/controls";
 import { createLighting } from "./ward/lighting";
 import { buildFacilities } from "./ward/facilities";
@@ -20,8 +26,9 @@ const LANDSCAPE_FOV = 54;
 /** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
 const PORTRAIT_VIEW_SHIFT = 0.14;
 const LANDSCAPE_VIEW_SHIFT = 0.08;
-/** 모습을 고르는 칸이 펼쳐지면 아바타가 가리지 않게 화면 위쪽으로 올려요. */
+/** 고르는 패널이 펼쳐지면 아바타가 가리지 않게 화면 위쪽으로 올려요. 입장 화면은 패널이 더 커요. */
 const PICKER_VIEW_SHIFT = -0.09;
+const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
@@ -66,16 +73,16 @@ export function startScene(canvas: HTMLCanvasElement): void {
     sky,
   });
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
-  const savedChoice = loadAvatarChoice();
-  const player = createPlayerControls(
-    scene,
-    camera,
-    canvas,
-    softCircle,
-    savedChoice ?? DEFAULT_CHOICE,
-  );
+  const profile: Profile = loadProfile() ?? defaultProfile(Math.random());
+  const player = createPlayerControls(scene, camera, canvas, softCircle, {
+    species: profile.species,
+    outfit: profile.outfit,
+  });
+  const cats = createCats(scene, player, false);
+  player.setTapFilter((origin, reach) => cats.tap(origin, reach));
+  const offerings = createOfferings(scene, softCircle);
 
-  let pickerOpen = false;
+  let pickerShift: number | null = ENTRY_VIEW_SHIFT;
   let viewShift: number | null = null;
 
   /** 지금 화면에 맞는 시선 높이로 옮겨요. 값이 그대로면 아무것도 하지 않아요. */
@@ -83,7 +90,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     const width = window.innerWidth;
     const height = window.innerHeight;
     const rest = width < height ? PORTRAIT_VIEW_SHIFT : LANDSCAPE_VIEW_SHIFT;
-    const goal = pickerOpen ? PICKER_VIEW_SHIFT : rest;
+    const goal = pickerShift ?? rest;
     if (viewShift === goal) return;
     const eased =
       viewShift === null || reduceMotion.matches
@@ -94,18 +101,55 @@ export function startScene(canvas: HTMLCanvasElement): void {
     camera.setViewOffset(width, height, 0, -height * viewShift, width, height);
   };
 
-  const panelRoot = document.querySelector<HTMLElement>("#avatar-panel");
-  const panel: AvatarPanel | null = panelRoot
-    ? createAvatarPanel(panelRoot, {
-        initial: savedChoice,
-        onChoice: (choice) => player.setChoice(choice),
-        onGesture: (gesture) => player.playGesture(gesture),
+  const stillMotion = (): boolean => reduceMotion.matches;
+  const element = (id: string): HTMLElement | null => document.querySelector<HTMLElement>(`#${id}`);
+
+  const labelsRoot = element("head-labels");
+  const labels = labelsRoot ? createHeadLabels(labelsRoot) : null;
+  let actionBar: ActionBar | null = null;
+
+  const applyProfile = (next: Profile): void => {
+    player.setChoice({ species: next.species, outfit: next.outfit });
+    cats.setCompanion(next.withCat);
+    labels?.setName(next.nickname);
+  };
+
+  const enterWard = (entered: Profile): void => {
+    saveProfile(entered);
+    applyProfile(entered);
+    pickerShift = null;
+    player.setFacingCamera(false);
+    player.setInputEnabled(true);
+
+    const settingsRoot = element("settings");
+    if (settingsRoot) {
+      createSettings(settingsRoot, {
+        initial: entered,
+        onChange: (next) => {
+          saveProfile(next);
+          applyProfile(next);
+        },
         onOpenChange: (open) => {
-          pickerOpen = open;
+          pickerShift = open ? PICKER_VIEW_SHIFT : null;
           player.setFacingCamera(open);
         },
-      })
-    : null;
+      });
+    }
+    const barRoot = element("action-bar");
+    const toast = element("toast");
+    if (barRoot && toast && labels) {
+      actionBar = createActionBar({ root: barRoot, toast, player, offerings, labels, stillMotion });
+    }
+  };
+
+  player.setFacingCamera(true);
+  player.setInputEnabled(false);
+  const entryRoot = element("entry");
+  if (entryRoot) {
+    createEntryScreen(entryRoot, { initial: profile, onPreview: applyProfile, onEnter: enterWard });
+  } else {
+    enterWard(profile);
+  }
 
   const readSlot = () => currentSlot(new Date(), window.location.search);
   let slot = readSlot();
@@ -126,6 +170,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   window.addEventListener("resize", resize);
   resize();
 
+  const headPoint = new Vector3();
   let lastMs: number | null = null;
   let sinceSlotCheck = 0;
 
@@ -145,12 +190,16 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
     applyViewShift(dt);
     player.update(dt);
-    panel?.setGesturesEnabled(player.canGesture);
+    cats.update(dt, reduceMotion.matches);
+    offerings.update(dt, reduceMotion.matches);
+    actionBar?.update(dt);
     const motionDt = reduceMotion.matches ? 0 : dt;
     winter.update(motionDt, player.x, player.z);
     sky.update(motionDt);
     lighting.setFocus(player.x, player.z);
     lighting.update(dt);
     renderer.render(scene, camera);
+    // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
+    labels?.update(dt, camera, player.headWorld(headPoint));
   });
 }

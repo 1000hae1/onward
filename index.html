@@ -10,7 +10,11 @@
   <body>
     <canvas id="scene" aria-hidden="true"></canvas>
     <header id="hud" hidden></header>
-    <section id="avatar-panel" aria-label="내 모습과 동작" hidden></section>
+    <div id="head-labels" hidden></div>
+    <section id="settings" aria-label="설정" hidden></section>
+    <p id="toast" role="status" hidden></p>
+    <section id="action-bar" aria-label="내 동작" hidden></section>
+    <section id="entry" aria-label="병동에 들어가기" hidden></section>
     <main id="loading" role="status" aria-live="polite"></main>
     <script type="module" src="/src/main.ts"></script>
   </body>

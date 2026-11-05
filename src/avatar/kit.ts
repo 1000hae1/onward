@@ -1,8 +1,5 @@
 import {
-  BufferAttribute,
   CapsuleGeometry,
-  Color,
-  ConeGeometry,
   Euler,
   Matrix4,
   MeshLambertMaterial,
@@ -11,7 +8,7 @@ import {
   Vector3,
 } from "three";
 import type { BufferGeometry } from "three";
-import { mergeGeometries, mergeVertices } from "three/addons/utils/BufferGeometryUtils.js";
+import { blobs, merged, paint, place } from "./shapes.ts";
 import type { BlobSpec, Outfit, SpeciesSpec, Vec3 } from "./species";
 
 /**
@@ -58,72 +55,6 @@ const KNIT = "#c97b63";
 const KNIT_TRIM = "#b56a54";
 const TROUSERS = "#5a6678";
 const SCARF = "#e3b85f";
-
-const matrix = new Matrix4();
-const quaternion = new Quaternion();
-const euler = new Euler();
-const position = new Vector3();
-const scale = new Vector3(1, 1, 1);
-
-function paint(source: BufferGeometry, hex: string): BufferGeometry {
-  const geometry = source.index ? source.toNonIndexed() : source;
-  geometry.deleteAttribute("uv");
-  const count = geometry.getAttribute("position").count;
-  const colors = new Float32Array(count * 3);
-  const { r, g, b } = new Color(hex);
-  for (let index = 0; index < count; index++) colors.set([r, g, b], index * 3);
-  geometry.setAttribute("color", new BufferAttribute(colors, 3));
-  return geometry;
-}
-
-function place(
-  geometry: BufferGeometry,
-  at: Vec3,
-  tilt: Vec3 = [0, 0, 0],
-  stretch: Vec3 = [1, 1, 1],
-): BufferGeometry {
-  euler.set(tilt[0], tilt[1], tilt[2]);
-  quaternion.setFromEuler(euler);
-  position.set(at[0], at[1], at[2]);
-  scale.set(stretch[0], stretch[1], stretch[2]);
-  geometry.applyMatrix4(matrix.compose(position, quaternion, scale));
-  return geometry;
-}
-
-function blobGeometry(blob: BlobSpec, at: Vec3, tilt: Vec3): BufferGeometry {
-  const { shape, size, small } = blob;
-  if (shape === "ball") {
-    const sphere = small ? new SphereGeometry(1, 5, 3) : new SphereGeometry(1, 8, 5);
-    return place(paint(sphere, blob.color), at, tilt, size);
-  }
-  if (shape === "pill") {
-    const pill = small
-      ? new CapsuleGeometry(size[0], size[1], 1, 4)
-      : new CapsuleGeometry(size[0], size[1], 1, 6);
-    return place(paint(pill, blob.color), at, tilt, [1, 1, size[2]]);
-  }
-  return place(paint(new ConeGeometry(size[0], size[1], small ? 5 : 6), blob.color), at, tilt);
-}
-
-function blobs(list: readonly BlobSpec[], offset: Vec3 = [0, 0, 0]): BufferGeometry[] {
-  return list.flatMap((blob) => {
-    const tilt = blob.tilt ?? [0, 0, 0];
-    const at: Vec3 = [blob.at[0] + offset[0], blob.at[1] + offset[1], blob.at[2] + offset[2]];
-    const parts = [blobGeometry(blob, at, tilt)];
-    if (blob.mirror) {
-      // x축 거울상이에요. y와 z축 회전은 방향이 반대가 돼요.
-      parts.push(blobGeometry(blob, [-at[0], at[1], at[2]], [tilt[0], -tilt[1], -tilt[2]]));
-    }
-    return parts;
-  });
-}
-
-/** 부품을 하나로 합쳐요. 같은 꼭짓점은 다시 묶어서 휴대폰이 계산할 양을 줄여요. */
-function merged(parts: BufferGeometry[]): BufferGeometry {
-  const geometry = mergeGeometries(parts);
-  for (const part of parts) part.dispose();
-  return mergeVertices(geometry);
-}
 
 function buildHead(spec: SpeciesSpec): BufferGeometry {
   const center: Vec3 = [0, HEAD_CENTER_Y, 0];

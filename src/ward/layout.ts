@@ -301,6 +301,85 @@ export const BED_BOXES: readonly WallBox[] = BEDS.map((bed) => ({
   maxY: BED_TAP_HEIGHT,
 }));
 
+/** 침대 위 이불의 높이예요. 고양이가 앉는 높이예요. */
+export const BED_SURFACE_Y = 0.645;
+const BED_FOOT_LOCAL_X = 0.72;
+const BED_MIDDLE_LOCAL_X = 0.2;
+const CAT_CURL_LOCAL_X = 2.45;
+const CAT_CURL_OFFSET_Z = 0.85;
+
+/** 고양이가 침대 위에 앉는 자리예요. 찾아왔을 때는 발치, 혼자 쉴 때는 가운데예요. */
+export function bedCatSeat(bed: BedPlacement, atFoot: boolean): { x: number; z: number } {
+  return roomToWorld(bed, atFoot ? BED_FOOT_LOCAL_X : BED_MIDDLE_LOCAL_X, 0);
+}
+
+/** 침대 위 고양이가 머리맡 쪽을 보는 방향이에요. */
+export function bedCatYaw(bed: BedPlacement): number {
+  return bed.rotationY - Math.PI / 2;
+}
+
+/** 내가 누웠을 때 데리고 온 고양이가 웅크리는 침대 옆 바닥이에요. */
+export function bedCurlSpot(bed: BedPlacement): { x: number; z: number } {
+  const { sign, z } = bedLocal(bed.index);
+  return roomToWorld(ROOMS[bed.roomIndex], sign * CAT_CURL_LOCAL_X, z + CAT_CURL_OFFSET_Z);
+}
+
+/** 평안의 빛이 닿는 침대 머리맡이에요. */
+export function bedHeadSpot(bed: BedPlacement): { x: number; y: number; z: number } {
+  return { ...roomToWorld(bed, -BED_LENGTH / 2 + 0.22, 0), y: 1.08 };
+}
+
+/** 협탁에 선물을 놓는 칸이에요. 귤 바구니와 홍시 접시가 쓰지 않는 두 모서리예요. */
+const GIFT_SLOT_OFFSETS = [
+  { x: 0.13, z: -0.13 },
+  { x: -0.13, z: 0.13 },
+] as const;
+
+export function giftSpot(standIndex: number, slot: number): { x: number; y: number; z: number } {
+  const stand = NIGHTSTANDS[standIndex];
+  const offset = GIFT_SLOT_OFFSETS[slot];
+  return { x: stand.x + offset.x, y: NIGHTSTAND_HEIGHT, z: stand.z + offset.z };
+}
+
+const WINDOW_SILL_LOCAL_Z = ROOM.minZ + 0.08;
+const WINDOW_SILL_TOP_Y = WINDOW.minY + 0.03;
+const WINDOW_LAMP_REACH = (WINDOW.maxX - WINDOW.minX) / 2 - 0.15;
+
+/** 창틀 위 램프 자리예요. position은 창 폭을 -1~1로 본 값이에요. */
+export function windowLampSpot(
+  room: WardRoom,
+  position: number,
+): { x: number; y: number; z: number } {
+  return {
+    ...roomToWorld(room, position * WINDOW_LAMP_REACH, WINDOW_SILL_LOCAL_Z),
+    y: WINDOW_SILL_TOP_Y,
+  };
+}
+
+/** 고양이가 병실에서 걸어 다니는 자리들이에요. 병실 안쪽 좌표이고 가구를 피한 곳이에요. */
+const CAT_SPOTS_LOCAL = [
+  { x: 0, z: -3.2 },
+  { x: 0, z: 3.2 },
+  { x: -1.1, z: -1.6 },
+  { x: 1.1, z: 1.6 },
+  { x: -1.1, z: 1.6 },
+  { x: 1.1, z: -3.8 },
+] as const;
+
+export function catSpots(room: WardRoom): { x: number; z: number }[] {
+  return CAT_SPOTS_LOCAL.map((spot) => roomToWorld(room, spot.x, spot.z));
+}
+
+/** 이 자리가 있는 병실이에요. 병실 밖이면 null이에요. */
+export function roomAt(x: number, z: number): WardRoom | null {
+  return (
+    ROOMS.find((room) => {
+      const rect = roomRect(room);
+      return x >= rect.minX && x <= rect.maxX && z >= rect.minZ && z <= rect.maxZ;
+    }) ?? null
+  );
+}
+
 function rectAround(x: number, z: number, halfX: number, halfZ: number): Rect {
   return { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
 }

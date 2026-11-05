@@ -39,16 +39,16 @@ export function firstBlocked(a: Point3, b: Point3, boxes: readonly WallBox[]): n
   return nearest;
 }
 
-/** a에서 b로 가는 시선에 가장 먼저 닿는 침대 번호를 돌려줘요. 벽에 먼저 막히면 null이에요. */
-export function pickBed(
+/** a에서 b로 가는 시선에 가장 먼저 닿는 상자 번호를 돌려줘요. 벽에 먼저 막히면 null이에요. */
+export function pickBox(
   a: Point3,
   b: Point3,
-  beds: readonly WallBox[],
+  targets: readonly WallBox[],
   walls: readonly WallBox[],
 ): number | null {
   let best: number | null = null;
   let nearest = firstBlocked(a, b, walls);
-  beds.forEach((box, index) => {
+  targets.forEach((box, index) => {
     const hit = firstHit(a, b, box);
     if (hit !== null && hit < nearest) {
       nearest = hit;

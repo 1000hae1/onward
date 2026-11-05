@@ -9,8 +9,8 @@ import {
   gestureDuration,
   gestureWeight,
 } from "../src/avatar/pose.ts";
-import { DEFAULT_CHOICE, parseAvatarChoice, SPECIES, speciesById } from "../src/avatar/species.ts";
-import { pickBed } from "../src/ward/camera-view.ts";
+import { SPECIES, speciesById } from "../src/avatar/species.ts";
+import { pickBox } from "../src/ward/camera-view.ts";
 import { createNavGrid } from "../src/ward/movement.ts";
 import {
   BED_BOXES,
@@ -167,19 +167,6 @@ test("같은 Pose 객체를 다시 써서 매 프레임 새로 만들지 않아�
   assert.equal(composePose(out, idle), out);
 });
 
-test("저장된 선택은 형식이 맞을 때만 읽어요", () => {
-  assert.deepEqual(parseAvatarChoice('{"species":"otter","outfit":"visitor"}'), {
-    species: "otter",
-    outfit: "visitor",
-  });
-  assert.equal(parseAvatarChoice(null), null);
-  assert.equal(parseAvatarChoice("{"), null);
-  assert.equal(parseAvatarChoice("null"), null);
-  assert.equal(parseAvatarChoice('{"species":"dragon","outfit":"patient"}'), null);
-  assert.equal(parseAvatarChoice('{"species":"bear","outfit":"nurse"}'), null);
-  assert.equal(speciesById(DEFAULT_CHOICE.species).id, DEFAULT_CHOICE.species);
-});
-
 test("침대 36개 모두 곁 자리까지 걸어갈 수 있어요", () => {
   const nav = createNavGrid({
     areas: WALK_AREAS,
@@ -215,10 +202,10 @@ test("침대 탭은 시선이 처음 닿는 침대만 잡고, 벽 너머는 잡�
   const x = (box.minX + box.maxX) / 2;
   const z = (box.minZ + box.maxZ) / 2;
   // 침대 바로 위에서 내려다보면 잡혀요.
-  assert.equal(pickBed({ x, y: 3, z }, { x, y: -1, z }, BED_BOXES, []), 0);
+  assert.equal(pickBox({ x, y: 3, z }, { x, y: -1, z }, BED_BOXES, []), 0);
   // 빈 바닥을 내려다보면 잡히지 않아요.
-  assert.equal(pickBed({ x: 0, y: 3, z: 0 }, { x: 0, y: -1, z: 0 }, BED_BOXES, WALL_BOXES), null);
+  assert.equal(pickBox({ x: 0, y: 3, z: 0 }, { x: 0, y: -1, z: 0 }, BED_BOXES, WALL_BOXES), null);
   // 복도에서 병실 벽을 뚫고 침대를 볼 수는 없어요.
-  const blocked = pickBed({ x: 0, y: 0.6, z }, { x, y: 0.6, z }, BED_BOXES, WALL_BOXES);
+  const blocked = pickBox({ x: 0, y: 0.6, z }, { x, y: 0.6, z }, BED_BOXES, WALL_BOXES);
   assert.equal(blocked, null);
 });

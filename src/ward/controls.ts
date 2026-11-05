@@ -29,6 +29,7 @@ import {
   canStartGesture,
   createLocalBedGate,
   FREE,
+  getUp,
   tapBed,
   tapFloor,
   tickFlow,
@@ -40,7 +41,7 @@ import {
   enteredThroughFront,
   firstBlocked,
   glancePhase,
-  pickBed,
+  pickBox,
   pullCamera,
   turnToward,
 } from "./camera-view";
@@ -74,6 +75,8 @@ const BED_CAMERA_TURN_RATE = 2.6;
 const FLOOR_SHADOW_Y = 0.014;
 /** 침대에 누우면 그림자가 이불 위로 올라와요. */
 const BED_SHADOW_Y = 0.655;
+const HAND_REACH = 0.22;
+const HAND_HEIGHT = 0.62;
 const CAMERA_START_BACK = 4.6;
 const CAMERA_START_UP = 0.55;
 const CAMERA_MIN_DISTANCE = 1.4;
@@ -111,6 +114,26 @@ export interface PlayerControls {
   playGesture(gesture: Gesture): void;
   /** 모습을 고르는 동안에는 얼굴이 보이도록 카메라 쪽을 바라봐요. */
   setFacingCamera(facing: boolean): void;
+  /** 입장 전처럼 탭으로 움직이면 안 될 때 꺼요. 드래그로 둘러보기는 그대로예요. */
+  setInputEnabled(enabled: boolean): void;
+  /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
+  setBedPicker(picker: ((bed: number) => void) | null): void;
+  /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
+  setTapFilter(filter: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
+  /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
+  whenUp(action: () => void): void;
+  faceToward(x: number, z: number): void;
+  /** 빛과 선물이 떠나는 손 앞 자리예요. */
+  handSpot(): { x: number; y: number; z: number };
+  /** 화면에 보이면 머리 자리를 target에 쓰고, 숨어 있으면 null을 돌려줘요. */
+  headWorld(target: Vector3): Vector3 | null;
+  /** 걸어 다니는 자리예요. 누워 있어도 침대 곁 자리예요. */
+  readonly walkX: number;
+  readonly walkZ: number;
+  /** 다 누운 침대예요. */
+  readonly lyingBed: number | null;
+  /** 쓰고 있거나 눕으러 가는 침대예요. */
+  readonly claimedBed: number | null;
 }
 
 /** 아바타와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동, 침대를 탭하면 눕기예요. */
@@ -222,6 +245,10 @@ export function createPlayerControls(
   let gesture: Gesture | null = null;
   let gestureElapsed = 0;
   let facingCamera = false;
+  let inputEnabled = true;
+  let bedPicker: ((bed: number) => void) | null = null;
+  let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
+  let afterUp: (() => void) | null = null;
   const pose = createPose();
   /** 로비에 들어서며 간호사실을 비추는 중이면 경과 시간과 돌아갈 각도를 담아요. */
   let glance: { elapsed: number; returnAngle: number } | null = null;
@@ -294,6 +321,7 @@ export function createPlayerControls(
   };
 
   const handleTap = (clientX: number, clientY: number): void => {
+    if (!inputEnabled) return;
     const rect = canvas.getBoundingClientRect();
     pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -303,7 +331,14 @@ export function createPlayerControls(
     const { origin, direction } = raycaster.ray;
 
     const reach = origin.clone().addScaledVector(direction, TAP_REACH);
-    const bed = pickBed(origin, reach, BED_BOXES, WALL_BOXES);
+    const bed = pickBox(origin, reach, BED_BOXES, WALL_BOXES);
+    if (bedPicker) {
+      if (bed !== null) bedPicker(bed);
+      return;
+    }
+    if (tapFilter?.(origin, reach)) return;
+    // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
+    afterUp = null;
     if (bed !== null) {
       applyStep(
         tapBed(
@@ -369,7 +404,7 @@ export function createPlayerControls(
       if (outfit === "visitor") applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
     },
     playGesture(next) {
-      if (!canStartGesture(flow) || gesture === next) return;
+      if (!canStartGesture(flow)) return;
       // 걷던 중이면 멈춰 서서 해요.
       flow = FREE;
       path = [];
@@ -379,9 +414,57 @@ export function createPlayerControls(
     setFacingCamera(facing) {
       facingCamera = facing;
     },
+    setInputEnabled(enabled) {
+      inputEnabled = enabled;
+    },
+    setBedPicker(picker) {
+      bedPicker = picker;
+    },
+    setTapFilter(filter) {
+      tapFilter = filter;
+    },
+    whenUp(action) {
+      if (canStartGesture(flow)) {
+        action();
+        return;
+      }
+      afterUp = action;
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
+    },
+    faceToward(x, z) {
+      yawGoal = Math.atan2(x - position.x, z - position.z);
+    },
+    handSpot() {
+      return {
+        x: shownX + Math.sin(yaw) * HAND_REACH,
+        y: HAND_HEIGHT,
+        z: shownZ + Math.cos(yaw) * HAND_REACH,
+      };
+    },
+    headWorld(target) {
+      return avatar.root.visible ? avatar.headWorld(target) : null;
+    },
+    get walkX() {
+      return position.x;
+    },
+    get walkZ() {
+      return position.z;
+    },
+    get lyingBed() {
+      return flow.kind === "lying" ? flow.bed : null;
+    },
+    get claimedBed() {
+      if (flow.kind === "heading") return flow.lie ? flow.bed : null;
+      return flow.kind === "entering" || flow.kind === "lying" ? flow.bed : null;
+    },
     update(dt) {
       const stillMotion = reduceMotion.matches;
       applyStep(tickFlow(flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
+      if (afterUp && flow.kind === "free") {
+        const action = afterUp;
+        afterUp = null;
+        action();
+      }
 
       let walked = 0;
       if (path.length > 0) {

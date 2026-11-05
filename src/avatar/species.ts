@@ -160,24 +160,6 @@ export interface AvatarChoice {
   outfit: Outfit;
 }
 
-export const DEFAULT_CHOICE: AvatarChoice = { species: "rabbit", outfit: "patient" };
-
 export function speciesById(id: SpeciesId): SpeciesSpec {
   return SPECIES.find((spec) => spec.id === id) ?? SPECIES[0];
-}
-
-/** 저장해 둔 선택을 읽어요. 형식이 맞지 않으면 없는 것으로 봐요. */
-export function parseAvatarChoice(raw: string | null): AvatarChoice | null {
-  if (raw === null) return null;
-  let value: unknown;
-  try {
-    value = JSON.parse(raw);
-  } catch {
-    return null;
-  }
-  if (typeof value !== "object" || value === null) return null;
-  const { species, outfit } = value as { species?: unknown; outfit?: unknown };
-  const spec = SPECIES.find((candidate) => candidate.id === species);
-  if (!spec || (outfit !== "patient" && outfit !== "visitor")) return null;
-  return { species: spec.id, outfit };
 }

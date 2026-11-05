@@ -1,4 +1,5 @@
 import { Group, Mesh } from "three";
+import type { Vector3 } from "three";
 import { getAvatarKit, getAvatarMaterial, HIP_Y, LEG_X, NECK_Y, SHOULDER_X, SHOULDER_Y } from "./kit";
 import { CARRY_ARM_PITCH } from "./pose";
 import type { Pose } from "./pose";
@@ -16,6 +17,8 @@ export interface Avatar {
   /** 자리와 방향을 정해요. rotationY 0은 +z 쪽을 봐요. */
   place(x: number, z: number, yaw: number): void;
   apply(pose: Pose): void;
+  /** 머리가 있는 곳을 target에 써요. */
+  headWorld(target: Vector3): Vector3;
 }
 
 /** 관절로 이어진 아바타예요. 지오메트리와 재질은 kit.ts의 것을 함께 써요. */
@@ -60,6 +63,9 @@ export function createAvatar(choice: AvatarChoice): Avatar {
       root.position.x = x;
       root.position.z = z;
       root.rotation.y = yaw;
+    },
+    headWorld(target) {
+      return head.getWorldPosition(target);
     },
     apply(pose) {
       root.position.y = pose.bedLift * (BED_HIP_Y - HIP_Y);
