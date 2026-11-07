@@ -1,0 +1,179 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#1b2433" />
+    <title>개인정보 처리방침 · 온기병동</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbf6ea;
+        --text: #2c2a28;
+        --muted: #6b645a;
+        --line: #e6dccb;
+        --accent: #8a5a2b;
+        font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b2433;
+          --text: #e9e4d8;
+          --muted: #b3ab9d;
+          --line: #34405a;
+          --accent: #ffe2b8;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.75;
+      }
+      main {
+        max-width: 40rem;
+        margin: 0 auto;
+        padding: 2.5rem 1rem 4rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.0625rem;
+        margin: 2.25rem 0 0.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--line);
+      }
+      p,
+      li {
+        font-size: 0.9375rem;
+      }
+      ul {
+        padding-left: 1.25rem;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 0.5rem 0.4rem;
+        border-bottom: 1px solid var(--line);
+      }
+      code {
+        font-size: 0.8125rem;
+        word-break: break-all;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>개인정보 처리방침</h1>
+      <p class="muted">온기병동 · 2026년 11월 8일부터 적용해요</p>
+
+      <p>
+        온기병동은 동물 모습으로 병실에 머물며 서로의 평안을 빌어 주는 공간이에요.
+        의료 서비스가 아니에요. 진료나 상담이 필요하면 의료진과 이야기해 주세요.
+        여기서는 온기병동이 어떤 정보를 받고, 얼마나 두었다가 지우는지 알려 드려요.
+      </p>
+
+      <h2>받는 것</h2>
+      <ul>
+        <li><strong>닉네임</strong>: 직접 지은 2~10자의 이름이에요. 다른 분들 화면에 보여요.</li>
+        <li><strong>고른 동물과 옷</strong>: 토끼, 곰 같은 동물과 환자복·평상복이에요.</li>
+        <li><strong>접속 기록</strong>: 어느 병실에 언제 들어왔는지예요. 오늘 다녀간 동물 수를 세는 데만 써요.</li>
+        <li>
+          <strong>IP 해시</strong>: 접속한 곳의 IP 주소를 그대로 두지 않고, 되돌릴 수 없게 바꾼 값만 둬요.
+          입장을 막거나 요청을 너무 많이 보내는 걸 막을 때만 써요.
+        </li>
+        <li><strong>남겨진 평안과 선물 기록</strong>: 누가 어느 침대나 어느 분께 평안과 선물을 남겼는지예요.</li>
+        <li><strong>신고 기록</strong>: 신고한 분과 신고받은 분의 공개 번호, 고른 사유, 그때의 닉네임, 시각이에요.</li>
+      </ul>
+      <p class="muted">
+        사람을 가리킬 때는 이 브라우저에 준 무작위 번호를 다시 한 번 되돌릴 수 없게 바꾼 값(해시)만 써요.
+        다른 분들께는 매번 새로 만드는 공개 번호만 보여요.
+      </p>
+
+      <h2>받지 않는 것</h2>
+      <ul>
+        <li>이름(실명)</li>
+        <li>전화번호, 이메일, 주소 같은 연락처</li>
+        <li>나이</li>
+        <li>병명, 증상, 복용하는 약 같은 건강 정보</li>
+      </ul>
+      <p>
+        닉네임에는 숫자를 4개 넘게 이어 쓰거나, 주소나 이메일처럼 보이는 글자를 쓸 수 없어요.
+        연락처가 남지 않게 하려는 거예요. 한마디와 선물은 정해진 것 가운데 고르기만 해서, 직접 쓰는 글은 닉네임뿐이에요.
+      </p>
+
+      <h2>얼마나 두나요</h2>
+      <table>
+        <thead>
+          <tr><th>정보</th><th>보관 기간</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>남겨진 평안과 선물</td><td>7일</td></tr>
+          <tr><td>꺼진 문병 링크</td><td>만든 날부터 7일</td></tr>
+          <tr><td>신고 기록, 차단 기록</td><td>30일</td></tr>
+          <tr><td>IP 해시</td><td>30일까지(요청 제한에만 쓰는 기록은 하루)</td></tr>
+          <tr><td>운영자 작업 기록</td><td>1년</td></tr>
+          <tr><td>오늘의 접속 기록과 집계, 놓인 선물과 불빛</td><td>그날 하루</td></tr>
+        </tbody>
+      </table>
+      <p>기간이 지나면 서버가 스스로 지워요. 지울 것이 있을 때 하루에 한 번 살펴요.</p>
+
+      <h2>운영자가 하는 일</h2>
+      <p>
+        서로 다른 세 분이 같은 분을 신고하면, 그분의 닉네임은 다른 분들 화면에서 ‘조용한 토끼’처럼 가려지고
+        운영자가 살펴봐요. 운영자는 닉네임을 자동 닉네임으로 되돌리거나, 문병 링크를 끄거나, 입장을 막을 수 있어요.
+        운영자가 한 일은 언제, 무엇을, 누구에게, 왜 했는지 모두 기록으로 남고, 이 기록은 고치거나 지울 수 없어요.
+      </p>
+
+      <h2>이 브라우저에 두는 것</h2>
+      <p>아래 값은 서버가 아니라 지금 쓰시는 브라우저(localStorage)에만 있어요.</p>
+      <table>
+        <thead>
+          <tr><th>이름</th><th>담긴 것</th></tr>
+        </thead>
+        <tbody>
+          <tr><td><code>onward.token</code></td><td>다음에 와도 같은 동물로 알아보기 위한 서명된 번호예요.</td></tr>
+          <tr><td><code>onward.profile</code></td><td>고른 동물, 옷, 닉네임, 고양이와 함께 다닐지예요.</td></tr>
+          <tr><td><code>onward.met</code></td><td>오늘 같은 병실에서 만난 분들의 닉네임과 동물이에요.</td></tr>
+          <tr><td><code>onward.nights</code></td><td>함께한 밤의 수예요.</td></tr>
+          <tr><td><code>onward.myVisitLink</code></td><td>내가 만든 문병 링크예요.</td></tr>
+        </tbody>
+      </table>
+      <p class="muted">문병 링크로 들어올 때는 탭을 닫으면 사라지는 저장소(sessionStorage)에 잠깐 링크를 둬요.</p>
+
+      <h2>지우는 방법</h2>
+      <ul>
+        <li>브라우저 설정에서 이 사이트의 ‘사이트 데이터’ 또는 ‘쿠키 및 사이트 데이터’를 지워 주세요.</li>
+        <li>지우면 다음에 들어올 때 새 동물로 시작해요. 그 전에 남겨진 평안은 이어지지 않아요.</li>
+        <li>서버에 남은 기록은 위의 보관 기간이 지나면 스스로 지워져요. 더 일찍 지우고 싶으시면 아래로 연락해 주세요.</li>
+      </ul>
+
+      <h2>문의</h2>
+      <p>궁금한 점이 있으면 [문의 이메일]로 편하게 알려 주세요.</p>
+
+      <h2>마음이 많이 힘들 때</h2>
+      <p>
+        109(자살예방상담전화)는 24시간 열려 있어요.
+        <a href="tel:109">109에 전화하기</a>
+      </p>
+
+      <p class="muted"><a href="/">병동으로 돌아가기</a></p>
+    </main>
+  </body>
+</html>

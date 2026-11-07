@@ -9,7 +9,7 @@ import type { ClientMessage, ServerMessage, WardEvent } from "../../shared/proto
 import type { NicknameProblem } from "../../shared/nickname";
 import { readVersion } from "../../shared/ward-rules";
 import type { Profile } from "../ui/profile";
-import { MAX_INSTANCE } from "./ward-params";
+import { loadGuestToken, MAX_INSTANCE, saveGuestToken } from "./ward-params";
 import type { WardParams } from "./ward-params";
 
 /** 연결을 유지하려고 보내는 간격이에요. 서버는 깨어나지 않고 자동으로 답해요. */
@@ -22,6 +22,8 @@ export function retryDelaySeconds(attempt: number): number {
 const MAX_OVERFLOW = 5;
 const BED_ANSWER_MS = 5000;
 const REPLACED_CODE = 4000;
+/** 서버가 들어올 수 없다고 닫았어요. 다시 잇지 않아요. */
+const DENIED_CODE = 4003;
 
 /**
  * offline은 한 번도 닿지 못한 때, reconnecting은 이어졌다가 끊긴 때예요.
@@ -36,7 +38,11 @@ export type ConnectionStatus =
   | "full"
   | "outdated"
   /** 오래 입력이 없어 이 화면이 연결을 잠시 닫았어요. 누르면 다시 이어요. */
-  | "paused";
+  | "paused"
+  /** 운영자가 입장을 막았어요. */
+  | "blocked"
+  /** 새 게스트를 너무 많이 만들어 잠시 들어올 수 없어요. */
+  | "limited";
 
 type Snapshot = Extract<ServerMessage, { type: "snapshot" }>;
 type Denied = Extract<ServerMessage, { type: "action-denied" }>;
@@ -54,6 +60,16 @@ export interface WardClientHandlers {
   onVisitDenied(reason: "closed" | "busy"): void;
   onVisitLink(status: Extract<ServerMessage, { type: "visit-link" }>): void;
   onVisitorArrived(nickname: string): void;
+  /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
+  onNicknameReset(nickname: string): void;
+  onReportResult(result: Extract<ServerMessage, { type: "report-result" }>["result"]): void;
+  /** 누군가 나를 안아 주려고 해요. fromId는 공개 번호예요. */
+  onHugOffer(requestId: string, fromId: string): void;
+  /** 내가 보낸 안아 주기에 상대가 [다음에요]를 눌렀어요. */
+  onHugDeclined(): void;
+  /** 퇴원을 받아 줬어요. until까지 배웅을 모아요(서버 시각). */
+  onDischargeStarted(until: number): void;
+  onFarewellCount(count: number): void;
 }
 
 export interface WardClient {
@@ -73,6 +89,8 @@ export interface WardClient {
   pause(): void;
   resume(): void;
   readonly paused: boolean;
+  /** 퇴원처럼 스스로 나갈 때 연결을 닫고 다시 잇지 않아요. */
+  leave(): void;
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -80,10 +98,11 @@ type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K>
 /** 병동 서버와의 연결이에요. 끊기면 잠시 뒤 다시 이어요. */
 export function createWardClient(
   params: WardParams,
-  guestId: string,
   handlers: WardClientHandlers,
 ): WardClient {
   let socket: WebSocket | null = null;
+  /** 서버가 서명해 준 토큰이에요. 처음이면 null이고, 서버가 보내 주면 저장해요. */
+  let token = loadGuestToken();
   let online = false;
   let everOnline = false;
   let profile: Profile | null = null;
@@ -104,11 +123,12 @@ export function createWardClient(
   const helloMessage = (current: Profile): ClientMessage => ({
     v: PROTOCOL_VERSION,
     type: "hello",
-    guestId,
+    ...(token ? { token } : {}),
     animal: current.species,
     outfit: current.outfit,
     nickname: current.nickname,
     withCat: current.withCat,
+    hugsOff: current.hugsOff,
     ...(visitToken ? { visitToken } : {}),
   });
 
@@ -180,6 +200,34 @@ export function createWardClient(
       case "visitor-arrived":
         handlers.onVisitorArrived(message.nickname);
         return;
+      case "guest-token":
+        token = message.token;
+        saveGuestToken(message.token);
+        return;
+      case "entry-denied":
+        // 다시 이어도 들어올 수 없으니 멈춰요. 연결은 서버가 닫아요.
+        stopped = true;
+        online = false;
+        handlers.onStatus(message.reason, instance);
+        return;
+      case "nickname-reset":
+        handlers.onNicknameReset(message.nickname);
+        return;
+      case "report-result":
+        handlers.onReportResult(message.result);
+        return;
+      case "hug-offer":
+        handlers.onHugOffer(message.requestId, message.fromId);
+        return;
+      case "hug-declined":
+        handlers.onHugDeclined();
+        return;
+      case "discharge-started":
+        handlers.onDischargeStarted(message.until);
+        return;
+      case "farewell-count":
+        handlers.onFarewellCount(message.count);
+        return;
     }
   };
 
@@ -244,6 +292,12 @@ export function createWardClient(
         handlers.onStatus("paused", instance);
         return;
       }
+      if (event.code === DENIED_CODE) {
+        // 들어올 수 없다는 메시지를 놓쳤어도 다시 잇지 않아요.
+        if (!stopped) handlers.onStatus("blocked", instance);
+        stopped = true;
+        return;
+      }
       if (event.code === REPLACED_CODE) {
         // 다른 창에서 같은 사람이 들어왔어요. 이 창은 다시 잇지 않아요.
         stopped = true;
@@ -287,6 +341,13 @@ export function createWardClient(
         ward = visit.ward;
         instance = visit.instance;
       }
+    },
+    leave() {
+      stopped = true;
+      online = false;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      socket?.close(1000, "bye");
     },
     pause() {
       if (paused || stopped) return;

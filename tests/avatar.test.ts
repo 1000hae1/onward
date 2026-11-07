@@ -1,9 +1,29 @@
 import assert from "node:assert/strict";
+import { Color, Vector3 } from "three";
+import type { BufferGeometry } from "three";
 import { test } from "vitest";
-import { getAvatarKit, getAvatarMaterial, kitTriangles } from "../src/avatar/kit.ts";
+import { CAT_COATS } from "../src/cat/cat-kit.ts";
 import {
+  EGG_HEIGHT,
+  EGG_RADIUS,
+  eggNormal,
+  eggPoint,
+  eggRadius,
+  eggThetaAt,
+  eggY,
+} from "../src/avatar/egg.ts";
+import {
+  ARM_HALF_WIDTH,
+  ARM_REACH,
+  AVATAR_HEIGHT,
+  getAvatarKit,
+  getAvatarMaterial,
+  kitTriangles,
+} from "../src/avatar/kit.ts";
+import {
+  advanceBreath,
   BED_TRANSITION_SECONDS,
-  CARRY_ARM_PITCH,
+  CARRY_ARM_SWING,
   composePose,
   createPose,
   gestureDuration,
@@ -28,10 +48,34 @@ import {
 const idle = {
   walkPhase: 0,
   walkWeight: 0,
+  breathPhase: 0,
   gesture: null,
   gestureElapsed: 0,
   bedProgress: 0,
   carrying: false,
+};
+
+const colorsOf = (geometry: BufferGeometry): Set<string> => {
+  const colors = geometry.getAttribute("color");
+  const distinct = new Set<string>();
+  for (let index = 0; index < colors.count; index++) {
+    distinct.add(
+      [colors.getX(index), colors.getY(index), colors.getZ(index)].map((value) => value.toFixed(3)).join(),
+    );
+  }
+  return distinct;
+};
+
+const key = (hex: string): string => {
+  const { r, g, b } = new Color(hex);
+  return [r, g, b].map((value) => value.toFixed(3)).join();
+};
+
+/** 화면에 보이는 0~255 RGB 공간의 거리예요. */
+const colorDistance = (a: string, b: string): number => {
+  const channels = (hex: string): number[] => [1, 3, 5].map((at) => parseInt(hex.slice(at, at + 2), 16));
+  const [x, y] = [channels(a), channels(b)];
+  return Math.hypot(x[0] - y[0], x[1] - y[1], x[2] - y[2]);
 };
 
 test("동물은 다섯 종이고 id와 이름이 겹치지 않아요", () => {
@@ -40,60 +84,92 @@ test("동물은 다섯 종이고 id와 이름이 겹치지 않아요", () => {
   assert.equal(new Set(SPECIES.map((spec) => spec.label)).size, 5);
 });
 
+test("달걀 몸은 목 없이 통통해서 폭이 키의 80%를 넘어요", () => {
+  let widest = 0;
+  for (let theta = 0; theta <= Math.PI; theta += 0.01) widest = Math.max(widest, eggRadius(theta));
+  assert.ok((widest * 2) / EGG_HEIGHT >= 0.8);
+  assert.ok(widest <= EGG_RADIUS * 1.01);
+  // 아래쪽이 조금 더 통통한 달걀이에요.
+  assert.ok(eggRadius(Math.PI / 2 - 0.4) > eggRadius(Math.PI / 2 + 0.4));
+});
+
+test("달걀 표면의 바깥 방향은 언제나 몸 밖을 향해요", () => {
+  const point = new Vector3();
+  const normal = new Vector3();
+  for (const theta of [0.3, 1, Math.PI / 2, 2.2, 2.9]) {
+    for (const phi of [0, 1, 2.5, Math.PI, -1.2]) {
+      eggPoint(theta, phi, 1, point);
+      eggNormal(theta, phi, normal);
+      const fromAxis = new Vector3(point.x, 0, point.z);
+      assert.ok(normal.dot(fromAxis) > 0, `${theta},${phi}`);
+    }
+  }
+  for (const y of [0.1, 0.31, 0.5]) assert.ok(Math.abs(eggY(eggThetaAt(y)) - y) < 1e-9);
+});
+
 test("같은 동물과 옷차림은 지오메트리를 다시 만들지 않아요", () => {
   for (const spec of SPECIES) {
     for (const outfit of ["patient", "visitor"] as const) {
-      const first = getAvatarKit(spec, outfit, CARRY_ARM_PITCH);
-      assert.equal(getAvatarKit(spec, outfit, CARRY_ARM_PITCH), first);
+      const first = getAvatarKit(spec, outfit);
+      assert.equal(getAvatarKit(spec, outfit), first);
     }
   }
 });
 
-test("옷차림이 달라도 머리는 함께 쓰고, 재질은 언제나 하나예요", () => {
+test("옷차림이 달라도 발은 함께 쓰고, 재질은 반짝임 없는 하나예요", () => {
   const spec = speciesById("otter");
-  const patient = getAvatarKit(spec, "patient", CARRY_ARM_PITCH);
-  const visitor = getAvatarKit(spec, "visitor", CARRY_ARM_PITCH);
-  assert.equal(patient.head, visitor.head);
-  assert.notEqual(patient.torso, visitor.torso);
-  assert.equal(getAvatarMaterial(), getAvatarMaterial());
+  const patient = getAvatarKit(spec, "patient");
+  const visitor = getAvatarKit(spec, "visitor");
+  assert.equal(patient.foot, visitor.foot);
+  assert.notEqual(patient.body, visitor.body);
+  const material = getAvatarMaterial();
+  assert.equal(getAvatarMaterial(), material);
+  assert.equal(material.metalness, 0);
+  assert.ok(material.roughness >= 0.85);
 });
 
 test("환자는 양팔이 같은 도형이고, 문병객의 오른팔에만 꽃다발이 있어요", () => {
   const spec = speciesById("deer");
-  const patient = getAvatarKit(spec, "patient", CARRY_ARM_PITCH);
-  const visitor = getAvatarKit(spec, "visitor", CARRY_ARM_PITCH);
+  const patient = getAvatarKit(spec, "patient");
+  const visitor = getAvatarKit(spec, "visitor");
   assert.equal(patient.arm, patient.armRight);
   assert.notEqual(visitor.arm, visitor.armRight);
 });
 
 test("아바타 한 명의 삼각형 수가 휴대폰 목표 안에 있어요", () => {
   for (const spec of SPECIES) {
-    assert.ok(kitTriangles(getAvatarKit(spec, "patient", CARRY_ARM_PITCH)) <= 1500, spec.id);
-    assert.ok(kitTriangles(getAvatarKit(spec, "visitor", CARRY_ARM_PITCH)) <= 1500, spec.id);
+    assert.ok(kitTriangles(getAvatarKit(spec, "patient")) <= 1500, spec.id);
+    assert.ok(kitTriangles(getAvatarKit(spec, "visitor")) <= 1500, spec.id);
   }
 });
 
 test("지오메트리마다 꼭짓점 색이 있어 재질 하나로 그릴 수 있어요", () => {
-  const kit = getAvatarKit(speciesById("bear"), "patient", CARRY_ARM_PITCH);
-  for (const geometry of [kit.torso, kit.head, kit.arm, kit.leg]) {
+  const kit = getAvatarKit(speciesById("bear"), "patient");
+  for (const geometry of [kit.body, kit.arm, kit.foot]) {
     assert.ok(geometry.getAttribute("color"));
     assert.ok(geometry.getAttribute("normal"));
   }
 });
 
-test("환자복은 줄무늬 없는 민무늬예요", () => {
-  const { torso } = getAvatarKit(speciesById("rabbit"), "patient", CARRY_ARM_PITCH);
-  const colors = torso.getAttribute("color");
-  const distinct = new Set<string>();
-  for (let index = 0; index < colors.count; index++) {
-    distinct.add(
-      [colors.getX(index), colors.getY(index), colors.getZ(index)]
-        .map((value) => value.toFixed(3))
-        .join(),
-    );
+test("환자복은 연하늘색 바탕에 줄무늬가 있고, 배 무늬가 함께 보여요", () => {
+  const spec = speciesById("rabbit");
+  const patient = colorsOf(getAvatarKit(spec, "patient").body);
+  const visitor = colorsOf(getAvatarKit(spec, "visitor").body);
+  for (const hex of ["#cfe5f2", "#a3c9e2"]) {
+    assert.ok(patient.has(key(hex)), hex);
+    assert.ok(!visitor.has(key(hex)), hex);
   }
-  // 옷, 깃, 단추, 꼬리의 네 가지 색뿐이에요.
-  assert.equal(distinct.size, 4);
+  assert.ok(patient.has(key(spec.belly)));
+});
+
+test("아바타는 고양이 두 마리와 털색이 확실히 달라요", () => {
+  for (const spec of SPECIES) {
+    for (const coat of Object.values(CAT_COATS)) {
+      assert.ok(colorDistance(spec.fur, coat.fur) >= 40, `${spec.id} ${coat.fur}`);
+    }
+  }
+  // 아바타는 서 있는 달걀이라 고양이(몸 높이 0.17)보다 훨씬 커요.
+  assert.ok(AVATAR_HEIGHT > 0.6);
 });
 
 test("동작은 천천히 시작해서 끝나면 원래대로 돌아와요", () => {
@@ -106,56 +182,82 @@ test("동작은 천천히 시작해서 끝나면 원래대로 돌아와요", () 
   }
 });
 
-test("걸을 때 양다리와 양팔은 서로 반대로 움직여요", () => {
-  const pose = composePose(createPose(), { ...idle, walkPhase: Math.PI / 2, walkWeight: 1 });
-  assert.ok(pose.legLeftPitch > 0);
-  assert.equal(pose.legRightPitch, -pose.legLeftPitch);
-  assert.equal(pose.armRightPitch, -pose.armLeftPitch);
-  // 왼다리가 나갈 때 왼팔은 반대로 가요.
-  assert.ok(pose.armLeftPitch < 0);
+test("걸을 때는 좌우로 뒤뚱거리며 발을 번갈아 들어요", () => {
+  const left = composePose(createPose(), { ...idle, walkPhase: Math.PI / 2, walkWeight: 1 });
+  assert.ok(left.sway > 0.08);
+  assert.ok(left.footRightLift > 0);
+  assert.equal(left.footLeftLift, 0);
+  const right = composePose(createPose(), { ...idle, walkPhase: -Math.PI / 2, walkWeight: 1 });
+  assert.ok(right.sway < -0.08);
+  assert.ok(right.footLeftLift > 0);
+  assert.equal(right.footRightLift, 0);
+});
+
+test("걸을 때 양발과 양팔은 서로 반대로 움직여요", () => {
+  const pose = composePose(createPose(), { ...idle, walkPhase: 0.3, walkWeight: 1 });
+  assert.ok(pose.footLeftStep > 0);
+  assert.equal(pose.footRightStep, -pose.footLeftStep);
+  assert.equal(pose.armRightSwing, -pose.armLeftSwing);
+  // 왼발이 나갈 때 왼팔은 뒤로 가요.
+  assert.ok(pose.armLeftSwing < 0);
 });
 
 test("멈춰 있으면 걸음 위상과 상관없이 차렷 자세예요", () => {
   const pose = composePose(createPose(), { ...idle, walkPhase: 1.2 });
-  assert.equal(Math.abs(pose.legLeftPitch), 0);
-  assert.equal(Math.abs(pose.armLeftPitch), 0);
+  assert.equal(Math.abs(pose.sway), 0);
+  assert.equal(Math.abs(pose.armLeftSwing), 0);
+  assert.equal(Math.abs(pose.footLeftStep), 0);
   assert.equal(pose.bob, 0);
 });
 
-test("두 손 모으기는 양손을 같은 각도로 가슴 앞에 모아요", () => {
-  const pose = composePose(createPose(), { ...idle, gesture: "pray", gestureElapsed: 1 });
-  assert.equal(pose.armLeftPitch, pose.armRightPitch);
-  assert.equal(pose.armLeftIn, pose.armRightIn);
-  assert.ok(pose.armLeftPitch < -1);
-  // 어깨 너비 0.185를 팔 길이 약 0.3으로 좁히면 손끝이 가운데 닿아요.
-  assert.ok(Math.abs(0.185 - Math.sin(pose.armLeftIn) * 0.31) < 0.02);
+test("가만히 있으면 아주 살짝 숨을 쉬고, 걸을 때와 동작 줄이기에서는 멈춰요", () => {
+  const breathing = composePose(createPose(), { ...idle, breathPhase: Math.PI / 2 });
+  assert.ok(breathing.breathe > 0 && breathing.breathe <= 0.02);
+  const walking = composePose(createPose(), { ...idle, breathPhase: Math.PI / 2, walkWeight: 1 });
+  assert.equal(walking.breathe, 0);
+  assert.equal(advanceBreath(1.3, 0.5, true), 0);
+  const next = advanceBreath(0, 0.5, false);
+  assert.ok(next > 0 && next < Math.PI * 2);
 });
 
-test("목례는 허리와 고개를 숙여요", () => {
+test("두 손 모으기는 짧은 두 팔이 배 앞 가운데에서 맞닿아요", () => {
+  const pose = composePose(createPose(), { ...idle, gesture: "pray", gestureElapsed: 1 });
+  assert.equal(pose.armLeftSwing, pose.armRightSwing);
+  assert.equal(pose.armLeftLift, pose.armRightLift);
+  // 팔 뭉치는 몸 가운데를 축으로 돌아요. 두 뭉치 가운데 사이가 뭉치 폭보다 좁으면 맞닿아요.
+  const gap = 2 * ARM_REACH * Math.cos(pose.armLeftSwing);
+  assert.ok(gap <= 2 * ARM_HALF_WIDTH, `${gap}`);
+  assert.ok(gap >= ARM_HALF_WIDTH);
+  assert.ok(ARM_REACH * Math.sin(pose.armLeftSwing) > ARM_REACH * 0.9);
+});
+
+test("목례는 몸 전체를 앞으로 숙이고 팔을 앞에 모아요", () => {
   const pose = composePose(createPose(), { ...idle, gesture: "bow", gestureElapsed: 0.6 });
   assert.ok(pose.lean > 0.3);
-  assert.ok(pose.headPitch > 0.1);
+  assert.ok(pose.armLeftSwing > 1 && pose.armRightSwing > 1);
 });
 
 test("꽃다발을 든 팔은 앞으로 든 채 작게만 흔들려요", () => {
   const pose = composePose(createPose(), {
     ...idle,
     carrying: true,
-    walkPhase: Math.PI / 2,
+    walkPhase: 0,
     walkWeight: 1,
   });
-  assert.ok(Math.abs(pose.armRightPitch - CARRY_ARM_PITCH) < 0.1);
-  assert.ok(Math.abs(pose.armLeftPitch) > 0.3);
+  assert.ok(Math.abs(pose.armRightSwing - CARRY_ARM_SWING) < 0.1);
+  assert.ok(Math.abs(pose.armLeftSwing) > 0.3);
 });
 
 test("눕기는 서 있는 자세에서 다 누운 자세까지 이어져요", () => {
   const stand = composePose(createPose(), idle);
   assert.equal(stand.bedLie, 0);
   assert.equal(stand.bedTravel, 0);
-  const lie = composePose(createPose(), { ...idle, bedProgress: 1 });
+  const lie = composePose(createPose(), { ...idle, bedProgress: 1, walkPhase: 1, walkWeight: 1 });
   assert.equal(lie.bedLie, 1);
   assert.equal(lie.bedTravel, 1);
   assert.equal(lie.bedLift, 1);
+  assert.equal(lie.sway, 0);
+  assert.equal(lie.footLeftLift, 0);
   // 몸을 다 눕히기 전에 침대 높이에 먼저 올라가요.
   const middle = composePose(createPose(), { ...idle, bedProgress: 0.6 });
   assert.ok(middle.bedLift > middle.bedLie);

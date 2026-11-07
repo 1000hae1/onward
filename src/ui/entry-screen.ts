@@ -1,8 +1,9 @@
 import { checkNickname, nicknameMessage, swapNicknameAnimal } from "../../shared/nickname";
 import { SPECIES, speciesById } from "../avatar/species";
 import type { Outfit, SpeciesId } from "../avatar/species";
+import { avatarPortrait } from "../avatar/portraits";
 import type { Profile } from "./profile";
-import { createButton, createChoiceRow, createText } from "./widgets";
+import { createButton, createChoiceRow, createPictureChoiceRow, createText } from "./widgets";
 
 export interface EntryOptions {
   initial: Profile;
@@ -27,7 +28,7 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
   form.className = "ward-panel entry-form";
   form.noValidate = true;
 
-  const speciesRow = createChoiceRow<SpeciesId>(
+  const speciesRow = createPictureChoiceRow<SpeciesId>(
     SPECIES.map((spec) => ({ value: spec.id, label: spec.label })),
     (species) => {
       const nickname = profile.nicknameAuto
@@ -85,11 +86,17 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     catQuestion,
     catRow.element,
     enter,
+    (() => {
+      const note = createText("p", "온기병동은 의료 서비스가 아니에요. 진료나 상담이 필요하면 의료진과 이야기해 주세요.");
+      note.className = "entry-note";
+      return note;
+    })(),
   );
   root.append(form);
 
   function render(): void {
     speciesRow.select(profile.species);
+    speciesRow.setPictures((species) => avatarPortrait(species, profile.outfit));
     outfitRow.select(profile.outfit);
     catRow.select(profile.withCat);
     const checked = checkNickname(profile.nickname);

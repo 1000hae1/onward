@@ -1,187 +1,204 @@
-import {
-  CapsuleGeometry,
-  Euler,
-  Matrix4,
-  MeshLambertMaterial,
-  Quaternion,
-  SphereGeometry,
-  Vector3,
-} from "three";
+import { MeshStandardMaterial, SphereGeometry } from "three";
 import type { BufferGeometry } from "three";
+import {
+  EGG_BASE_Y,
+  EGG_HEIGHT,
+  eggBand,
+  eggPatch,
+  eggRadius,
+  eggThetaAt,
+  eggY,
+  mirroredPatches,
+  surfaceBlobs,
+} from "./egg.ts";
+import type { SurfaceBlob } from "./egg.ts";
 import { blobs, merged, paint, place } from "./shapes.ts";
-import type { BlobSpec, Outfit, SpeciesSpec, Vec3 } from "./species";
+import type { BlobSpec, Outfit, SpeciesSpec } from "./species";
 
 /**
  * 아바타 부품을 동물과 옷차림별로 한 번만 만들어 재사용해요. 재질은 모두가 하나를 함께 써요.
- * 색은 꼭짓점에 칠해서 텍스처가 없고, 관절 하나가 메시 하나라 아바타 한 명이 6번만 그려져요.
+ * 머리와 몸이 하나인 달걀이라 메시는 몸, 팔 뭉치 둘, 발 둘로 아바타 한 명이 5번만 그려져요.
+ * 옷 껍질과 팔·발 틀은 동물과 상관없이 한 번 만들어 두고 복사해서 써요.
  */
 
 export interface AvatarKit {
-  torso: BufferGeometry;
-  head: BufferGeometry;
-  /** 왼팔과 오른팔이 함께 써요. */
+  /** 머리까지 이어진 몸통과 옷, 얼굴, 귀와 꼬리예요. */
+  body: BufferGeometry;
+  /** 양팔이 함께 써요. 오른팔은 거울처럼 뒤집어 그려요. */
   arm: BufferGeometry;
   /** 문병객의 오른팔이에요. 꽃다발을 들고 있어요. 환자는 arm과 같아요. */
   armRight: BufferGeometry;
-  /** 왼다리와 오른다리가 함께 써요. */
-  leg: BufferGeometry;
+  /** 양발이 함께 써요. */
+  foot: BufferGeometry;
 }
 
-/** 엉덩이, 어깨, 목 관절 자리예요. 몸통과 머리 치수의 기준이에요. */
-export const HIP_Y = 0.26;
-export const SHOULDER_X = 0.185;
-export const SHOULDER_Y = 0.27;
-export const NECK_Y = 0.32;
-export const LEG_X = 0.085;
-const HEAD_CENTER_Y = 0.17;
+/** 아바타의 키예요. 이름표는 이 높이 위에 떠요. */
+export const AVATAR_HEIGHT = EGG_BASE_Y + EGG_HEIGHT;
+/** 얼굴 가운데 높이예요. 이름표와 날아오는 빛이 이 점을 기준으로 해요. */
+export const HEAD_CENTER_Y = eggY(2.3);
+/** 팔 뭉치가 붙는 높이예요. 몸 가운데를 축으로 돌아서 몸을 따라 앞뒤로 움직여요. */
+export const ARM_Y = 0.31;
+/** 몸 가운데에서 팔 뭉치 가운데까지의 거리예요. 뭉치 절반이 옷에 묻혀요. */
+export const ARM_REACH = eggRadius(eggThetaAt(ARM_Y)) * 1.02;
+/** 팔 뭉치의 반폭이에요. 두 손을 모을 때 맞닿는 거리를 정해요. */
+export const ARM_HALF_WIDTH = 0.05;
+export const FOOT_X = 0.095;
+/** 손에 든 빛이 떠나는 자리예요. 몸 앞 가슴 높이예요. */
+export const HAND_HEIGHT = ARM_Y + 0.04;
+export const HAND_REACH = ARM_REACH;
 
-const TORSO_RADIUS = 0.17;
-const TORSO_DEPTH = 0.88;
-const TORSO_RADIAL = 16;
-const LIMB_RADIAL = 8;
-const ARM_RADIUS = 0.05;
-const ARM_LENGTH = 0.17;
-const ARM_CENTER_Y = -0.1;
-const HAND_Y = -0.25;
-const LEG_RADIUS = 0.07;
-const LEG_LENGTH = 0.1;
-const LEG_CENTER_Y = -0.09;
-const FOOT_Y = -0.222;
+/** 옷이 몸보다 큰 비율이에요. 단 끝이 살짝 도드라져요. */
+const CLOTHES_SHELL = 1.045;
+/** 옷이 덮는 꼭대기예요. 몸 높이의 아래 2/3쯤이에요. */
+const CLOTHES_TOP = 1.82;
+/** 옷깃이 끝나고 털이 시작되는 자리예요. 옷깃이 이음매를 덮어요. */
+const FUR_START = 1.76;
+const FUR_THETAS = [FUR_START, 2.1, 2.45, 2.75, 2.98, Math.PI];
 
-const PAJAMA = "#b4def5";
-const PAJAMA_COLLAR = "#7fbde3";
-const BUTTON_COLOR = "#ffffff";
-const KNIT = "#c97b63";
-const KNIT_TRIM = "#b56a54";
-const TROUSERS = "#5a6678";
-const SCARF = "#e3b85f";
+const PAJAMA = "#cfe5f2";
+const PAJAMA_STRIPE = "#a3c9e2";
+const PAJAMA_COLLAR = "#90b9d8";
+const BUTTON_COLOR = "#fbfaf6";
+const KNIT = "#d39a86";
+const KNIT_TRIM = "#bf8571";
+const SCARF = "#e6c784";
+const EYE_COLOR = "#2c2a28";
 
-function buildHead(spec: SpeciesSpec): BufferGeometry {
-  const center: Vec3 = [0, HEAD_CENTER_Y, 0];
-  const eye = paint(new SphereGeometry(1, 7, 4), "#2c2a28");
-  const eyeMirror = eye.clone();
-  const eyeSize: Vec3 = [0.024, 0.026, 0.016];
-  const [eyeX, eyeY, eyeZ] = spec.eye;
+interface Band {
+  thetas: readonly number[];
+  color: string;
+  shells?: readonly number[];
+}
+
+/** 연하늘색 바탕에 조금 진한 하늘색 가로줄이에요. 위에 둥근 옷깃이 있어요. */
+const PAJAMA_BANDS: readonly Band[] = [
+  { thetas: [0, 0.5, 1.0], color: PAJAMA },
+  { thetas: [1.0, 1.11], color: PAJAMA_STRIPE },
+  { thetas: [1.11, 1.43], color: PAJAMA },
+  { thetas: [1.43, 1.54], color: PAJAMA_STRIPE },
+  { thetas: [1.54, CLOTHES_TOP], color: PAJAMA },
+  { thetas: [CLOTHES_TOP, 1.88, 1.95], color: PAJAMA_COLLAR, shells: [CLOTHES_SHELL, 1.065, 1.004] },
+];
+
+/** 니트에 밑단 줄이 하나 있고, 목에 도톰한 목도리를 둘렀어요. */
+const KNIT_BANDS: readonly Band[] = [
+  { thetas: [0, 0.45, 0.85], color: KNIT },
+  { thetas: [0.85, 0.97], color: KNIT_TRIM },
+  { thetas: [0.97, 1.3, 1.62], color: KNIT },
+  { thetas: [1.62, 1.8, 1.98], color: SCARF, shells: [CLOTHES_SHELL, 1.11, 1.004] },
+];
+
+const PAJAMA_DETAILS: readonly SurfaceBlob[] = [
+  { shape: "ball", color: BUTTON_COLOR, on: [1.29, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
+  { shape: "ball", color: BUTTON_COLOR, on: [1.68, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
+];
+
+const SLEEVE_COLOR: Record<Outfit, string> = { patient: PAJAMA, visitor: KNIT };
+
+function buildClothes(outfit: Outfit): BufferGeometry {
+  const bands = outfit === "patient" ? PAJAMA_BANDS : KNIT_BANDS;
+  const parts = bands.map((band) => eggBand(band.thetas, band.shells ?? CLOTHES_SHELL, band.color));
+  if (outfit === "patient") parts.push(...surfaceBlobs(PAJAMA_DETAILS));
+  return merged(parts);
+}
+
+/** 옷 위로 보이는 털과 얼굴이에요. 배 무늬는 아랫부분이 옷에 가려 윗부분만 살짝 보여요. */
+function buildFace(spec: SpeciesSpec): BufferGeometry {
+  // 눈은 표면을 따라 붙인 작은 까만 점이에요. 공보다 면이 적고 가장자리가 둥글어요.
+  const eyes = mirroredPatches({
+    at: spec.eye,
+    radius: [0.08, 0.115],
+    color: EYE_COLOR,
+    bulge: 0.004,
+    lift: spec.eyeLift ?? 0.002,
+    rings: 1,
+    segments: 12,
+  });
   return merged([
-    place(paint(new SphereGeometry(1, 16, 9), spec.fur), center, [0, 0, 0], spec.headSize),
-    ...blobs(spec.head, center),
-    place(eye, [eyeX, center[1] + eyeY, eyeZ], [0, 0, 0], eyeSize),
-    place(eyeMirror, [-eyeX, center[1] + eyeY, eyeZ], [0, 0, 0], eyeSize),
+    eggBand(FUR_THETAS, 1, spec.fur),
+    eggPatch({ at: [1.92, 0], radius: [0.3, 0.8], color: spec.belly, bulge: 0.003, rings: 2, segments: 14 }),
+    ...[...spec.patches, ...eyes].map(eggPatch),
+    ...surfaceBlobs(spec.parts),
   ]);
 }
 
-function buildTorso(spec: SpeciesSpec, outfit: Outfit): BufferGeometry {
-  const body = new CapsuleGeometry(TORSO_RADIUS, 0.06, 3, TORSO_RADIAL);
-  const middle: Vec3 = [0, 0.16, 0];
-  const depth: Vec3 = [1, 1, TORSO_DEPTH];
-  const tail = blobs(spec.tail);
-  if (outfit === "patient") {
-    return merged([
-      place(paint(body, PAJAMA), middle, [0, 0, 0], depth),
-      ...blobs([
-        { shape: "ball", color: PAJAMA_COLLAR, at: [0, 0.325, 0], size: [0.125, 0.032, 0.115] },
-        { shape: "ball", color: BUTTON_COLOR, at: [0, 0.2, 0.15], size: [0.014, 0.014, 0.008], small: true },
-        { shape: "ball", color: BUTTON_COLOR, at: [0, 0.11, 0.153], size: [0.014, 0.014, 0.008], small: true },
-      ]),
-      ...tail,
-    ]);
-  }
-  return merged([
-    place(paint(body, KNIT), middle, [0, 0, 0], depth),
-    ...blobs([
-      { shape: "ball", color: SCARF, at: [0, 0.32, 0], size: [0.135, 0.04, 0.125] },
-      { shape: "ball", color: KNIT_TRIM, at: [0, 0, 0], size: [0.135, 0.03, 0.12], small: true },
-    ]),
-    ...tail,
-  ]);
-}
-
-function sleeve(outfit: Outfit): BufferGeometry {
-  const pill = new CapsuleGeometry(ARM_RADIUS, ARM_LENGTH, 2, LIMB_RADIAL);
-  const painted =
-    outfit === "patient" ? paint(pill, PAJAMA) : paint(pill, KNIT);
-  return place(painted, [0, ARM_CENTER_Y, 0]);
-}
-
-function hand(spec: SpeciesSpec): BufferGeometry {
-  const sphere = paint(new SphereGeometry(1, 6, 4), spec.hand.color);
-  return place(sphere, [0, HAND_Y, 0], [0, 0, 0], spec.hand.size);
-}
-
-/** 작은 꽃다발이에요. 팔을 앞으로 들었을 때 곧게 서도록 팔 각도만큼 되돌려 달아요. */
-function bouquet(armPitch: number): BufferGeometry[] {
-  const wrap: BlobSpec[] = [
-    { shape: "cone", color: "#f3e6d0", at: [0, 0.03, 0], size: [0.05, 0.15, 0], tilt: [Math.PI, 0, 0], small: true },
-    { shape: "ball", color: "#d98c8c", at: [0, 0.015, 0], size: [0.03, 0.012, 0.03], small: true },
-    { shape: "ball", color: "#7aa886", at: [0.04, 0.115, -0.015], size: [0.03, 0.024, 0.03], small: true },
-    { shape: "ball", color: "#7aa886", at: [-0.04, 0.11, 0.015], size: [0.03, 0.024, 0.03], small: true },
-    { shape: "ball", color: "#f2a7b5", at: [0, 0.14, 0.02], size: [0.038, 0.034, 0.038], small: true },
-    { shape: "ball", color: "#f7d67a", at: [0.033, 0.125, 0.018], size: [0.028, 0.026, 0.028], small: true },
-    { shape: "ball", color: "#e9828f", at: [-0.03, 0.128, -0.012], size: [0.03, 0.028, 0.03], small: true },
-  ];
-  const handle = new Matrix4().compose(
-    new Vector3(0, HAND_Y - 0.01, 0.015),
-    new Quaternion().setFromEuler(new Euler(-armPitch, 0, 0)),
-    new Vector3(1, 1, 1),
+function buildArm(spec: SpeciesSpec, outfit: Outfit): BufferGeometry {
+  // 몸에 기대어 위쪽이 살짝 안으로 기운 작은 뭉치예요. 왼팔(-x) 기준이에요.
+  const sleeve = place(
+    paint(new SphereGeometry(1, 8, 5), SLEEVE_COLOR[outfit]),
+    [0, 0, 0],
+    [0, 0, -0.3],
+    [ARM_HALF_WIDTH, 0.068, 0.058],
   );
-  return blobs(wrap).map((part) => part.applyMatrix4(handle));
+  const hand = place(paint(new SphereGeometry(1, 6, 4), spec.hand.color), [-0.018, -0.052, 0.008], [0, 0, -0.3], spec.hand.size);
+  return merged([sleeve, hand]);
 }
 
-function buildLeg(spec: SpeciesSpec, outfit: Outfit): BufferGeometry {
-  const pill = new CapsuleGeometry(LEG_RADIUS, LEG_LENGTH, 1, LIMB_RADIAL);
-  const trouser =
-    outfit === "patient" ? paint(pill, PAJAMA) : paint(pill, TROUSERS);
-  const foot = paint(new SphereGeometry(1, 6, 4), spec.foot.color);
+function buildFoot(spec: SpeciesSpec): BufferGeometry {
   return merged([
-    place(trouser, [0, LEG_CENTER_Y, 0]),
-    place(foot, [0, FOOT_Y, 0.03], [0, 0, 0], spec.foot.size),
+    place(paint(new SphereGeometry(1, 8, 5), spec.foot.color), [0, spec.foot.size[1], 0.07], [0, 0, 0], spec.foot.size),
   ]);
 }
 
-const heads = new Map<string, BufferGeometry>();
+/** 작은 꽃다발이에요. 팔은 몸을 따라 돌기만 해서 꽃다발이 언제나 곧게 서요. */
+function bouquet(): BufferGeometry[] {
+  const wrap: BlobSpec[] = [
+    { shape: "cone", color: "#f3e6d0", at: [0, 0.07, 0.035], size: [0.04, 0.12, 0], tilt: [Math.PI, 0, 0], small: true },
+    { shape: "ball", color: "#9cbf9f", at: [0.032, 0.14, 0.025], size: [0.026, 0.02, 0.026], small: true },
+    { shape: "ball", color: "#f2b3bd", at: [0, 0.16, 0.05], size: [0.032, 0.029, 0.032], small: true },
+    { shape: "ball", color: "#f2d98e", at: [0.027, 0.15, 0.048], size: [0.024, 0.022, 0.024], small: true },
+    { shape: "ball", color: "#e99aa3", at: [-0.025, 0.152, 0.025], size: [0.026, 0.024, 0.026], small: true },
+  ];
+  return blobs(wrap);
+}
+
+const clothes = new Map<Outfit, BufferGeometry>();
+const faces = new Map<string, BufferGeometry>();
+const feet = new Map<string, BufferGeometry>();
 const kits = new Map<string, AvatarKit>();
 
-/** 동물과 옷차림이 같으면 언제나 같은 부품을 돌려줘요. armPitch는 꽃다발 든 팔의 각도예요. */
-export function getAvatarKit(spec: SpeciesSpec, outfit: Outfit, armPitch: number): AvatarKit {
-  const key = `${spec.id}:${outfit}`;
-  const existing = kits.get(key);
-  if (existing) return existing;
-
-  let head = heads.get(spec.id);
-  if (!head) {
-    head = buildHead(spec);
-    heads.set(spec.id, head);
+function cached<K, V>(map: Map<K, V>, key: K, build: () => V): V {
+  let value = map.get(key);
+  if (value === undefined) {
+    value = build();
+    map.set(key, value);
   }
-  const arm = merged([sleeve(outfit), hand(spec)]);
-  const kit: AvatarKit = {
-    torso: buildTorso(spec, outfit),
-    head,
-    arm,
-    armRight:
-      outfit === "visitor" ? merged([sleeve(outfit), hand(spec), ...bouquet(armPitch)]) : arm,
-    leg: buildLeg(spec, outfit),
-  };
-  kits.set(key, kit);
-  return kit;
+  return value;
+}
+
+/** 동물과 옷차림이 같으면 언제나 같은 부품을 돌려줘요. */
+export function getAvatarKit(spec: SpeciesSpec, outfit: Outfit): AvatarKit {
+  return cached(kits, `${spec.id}:${outfit}`, () => {
+    const outfitShell = cached(clothes, outfit, () => buildClothes(outfit));
+    const face = cached(faces, spec.id, () => buildFace(spec));
+    // merged는 넘긴 조각을 정리하므로, 함께 쓰는 틀은 복사해서 넘겨요.
+    const body = merged([outfitShell.clone(), face.clone()]);
+    const arm = buildArm(spec, outfit);
+    return {
+      body,
+      arm,
+      armRight: outfit === "visitor" ? merged([arm.clone(), ...bouquet()]) : arm,
+      foot: cached(feet, spec.id, () => buildFoot(spec)),
+    };
+  });
 }
 
 /** 아바타 한 명이 그리는 삼각형 수예요. */
 export function kitTriangles(kit: AvatarKit): number {
   const count = (geometry: BufferGeometry): number =>
     (geometry.index ? geometry.index.count : geometry.getAttribute("position").count) / 3;
-  return (
-    count(kit.torso) +
-    count(kit.head) +
-    count(kit.arm) +
-    count(kit.armRight) +
-    count(kit.leg) * 2
-  );
+  return count(kit.body) + count(kit.arm) + count(kit.armRight) + count(kit.foot) * 2;
 }
 
-let sharedMaterial: MeshLambertMaterial | null = null;
+let sharedMaterial: MeshStandardMaterial | null = null;
 
-/** 모든 아바타가 함께 쓰는 재질이에요. 색은 꼭짓점에 있어요. */
-export function getAvatarMaterial(): MeshLambertMaterial {
-  sharedMaterial ??= new MeshLambertMaterial({ vertexColors: true, emissive: "#14120f" });
+/** 모든 아바타가 함께 쓰는 재질이에요. 반짝임 없는 점토 같은 질감이고, 색은 꼭짓점에 있어요. */
+export function getAvatarMaterial(): MeshStandardMaterial {
+  sharedMaterial ??= new MeshStandardMaterial({
+    vertexColors: true,
+    roughness: 0.92,
+    metalness: 0,
+    emissive: "#14120f",
+  });
   return sharedMaterial;
 }

@@ -13,7 +13,7 @@ const SLOT_HOURS = [6, 18, 22] as const;
 /** 밤에 이만큼 머물면 그 밤을 함께한 밤으로 세요. */
 export const NIGHT_STAY_MS = 60_000;
 /** 이만큼 아무것도 누르지 않으면 연결을 잠시 닫아요. 수면 모드는 예외예요. */
-export const IDLE_LIMIT_MS = 20 * 60_000;
+export const IDLE_LIMIT_MS = 15 * 60_000;
 
 function kstParts(nowMs: number): { dayStart: number; hour: number } {
   const kst = nowMs + KST_OFFSET_MS;

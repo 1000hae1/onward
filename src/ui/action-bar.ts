@@ -1,6 +1,9 @@
 import { BLESSINGS, blessingText, GIFTS } from "../../shared/gestures";
 import { giftAllowedNow } from "../../shared/ward-rules";
 import { visitCountText } from "../../shared/visit-rules";
+import { REPORT_REASON_TEXT } from "../../shared/safety-rules";
+import { MORNING_PHRASE } from "../../shared/morning";
+import { DISCHARGE_CONFIRM_TEXT } from "../../shared/discharge-rules";
 import { loadMyLink, saveMyLink, shareVisit, visitUrl } from "../net/visit-link";
 import { bedHeadSpot, BEDS, roomAt } from "../../shared/ward-layout";
 import { gestureDuration } from "../avatar/pose";
@@ -26,6 +29,12 @@ export interface ActionSink {
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
   /** 내 문병 링크를 만들거나 끄거나 상태를 물어요. 답은 showVisitLink로 와요. */
   visitLink(action: "create" | "off" | "info"): void;
+  /** 다른 동물을 신고해요. 사유는 번호예요. 답은 화면 안내로 와요. */
+  report(id: string, reason: number): void;
+  /** 다른 동물에게 안아 주기를 요청해요. 서버가 거리와 횟수를 살펴요. */
+  hug(id: string): void;
+  /** 오늘 퇴원해요. closeLink면 문병 링크도 함께 꺼요. */
+  discharge(closeLink: boolean): void;
 }
 
 /** 서버가 알려 준 내 문병 링크예요. token은 새로 만든 그때만 있어요. */
@@ -54,17 +63,23 @@ export interface ActionBarOptions {
   people(): PersonChoice[];
   /** 문병 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
   visiting(): boolean;
+  /** 한국 시간 06:30~09:00이면 "좋은 아침이에요"를 보여 줘요. 서버도 시간을 다시 살펴요. */
+  morning(): boolean;
 }
 
 export interface ActionBar {
   update(dt: number): void;
   showToast(text: string): void;
   showVisitLink(status: VisitLinkStatus): void;
+  /** 다른 동물을 눌렀을 때 나오는 메뉴예요. hugOk가 false면 안아 주기를 보여 주지 않아요. */
+  openPerson(person: { id: string; nickname: string; hugOk: boolean }): void;
+  /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
+  setHidden(hidden: boolean): void;
 }
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
-  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting } = options;
+  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, morning } = options;
 
   const sheet = document.createElement("div");
   sheet.className = "ward-panel action-sheet";
@@ -228,6 +243,10 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         row.append(createButton("내 침대로 문병 오기", () => sink.visitLink("create")));
       }
       children.push(row);
+      const leave = document.createElement("div");
+      leave.className = "action-choices";
+      leave.append(createButton("퇴원하기", openDischarge));
+      children.push(leave);
       if (manualLink) {
         const input = document.createElement("input");
         input.type = "text";
@@ -239,7 +258,68 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         children.push(createText("p", "아래 링크를 길게 눌러 복사해 주세요."), input);
       }
     }
-    openSheet("bed", "내 침대로 문병 오기", children);
+    openSheet("bed", "내 침대", children);
+  };
+
+  /** 퇴원을 한 번 더 묻는 단계예요. 문병 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
+  const openDischarge = (): void => {
+    const children: HTMLElement[] = [];
+    let closeLink = false;
+    if (link?.active) {
+      const label = document.createElement("label");
+      label.className = "action-check";
+      const box = document.createElement("input");
+      box.type = "checkbox";
+      box.checked = false;
+      box.addEventListener("change", () => {
+        closeLink = box.checked;
+      });
+      const text = document.createElement("span");
+      text.textContent = "문병 링크도 함께 끌게요";
+      label.append(box, text);
+      children.push(label);
+    }
+    const row = document.createElement("div");
+    row.className = "ward-row";
+    row.append(
+      createButton("퇴원할게요", () => {
+        closeSheet();
+        sink.discharge(closeLink);
+      }),
+    );
+    children.push(row);
+    openSheet("discharge", DISCHARGE_CONFIRM_TEXT, children);
+  };
+
+  /** 다른 동물 메뉴예요. 닉네임은 textContent로만 넣어요. */
+  const openPerson = (person: { id: string; nickname: string; hugOk: boolean }): void => {
+    const name = `person-${person.id}`;
+    const row = document.createElement("div");
+    row.className = "action-choices";
+    if (person.hugOk && sink.online()) {
+      row.append(
+        createButton("안아 주기", () => {
+          closeSheet();
+          sink.hug(person.id);
+          showToast(`${person.nickname}님께 물어볼게요.`);
+        }),
+      );
+    }
+    row.append(
+      createButton("신고하기", () => {
+        if (!sink.online()) {
+          showToast("병동 서버에 닿을 때 신고할 수 있어요.");
+          return;
+        }
+        openSheet(name, "어떤 점이 불편했나요?", [
+          choiceList(REPORT_REASON_TEXT, (reason) => {
+            sink.report(person.id, reason);
+            closeSheet();
+          }),
+        ]);
+      }),
+    );
+    openSheet(name, `${person.nickname}님`, [row]);
   };
 
   const bedButton = createButton(
@@ -248,7 +328,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       link = null;
       linkNote = "";
       manualLink = null;
-      openSheet("bed", "내 침대로 문병 오기", []);
+      openSheet("bed", "내 침대", []);
       renderBedMenu();
       sink.visitLink("info");
     }),
@@ -292,7 +372,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       "목례와 한마디",
       toggleable("blessing", () => {
         openSheet("blessing", "어떤 한마디를 건넬까요?", [
-          choiceList(BLESSINGS, (id) => {
+          // "좋은 아침이에요"는 아침에만 보여요.
+          choiceList(morning() ? BLESSINGS : BLESSINGS.slice(0, MORNING_PHRASE), (id) => {
             closeSheet();
             player.whenUp(() => {
               player.playGesture("bow");
@@ -365,6 +446,11 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       manualLink = null;
       link = { active: status.active, visits: status.visits };
       renderBedMenu();
+    },
+    openPerson,
+    setHidden(hidden) {
+      if (hidden) closeSheet();
+      buttons.hidden = hidden;
     },
     update(dt) {
       // 침대에 누워 있는 동안만 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.

@@ -9,11 +9,14 @@ test("기본값은 혼자 들어가는 환자이고 자동 닉네임이 채워�
   assert.equal(profile.withCat, false);
   assert.equal(profile.outfit, "patient");
   assert.equal(profile.nicknameAuto, true);
+  // 안아 주기 요청은 기본으로 받아요.
+  assert.equal(profile.hugsOff, false);
   assert.ok(profile.nickname.endsWith("토끼"));
 });
 
 test("저장된 값은 형식이 맞을 때만 읽어요", () => {
-  assert.deepEqual(parseProfile(JSON.stringify(good)), good);
+  assert.deepEqual(parseProfile(JSON.stringify(good)), { ...good, hugsOff: false });
+  assert.equal(parseProfile(JSON.stringify({ ...good, hugsOff: true }))?.hugsOff, true);
   assert.equal(parseProfile(null), null);
   assert.equal(parseProfile("{"), null);
   assert.equal(parseProfile("null"), null);

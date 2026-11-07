@@ -1,6 +1,10 @@
+import { mirroredPatches } from "./egg";
+import type { PatchSpec, SurfaceBlob, SurfaceSpot } from "./egg";
+
 /**
  * 동물 다섯 종의 생김새 자료예요. 도형을 직접 만들지 않고 숫자만 적어 두면 kit.ts가 조립해요.
- * 머리 부품은 머리 중심, 꼬리는 엉덩이 관절을 기준으로 한 좌표예요. +z가 앞, +y가 위예요.
+ * 모두 같은 달걀 몸을 쓰고, 부품은 달걀 표면의 자리 [θ, φ]로 적어요. θ는 바닥 0에서 꼭대기 π,
+ * φ는 정면 0에서 왼쪽으로 도는 각도라 뒤쪽은 π예요.
  */
 
 export type Vec3 = readonly [number, number, number];
@@ -24,134 +28,153 @@ export type Outfit = "patient" | "visitor";
 export interface SpeciesSpec {
   id: SpeciesId;
   label: string;
+  /** 몸 색이에요. 채도를 낮춘 파스텔이고, 고양이 털색과는 멀리 떨어뜨려요. */
   fur: string;
-  /** 머리 구의 세 축 반지름이에요. */
-  headSize: Vec3;
-  /** 눈 자리예요. 머리 중심 기준이고 좌우로 대칭이에요. */
-  eye: Vec3;
-  head: readonly BlobSpec[];
-  tail: readonly BlobSpec[];
+  /** 배 무늬 색이에요. */
+  belly: string;
+  /** 눈 자리예요. 좌우로 대칭이에요. */
+  eye: SurfaceSpot;
+  /** 얼굴 무늬 위에 눈을 얹을 때 띄우는 거리예요. */
+  eyeLift?: number;
+  /** 귀, 주둥이, 코, 꼬리처럼 동물마다 다른 부품이에요. */
+  parts: readonly SurfaceBlob[];
+  /** 얼굴이나 등에 붙는 무늬예요. 배 무늬는 모두 같아서 kit.ts가 붙여요. */
+  patches: readonly PatchSpec[];
+  /** 팔 뭉치 끝에 보이는 손이에요. */
   hand: { color: string; size: Vec3 };
+  /** 바닥에 납작하게 놓인 발이에요. */
   foot: { color: string; size: Vec3 };
 }
 
-const CHEEK = "#efb6a4";
+const CHEEK = "#e9b3aa";
+const MOUTH = "#6b5550";
+const BACK = Math.PI;
+/** 코와 입이 놓이는 높이예요. 눈은 이보다 조금 위에 떨어뜨려 놓아요. */
+const NOSE_THETA = 2.2;
+const MOUTH_THETA = 2.12;
+const EYE: SurfaceSpot = [2.36, 0.42];
 
-const cheeks = (x: number, y: number, z: number): BlobSpec => ({
-  shape: "ball",
-  color: CHEEK,
-  at: [x, y, z],
-  size: [0.032, 0.02, 0.015],
-  mirror: true,
+/** 발그레한 볼이에요. 표면을 따라 붙는 납작한 타원이에요. */
+const cheeks = (phi = 0.8, lift?: number): PatchSpec[] =>
+  mirroredPatches({ at: [2.22, phi], radius: [0.055, 0.12], color: CHEEK, bulge: 0.002, lift, rings: 1, segments: 10 });
+
+/** 작게 다문 입이에요. lift는 주둥이가 있으면 그 위로 올려요. */
+const mouth = (lift: number, theta = MOUTH_THETA): SurfaceBlob => ({
+  shape: "pill",
+  color: MOUTH,
+  on: [theta, 0],
+  size: [0.0045, 0.018, 0.6],
+  tilt: [0, 0, Math.PI / 2],
+  lift,
   small: true,
 });
+
+/** 엉덩이에 붙는 꼬리예요. 환자복 위로 보이도록 옷 둘레에 붙여요. */
+const OVER_CLOTHES = 1.05;
 
 export const SPECIES: readonly SpeciesSpec[] = [
   {
     id: "rabbit",
     label: "토끼",
-    fur: "#ead9bf",
-    headSize: [0.2, 0.19, 0.19],
-    eye: [0.085, 0.025, 0.168],
-    head: [
-      // 왼쪽 귀는 곧게 서고, 오른쪽 귀는 중간에서 바깥으로 접혀요.
-      { shape: "pill", color: "#ead9bf", at: [-0.085, 0.27, -0.01], size: [0.048, 0.2, 0.7], tilt: [0, 0, 0.1] },
-      { shape: "pill", color: "#f0bfb0", at: [-0.085, 0.27, 0.016], size: [0.024, 0.17, 0.5], tilt: [0, 0, 0.1], small: true },
-      { shape: "pill", color: "#ead9bf", at: [0.09, 0.22, -0.01], size: [0.048, 0.1, 0.7], tilt: [0, 0, -0.12] },
-      { shape: "pill", color: "#ead9bf", at: [0.16, 0.315, -0.01], size: [0.046, 0.12, 0.7], tilt: [0, 0, -1.05] },
-      { shape: "ball", color: "#f7eedd", at: [0, -0.055, 0.165], size: [0.07, 0.05, 0.04] },
-      { shape: "ball", color: "#d98d80", at: [0, -0.032, 0.2], size: [0.018, 0.013, 0.01], small: true },
-      cheeks(0.125, -0.035, 0.14),
+    fur: "#d9c8de",
+    belly: "#f8f0e6",
+    eye: EYE,
+    parts: [
+      // 짧고 통통한 귀예요. 왼쪽은 곧게 서고, 오른쪽은 앞으로 살짝 숙여요.
+      { shape: "pill", color: "#d9c8de", on: [2.72, 0.62], size: [0.04, 0.09, 0.62], align: "out", tilt: [0, 0, -0.12] },
+      { shape: "pill", color: "#ebbdbe", on: [2.72, 0.62], size: [0.022, 0.075, 0.5], align: "out", tilt: [0, 0, -0.12], offset: [0, 0.004, 0.014], small: true },
+      { shape: "pill", color: "#d9c8de", on: [2.72, -0.62], size: [0.04, 0.075, 0.62], align: "out", tilt: [0.55, 0, 0.3] },
+      { shape: "pill", color: "#ebbdbe", on: [2.72, -0.62], size: [0.022, 0.06, 0.5], align: "out", tilt: [0.55, 0, 0.3], offset: [0, 0.004, 0.014], small: true },
+      { shape: "ball", color: "#c98f93", on: [NOSE_THETA, 0], size: [0.016, 0.012, 0.009], small: true },
+      mouth(0.002),
+      { shape: "ball", color: "#f8f0e6", on: [1.0, BACK], size: [0.05, 0.05, 0.05], align: "out", shell: OVER_CLOTHES, lift: -0.02 },
     ],
-    tail: [{ shape: "ball", color: "#f7eedd", at: [0, 0.03, -0.17], size: [0.06, 0.06, 0.06], small: true }],
-    hand: { color: "#ead9bf", size: [0.058, 0.062, 0.058] },
-    foot: { color: "#ead9bf", size: [0.07, 0.04, 0.115] },
+    patches: cheeks(),
+    hand: { color: "#d9c8de", size: [0.036, 0.032, 0.036] },
+    foot: { color: "#d9c8de", size: [0.058, 0.024, 0.082] },
   },
   {
     id: "bear",
     label: "곰",
-    fur: "#8a6a52",
-    headSize: [0.215, 0.19, 0.19],
-    eye: [0.09, 0.03, 0.168],
-    head: [
-      { shape: "ball", color: "#8a6a52", at: [0.155, 0.145, -0.015], size: [0.066, 0.066, 0.04], mirror: true },
-      { shape: "ball", color: "#c7a78b", at: [0.155, 0.143, 0.018], size: [0.038, 0.038, 0.012], mirror: true, small: true },
-      { shape: "ball", color: "#d9c0a3", at: [0, -0.055, 0.155], size: [0.1, 0.07, 0.06] },
-      { shape: "ball", color: "#3b2c25", at: [0, -0.024, 0.21], size: [0.03, 0.02, 0.014], small: true },
-      cheeks(0.14, -0.03, 0.125),
+    fur: "#c29a80",
+    belly: "#f3e6d6",
+    eye: EYE,
+    parts: [
+      // 머리 위의 작은 반원 귀예요.
+      { shape: "ball", color: "#c29a80", on: [2.62, 0.88], size: [0.048, 0.042, 0.026], align: "out", lift: -0.012, mirror: true },
+      { shape: "ball", color: "#dfc1aa", on: [2.62, 0.88], size: [0.028, 0.024, 0.01], align: "out", lift: -0.012, offset: [0, 0, 0.018], mirror: true, small: true },
+      { shape: "ball", color: "#ebd8c5", on: [2.17, 0], size: [0.07, 0.05, 0.032], lift: -0.006 },
+      { shape: "ball", color: "#5a4238", on: [2.24, 0], size: [0.022, 0.015, 0.011], lift: 0.022, small: true },
+      mouth(0.024, 2.13),
+      { shape: "ball", color: "#c29a80", on: [1.0, BACK], size: [0.036, 0.036, 0.032], align: "out", shell: OVER_CLOTHES, lift: -0.014, small: true },
     ],
-    tail: [{ shape: "ball", color: "#8a6a52", at: [0, 0.02, -0.16], size: [0.045, 0.045, 0.04], small: true }],
-    hand: { color: "#8a6a52", size: [0.065, 0.066, 0.065] },
-    foot: { color: "#7a5c46", size: [0.078, 0.042, 0.11] },
+    patches: cheeks(),
+    hand: { color: "#b38a70", size: [0.038, 0.034, 0.038] },
+    foot: { color: "#b38a70", size: [0.062, 0.025, 0.084] },
   },
   {
     id: "penguin",
     label: "펭귄",
-    fur: "#59626d",
-    headSize: [0.195, 0.2, 0.19],
-    eye: [0.065, -0.005, 0.183],
-    head: [
-      // 얼굴의 크림색 부분이에요. 머리보다 살짝 앞으로 나와요.
-      { shape: "ball", color: "#f2ede0", at: [0, -0.035, 0.115], size: [0.135, 0.12, 0.085] },
-      {
-        shape: "cone",
-        color: "#eda36a",
-        at: [0, -0.05, 0.225],
-        size: [0.04, 0.075, 0],
-        tilt: [Math.PI / 2, 0, 0],
-        small: true,
-      },
-      cheeks(0.098, -0.058, 0.165),
+    fur: "#5a6a8e",
+    belly: "#f6f0e4",
+    eye: [2.38, 0.36],
+    eyeLift: 0.008,
+    parts: [
+      // 얼굴 무늬 위로 뾰족 나온 부리예요.
+      { shape: "cone", color: "#e8b77a", on: [2.2, 0], size: [0.03, 0.055, 0], align: "out", lift: 0.002 },
+      { shape: "cone", color: "#5a6a8e", on: [0.95, BACK], size: [0.045, 0.07, 0], align: "out", tilt: [0.35, 0, 0], shell: OVER_CLOTHES, lift: -0.012, small: true },
     ],
-    tail: [{ shape: "cone", color: "#59626d", at: [0, 0, -0.17], size: [0.05, 0.09, 0], tilt: [-2, 0, 0], small: true }],
-    // 손 대신 납작하고 긴 지느러미예요.
-    hand: { color: "#59626d", size: [0.03, 0.095, 0.058] },
-    foot: { color: "#eda36a", size: [0.082, 0.028, 0.12] },
+    // 눈과 부리를 둘러싼 크림색 얼굴이에요.
+    patches: [{ at: [2.3, 0], radius: [0.3, 0.92], color: "#f6f0e4", bulge: 0.004 }, ...cheeks(0.68, 0.008)],
+    // 손 대신 납작한 지느러미예요.
+    hand: { color: "#5a6a8e", size: [0.024, 0.062, 0.042] },
+    foot: { color: "#e8b77a", size: [0.066, 0.022, 0.09] },
   },
   {
     id: "otter",
     label: "수달",
-    fur: "#7d5a41",
-    headSize: [0.215, 0.17, 0.19],
-    eye: [0.09, 0.03, 0.17],
-    head: [
-      { shape: "ball", color: "#7d5a41", at: [0.165, 0.085, -0.02], size: [0.042, 0.042, 0.03], mirror: true, small: true },
-      { shape: "ball", color: "#ecdcc2", at: [0, -0.05, 0.13], size: [0.135, 0.085, 0.085] },
-      { shape: "ball", color: "#33261f", at: [0, -0.012, 0.21], size: [0.03, 0.018, 0.013], small: true },
-      {
-        shape: "pill",
-        color: "#4f3a2b",
-        at: [0.135, -0.045, 0.175],
-        size: [0.005, 0.075, 1],
-        tilt: [0, 0, -1.35],
-        mirror: true,
-        small: true,
-      },
+    fur: "#9a7f69",
+    belly: "#efe2cf",
+    eye: EYE,
+    parts: [
+      { shape: "ball", color: "#9a7f69", on: [2.5, 1.18], size: [0.028, 0.024, 0.018], align: "out", lift: -0.008, mirror: true, small: true },
+      { shape: "ball", color: "#ebdecb", on: [2.15, 0], size: [0.085, 0.05, 0.03], lift: -0.006 },
+      { shape: "ball", color: "#4d3d33", on: [2.22, 0], size: [0.024, 0.015, 0.011], lift: 0.02, small: true },
+      mouth(0.022, 2.12),
+      { shape: "pill", color: "#6e5a4b", on: [2.15, 0.36], size: [0.0035, 0.06, 1], tilt: [0, 0, -1.4], lift: 0.012, mirror: true, small: true },
+      // 바닥 쪽으로 늘어진 굵은 꼬리예요.
+      { shape: "pill", color: "#8a705b", on: [0.75, BACK], size: [0.058, 0.13, 0.62], align: "out", tilt: [0.45, 0, 0], shell: OVER_CLOTHES, lift: -0.025 },
     ],
-    // 끝이 바닥 쪽으로 처지는 굵은 꼬리예요.
-    tail: [{ shape: "pill", color: "#6f4f39", at: [0, -0.09, -0.24], size: [0.058, 0.2, 0.85], tilt: [-1.05, 0, 0] }],
-    hand: { color: "#6f4f39", size: [0.058, 0.06, 0.058] },
-    foot: { color: "#6f4f39", size: [0.078, 0.036, 0.115] },
+    patches: [],
+    hand: { color: "#8a705b", size: [0.036, 0.032, 0.036] },
+    foot: { color: "#8a705b", size: [0.062, 0.024, 0.086] },
   },
   {
     id: "deer",
     label: "사슴",
-    fur: "#c49a6c",
-    headSize: [0.19, 0.19, 0.185],
-    eye: [0.085, 0.035, 0.162],
-    head: [
+    fur: "#d6b38c",
+    belly: "#f7ecdb",
+    eye: EYE,
+    parts: [
       // 끝이 둥글고 짧은 뿔이에요.
-      { shape: "pill", color: "#e0cda9", at: [0.085, 0.215, -0.02], size: [0.018, 0.1, 1], tilt: [0, 0, -0.28], mirror: true, small: true },
-      { shape: "pill", color: "#e0cda9", at: [0.14, 0.255, -0.02], size: [0.015, 0.05, 1], tilt: [0, 0, -1.1], mirror: true, small: true },
-      { shape: "ball", color: "#c49a6c", at: [0.205, 0.075, -0.02], size: [0.08, 0.036, 0.024], tilt: [0, 0, 0.38], mirror: true, small: true },
-      { shape: "ball", color: "#efc2ab", at: [0.208, 0.074, -0.002], size: [0.052, 0.02, 0.01], tilt: [0, 0, 0.38], mirror: true, small: true },
-      { shape: "ball", color: "#efe0c8", at: [0, -0.06, 0.15], size: [0.075, 0.06, 0.06] },
-      { shape: "ball", color: "#4a372b", at: [0, -0.03, 0.203], size: [0.024, 0.016, 0.012], small: true },
-      cheeks(0.12, -0.03, 0.135),
+      { shape: "pill", color: "#ecdcc0", on: [2.9, 0.75], size: [0.017, 0.06, 1], align: "out", tilt: [0, 0, -0.32], lift: -0.006, mirror: true, small: true },
+      // 옆으로 뻗은 귀예요.
+      { shape: "ball", color: "#d6b38c", on: [2.5, 1.3], size: [0.026, 0.06, 0.016], align: "out", tilt: [0, 0, -0.55], lift: -0.012, mirror: true },
+      { shape: "ball", color: "#efc9b6", on: [2.5, 1.3], size: [0.015, 0.042, 0.006], align: "out", tilt: [0, 0, -0.55], offset: [0, 0, 0.012], lift: -0.012, mirror: true, small: true },
+      { shape: "ball", color: "#f1e2cc", on: [2.17, 0], size: [0.058, 0.042, 0.026], lift: -0.006 },
+      { shape: "ball", color: "#5c4536", on: [2.23, 0], size: [0.02, 0.014, 0.01], lift: 0.016, small: true },
+      mouth(0.018, 2.12),
+      { shape: "ball", color: "#f7ecdb", on: [1.0, BACK], size: [0.032, 0.042, 0.028], align: "out", shell: OVER_CLOTHES, lift: -0.012, small: true },
     ],
-    tail: [{ shape: "ball", color: "#f4ead8", at: [0, 0.06, -0.165], size: [0.04, 0.055, 0.032], small: true }],
-    hand: { color: "#b58b5f", size: [0.054, 0.06, 0.054] },
-    foot: { color: "#a57d54", size: [0.062, 0.04, 0.1] },
+    // 등의 작은 크림색 점이에요.
+    patches: [
+      ...cheeks(),
+      { at: [2.12, BACK], radius: [0.07, 0.13], color: "#f7ecdb", bulge: 0.002, small: true },
+      { at: [2.32, BACK + 0.38], radius: [0.06, 0.12], color: "#f7ecdb", bulge: 0.002, small: true },
+      { at: [2.32, BACK - 0.38], radius: [0.06, 0.12], color: "#f7ecdb", bulge: 0.002, small: true },
+    ],
+    hand: { color: "#c4a07a", size: [0.034, 0.032, 0.034] },
+    foot: { color: "#a88664", size: [0.056, 0.024, 0.08] },
   },
 ];
 

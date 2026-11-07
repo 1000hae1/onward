@@ -4,6 +4,7 @@ import {
   InstancedMesh,
   Mesh,
   MeshBasicMaterial,
+  MeshLambertMaterial,
   Points,
   PointsMaterial,
   Sprite,
@@ -11,7 +12,6 @@ import {
 } from "three";
 import type { Object3D, Texture } from "three";
 import { blobs, merged } from "../avatar/shapes.ts";
-import { getAvatarMaterial } from "../avatar/kit";
 import type { BlobSpec } from "../avatar/species";
 import { giftSpot, NIGHTSTANDS, ROOMS, windowLampSpot } from "../../shared/ward-layout";
 import type { WardRoom } from "../../shared/ward-layout";
@@ -134,7 +134,8 @@ export function createOfferings(parent: Object3D, softCircle: Texture): Offering
     return { sprite, material, from: origin, to: origin, age: 0, busy: false };
   });
 
-  const material = getAvatarMaterial();
+  // 선물은 작고 많아서 아바타보다 가벼운 재질을 써요. 색은 꼭짓점에 있어요.
+  const material = new MeshLambertMaterial({ vertexColors: true, emissive: "#14120f" });
   const giftGeometries = GIFT_SHAPES.map((shape) => merged(blobs(shape)));
   const giftMeshes = giftGeometries.map((geometry) => {
     const mesh = new InstancedMesh(geometry, material, GIFT_CAPACITY);

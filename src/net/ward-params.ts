@@ -27,19 +27,29 @@ export function wardLabel(ward: number, count: number | null, capacity: number):
   return count === null ? `onWard ${ward}병동` : `onWard ${ward}병동 · ${count}/${capacity}`;
 }
 
-const GUEST_KEY = "onward.guest";
+/** 예전에 이 브라우저가 스스로 만들던 값이에요. 이제는 쓰지 않아서 보이면 지워요. */
+const LEGACY_GUEST_KEY = "onward.guest";
+const TOKEN_KEY = "onward.token";
+/** 서버가 서명해 준 게스트 토큰의 모양이에요. 서명이 맞는지는 서버만 알 수 있어요. */
+const TOKEN_PATTERN = /^1\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}$/;
 
-/** 이 브라우저를 가리키는 무작위 값이에요. 나중에 서명된 토큰으로 바꿀 거예요. */
-export function loadGuestId(): string {
+/** 서버가 준 게스트 토큰이에요. 없거나 모양이 틀리면 null이고, 서버가 새로 만들어 줘요. */
+export function loadGuestToken(): string | null {
   try {
-    const saved = window.localStorage.getItem(GUEST_KEY);
-    if (saved && /^[A-Za-z0-9-]{8,64}$/.test(saved)) return saved;
-    const fresh = crypto.randomUUID();
-    window.localStorage.setItem(GUEST_KEY, fresh);
-    return fresh;
+    window.localStorage.removeItem(LEGACY_GUEST_KEY);
+    const saved = window.localStorage.getItem(TOKEN_KEY);
+    return saved && TOKEN_PATTERN.test(saved) ? saved : null;
   } catch {
-    // 저장소를 못 쓰면 이번 방문 동안만 쓰는 값이에요.
-    return crypto.randomUUID();
+    return null;
+  }
+}
+
+export function saveGuestToken(token: string): void {
+  if (!TOKEN_PATTERN.test(token)) return;
+  try {
+    window.localStorage.setItem(TOKEN_KEY, token);
+  } catch {
+    // 저장하지 못하면 이번 방문 동안만 같은 사람이에요.
   }
 }
 

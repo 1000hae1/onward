@@ -6,6 +6,7 @@ import { checkNickname } from "./nickname.ts";
 import type { NicknameProblem } from "./nickname.ts";
 import { chooseGiftSlot, GIFT_SLOTS_PER_STAND, LAMPS_PER_WINDOW } from "./offering-rules.ts";
 import type { Guest, HelloMessage } from "./protocol.ts";
+import { publicNickname } from "./safety-rules.ts";
 import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
 /** 문병 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
@@ -35,14 +36,31 @@ export interface GuestRecord {
   /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
-  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link", number>>;
+  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "report" | "hug" | "discharge", number>>;
   /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
   key?: string;
   /** 문병 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
   visit?: VisitRole;
   /** 켜진 문병 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
   linked?: boolean;
+  /** 서로 다른 세 사람이 신고해서 닉네임을 가리고 운영자 확인을 기다려요. */
+  hidden?: boolean;
+  /** 운영자가 되돌린 닉네임이에요. 이 닉네임으로 다시 바꾸면 서버가 자동 닉네임으로 바꿔요. */
+  bannedNickname?: string;
+  /** IP 해시예요. 신고에 함께 적어 IP 차단을 할 수 있게 해요. 남에게 보내지 않아요. */
+  ip?: string;
+  /** 수면 모드예요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
+  sleeping?: boolean;
+  /** 설정의 "안아 주기 요청 받지 않기"예요. */
+  hugsOff?: boolean;
+  /** 다녀간 날 수(한국 날짜)예요. 서버 판단에만 쓰고 남에게도, 화면에도 숫자로 보내지 않아요. */
+  visitDays?: number;
+  /** 퇴원하는 중이면 시작한 시각과 배웅해 준 사람(guestId 해시)이에요. */
+  discharge?: { at: number; from: string[] };
 }
+
+/** 서명을 확인한 뒤의 hello예요. guestId는 토큰에서 꺼낸 값이에요. */
+export type VerifiedHello = HelloMessage & { guestId: string };
 
 /** 같은 동작은 이만큼 간격을 둬요. */
 export const ACTION_GAP_MS = 1000;
@@ -57,13 +75,20 @@ export function toPublic(record: GuestRecord): Guest {
     id: record.id,
     animal: record.animal,
     outfit: record.outfit,
-    nickname: record.nickname,
+    // 가려진 사람은 다른 사람 화면에 '조용한 토끼'처럼 보여요. 원래 닉네임은 보내지 않아요.
+    nickname: publicNickname(record),
     withCat: record.withCat,
     x: record.x,
     z: record.z,
     bed: record.bed,
     address: record.address,
+    hugOk: hugAvailable(record),
   };
+}
+
+/** 지금 안아 주기 요청을 받을 수 있는지예요. 잠들었거나, 설정으로 껐거나, 퇴원하는 중이면 받지 않아요. */
+export function hugAvailable(record: GuestRecord): boolean {
+  return !record.sleeping && !record.hugsOff && !record.discharge;
 }
 
 export type Admission =
@@ -79,7 +104,7 @@ export type Admission =
 export function admit(
   others: readonly GuestRecord[],
   awayCount: number,
-  hello: HelloMessage,
+  hello: VerifiedHello,
   capacity: number,
   newId: string,
   returning: GuestRecord | null = null,
@@ -105,6 +130,7 @@ export function admit(
         outfit,
         nickname: nickname.value,
         withCat: hello.withCat,
+        hugsOff: hello.hugsOff ?? false,
         bed,
         lyingSince: bed === null ? null : returning.lyingSince,
       },
@@ -135,6 +161,7 @@ export function admit(
       address: "",
       lyingSince: null,
       lastAction: {},
+      hugsOff: hello.hugsOff ?? false,
     },
   };
 }
@@ -159,6 +186,7 @@ export function updateProfile(
       outfit,
       nickname: nickname.value,
       withCat: hello.withCat,
+      hugsOff: hello.hugsOff ?? false,
       bed,
       lyingSince,
     },
@@ -325,21 +353,34 @@ export interface CatVisit {
 }
 
 /**
- * 병실마다 고양이가 찾아갈 침대와 시각이에요. 이 병실에 그 사람 말고 아무도 없을 때만 찾아가고,
- * 여럿이 혼자 누워 있을 수는 없으니 병실마다 많아야 하나예요.
+ * 병실마다 고양이가 찾아갈 침대와 시각이에요. 병실에 서 있는 사람 없이 누워 있는 사람만 있을 때 찾아가요.
+ * 오래 누워 있던 사람이 먼저이고, 같으면 자주 온 사람이에요. 병실마다 많아야 하나예요.
  * 입장·퇴장·눕기·일어나기·병실 이동 때만 다시 계산해요. 그래서 시간이 흘러도 방송할 일이 없어요.
  */
 export function catVisits(guests: readonly GuestRecord[]): CatVisit[] {
   const visits: CatVisit[] = [];
   for (const room of ROOMS) {
     const inRoom = guests.filter((guest) => roomAt(guest.x, guest.z)?.index === room.index);
-    if (inRoom.length !== 1) continue;
-    const [only] = inRoom;
-    if (only.bed === null || only.lyingSince === null) continue;
-    if (BEDS[only.bed]?.roomIndex !== room.index) continue;
-    visits.push({ room: room.index, bed: only.bed, at: only.lyingSince + CAT_VISIT_AFTER_MS });
+    if (inRoom.length === 0) continue;
+    const lying = inRoom.filter(
+      (guest) => guest.bed !== null && guest.lyingSince !== null && BEDS[guest.bed]?.roomIndex === room.index,
+    );
+    // 서 있는 사람이 하나라도 있으면 그 사람이 곁에 있으니 찾아가지 않아요.
+    if (lying.length !== inRoom.length) continue;
+    const [first] = rankCatCandidates(lying);
+    visits.push({ room: room.index, bed: first.bed as number, at: (first.lyingSince as number) + CAT_VISIT_AFTER_MS });
   }
   return visits;
+}
+
+/** 고양이가 찾아갈 차례예요. 오래 누워 있던 사람, 다녀간 날이 많은 사람, 침대 번호가 작은 사람 순이에요. */
+export function rankCatCandidates<T extends Pick<GuestRecord, "lyingSince" | "visitDays" | "bed">>(guests: readonly T[]): T[] {
+  return [...guests].sort(
+    (a, b) =>
+      (a.lyingSince ?? Infinity) - (b.lyingSince ?? Infinity) ||
+      (b.visitDays ?? 0) - (a.visitDays ?? 0) ||
+      (a.bed ?? 0) - (b.bed ?? 0),
+  );
 }
 
 /** 바뀐 병실만 골라요. 사라진 병실은 null이에요. */

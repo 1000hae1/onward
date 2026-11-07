@@ -13,7 +13,9 @@ import {
 import type { Scene, Texture } from "three";
 import { OrbitControls } from "three/addons/controls/OrbitControls.js";
 import { createAvatar } from "../avatar/avatar";
+import { AVATAR_HEIGHT, HAND_HEIGHT, HAND_REACH } from "../avatar/kit";
 import {
+  advanceBreath,
   BED_TRANSITION_SECONDS,
   composePose,
   createPose,
@@ -65,7 +67,8 @@ import { createNavGrid, stepAlong } from "./movement";
 import type { NavGrid, Point } from "./movement";
 
 const WALK_SPEED = 1.8;
-const TARGET_HEIGHT = 1.1;
+/** 카메라가 바라보는 높이예요. 아바타 키보다 조금 위예요. */
+const TARGET_HEIGHT = AVATAR_HEIGHT + 0.2;
 /** 걷는 방향으로 몸을 돌리는 빠르기예요. */
 const BODY_TURN_RATE = 10;
 /** 걷기 동작이 시작되고 잦아드는 빠르기예요. */
@@ -75,8 +78,6 @@ const BED_CAMERA_TURN_RATE = 2.6;
 const FLOOR_SHADOW_Y = 0.014;
 /** 침대에 누우면 그림자가 이불 위로 올라와요. */
 const BED_SHADOW_Y = 0.655;
-const HAND_REACH = 0.22;
-const HAND_HEIGHT = 0.62;
 const CAMERA_START_BACK = 4.6;
 const CAMERA_START_UP = 0.55;
 const CAMERA_MIN_DISTANCE = 1.4;
@@ -161,6 +162,11 @@ export interface PlayerControls {
   /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
   whenUp(action: () => void): void;
   faceToward(x: number, z: number): void;
+  /**
+   * 서버가 정한 자리로 걸어가요. 서버에는 다시 알리지 않아요(안아 주기처럼 서버가 이미 자리를 옮겨 둔 때예요).
+   * 다 도착하면 then을 불러요. 누르면 다른 곳으로 가니 then도 잊어요.
+   */
+  walkToSpot(x: number, z: number, then: () => void, tellServer?: boolean): void;
   /** 문병 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
   placeAt(x: number, z: number, faceX: number, faceZ: number): void;
   /** 빛과 선물이 떠나는 손 앞 자리예요. */
@@ -282,6 +288,7 @@ export function createPlayerControls(
   let yawGoal: number | null = null;
   let walkPhase = 0;
   let walkWeight = 0;
+  let breathPhase = 0;
   let gesture: Gesture | null = null;
   let gestureElapsed = 0;
   let facingCamera = false;
@@ -289,6 +296,8 @@ export function createPlayerControls(
   let bedPicker: ((bed: number) => void) | null = null;
   let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
   let afterUp: (() => void) | null = null;
+  /** walkToSpot으로 가는 중이면 도착해서 할 일이에요. */
+  let afterWalk: (() => void) | null = null;
   let net: PlayerNet | null = null;
   /** 가장 최근에 침대를 물어본 번호예요. 답이 늦게 오면 이미 다른 곳을 눌렀는지 견줘요. */
   let askToken = 0;
@@ -385,6 +394,7 @@ export function createPlayerControls(
     if (tapFilter?.(origin, reach)) return;
     // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
     afterUp = null;
+    afterWalk = null;
     const token = ++askToken;
     if (bed !== null) {
       const canLie = outfit === "patient";
@@ -521,6 +531,22 @@ export function createPlayerControls(
     faceToward(x, z) {
       yawGoal = Math.atan2(x - position.x, z - position.z);
     },
+    walkToSpot(x, z, then, tellServer = false) {
+      afterUp = null;
+      const goal = nav.nearestFree({ x, z });
+      if (!goal || Math.hypot(goal.x - position.x, goal.z - position.z) < 0.05) {
+        afterWalk = null;
+        then();
+        return;
+      }
+      flow = FREE;
+      startWalk({ kind: "spot", point: goal }, tellServer);
+      if (path.length === 0) {
+        then();
+        return;
+      }
+      afterWalk = then;
+    },
     placeAt(x, z, faceX, faceZ) {
       const dx = x - position.x;
       const dz = z - position.z;
@@ -607,6 +633,11 @@ export function createPlayerControls(
           const granted = flow.lie && bedGate.request(flow.bed);
           applyStep(arrivedAtBed(flow, granted));
         }
+        if (path.length === 0 && afterWalk) {
+          const action = afterWalk;
+          afterWalk = null;
+          action();
+        }
       }
 
       if (facingCamera && path.length === 0 && flow.kind === "free") yawGoal = cameraAngle();
@@ -620,8 +651,10 @@ export function createPlayerControls(
         if (gestureElapsed >= gestureDuration(gesture)) gesture = null;
       }
 
+      breathPhase = advanceBreath(breathPhase, dt, stillMotion);
       composePose(pose, {
         walkPhase,
+        breathPhase,
         walkWeight,
         gesture,
         gestureElapsed,

@@ -12,6 +12,8 @@ export interface Profile {
   /** 자동으로 지은 이름이면 동물을 바꿀 때 함께 바뀌어요. 직접 고치면 false예요. */
   nicknameAuto: boolean;
   withCat: boolean;
+  /** 안아 주기 요청 받지 않기예요. 켜 두면 다른 분 메뉴에 안아 주기가 보이지 않아요. */
+  hugsOff: boolean;
 }
 
 export function defaultProfile(pick: number): Profile {
@@ -22,6 +24,7 @@ export function defaultProfile(pick: number): Profile {
     nickname: autoNickname(speciesById(species.id).label, pick),
     nicknameAuto: true,
     withCat: false,
+    hugsOff: false,
   };
 }
 
@@ -35,7 +38,7 @@ export function parseProfile(raw: string | null): Profile | null {
     return null;
   }
   if (typeof value !== "object" || value === null) return null;
-  const { species, outfit, nickname, nicknameAuto, withCat } = value as Record<string, unknown>;
+  const { species, outfit, nickname, nicknameAuto, withCat, hugsOff } = value as Record<string, unknown>;
   const spec = SPECIES.find((candidate) => candidate.id === species);
   if (!spec || (outfit !== "patient" && outfit !== "visitor")) return null;
   if (typeof nickname !== "string" || typeof nicknameAuto !== "boolean" || typeof withCat !== "boolean") {
@@ -43,7 +46,8 @@ export function parseProfile(raw: string | null): Profile | null {
   }
   const checked = checkNickname(nickname);
   if (!checked.ok) return null;
-  return { species: spec.id, outfit, nickname: checked.value, nicknameAuto, withCat };
+  // 예전에 저장한 값에는 hugsOff가 없어요. 그때는 요청을 받는 것으로 봐요.
+  return { species: spec.id, outfit, nickname: checked.value, nicknameAuto, withCat, hugsOff: hugsOff === true };
 }
 
 /** 사생활 보호 모드처럼 저장소를 못 쓰면 없는 것으로 봐요. */

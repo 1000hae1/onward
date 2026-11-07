@@ -1,11 +1,14 @@
 import { Vector3 } from "three";
 import type { Camera, Object3D } from "three";
+import { pickBox } from "../ward/camera-view";
 import { blessingText } from "../../shared/gestures";
 import type { Guest, WardEvent } from "../../shared/protocol";
-import { bedApproach, bedHeadSpot, bedRest, bedRestYaw, BEDS, roomAt } from "../../shared/ward-layout";
+import { bedApproach, bedHeadSpot, bedRest, bedRestYaw, BEDS, roomAt, WALL_BOXES } from "../../shared/ward-layout";
 import { createAvatar } from "../avatar/avatar";
 import type { Avatar } from "../avatar/avatar";
+import { HAND_HEIGHT, HAND_REACH, HEAD_CENTER_Y } from "../avatar/kit";
 import {
+  advanceBreath,
   BED_TRANSITION_SECONDS,
   composePose,
   createPose,
@@ -39,9 +42,11 @@ const BODY_TURN_RATE = 10;
 const WALK_BLEND_RATE = 9;
 /** 이보다 먼 사람은 그리지 않아요. 휴대폰에서 버벅이지 않게 해요. */
 const DRAW_DISTANCE = 15;
-const HAND_REACH = 0.22;
-const HAND_HEIGHT = 0.62;
-const HEAD_HEIGHT = 1.0;
+/** 다른 동물을 누를 때 맞았다고 보는 상자 크기예요. */
+const GUEST_TAP_HALF = 0.32;
+const GUEST_TAP_HEIGHT = 1.2;
+/** 빛이 날아가 닿는 얼굴 높이예요. */
+const HEAD_HEIGHT = HEAD_CENTER_Y;
 
 interface Spot {
   x: number;
@@ -62,12 +67,18 @@ interface Remote {
   yawGoal: number | null;
   walkPhase: number;
   walkWeight: number;
+  /** 사람마다 숨 위상을 달리해서 다 같이 숨쉬지 않게 해요. */
+  breathPhase: number;
   gesture: Gesture | null;
   gestureElapsed: number;
   /** 일어나는 중에 받은 동작은 다 일어난 뒤에 해요. */
   queued: (() => void) | null;
   /** 손을 모은 뒤 빛을 보낼 곳이에요. */
   light: { left: number; to: Spot } | null;
+  /** 걸어서 도착한 뒤 할 일이에요. 안아 주러 갈 때 써요. */
+  afterWalk: (() => void) | null;
+  /** 잠시 뒤에 할 일이에요. 안기는 사람이 상대가 다가오길 기다릴 때 써요. */
+  delayed: { left: number; action: () => void } | null;
   shownX: number;
   shownZ: number;
   visible: boolean;
@@ -89,6 +100,14 @@ export interface RemoteGuests {
   idForAddress(address: string): string | null;
   /** 지금 함께 있는 사람들이에요. 오늘 만난 사람 목록에 더할 때 써요. */
   guests(): Guest[];
+  /** 누른 곳에 다른 동물이 있으면 그 사람이에요. 벽에 가리면 null이에요. */
+  tap(origin: Vector3, reach: Vector3): Guest | null;
+  /** 걸어 다니는 자리예요. 누워 있으면 침대 곁 자리예요. */
+  position(id: string): Point | null;
+  /** 안아 주러 다가가요. 도착하면 상대를 보고 안아요. low면 침대 옆에서 몸을 낮춰요. */
+  hugTo(id: string, spot: Point, face: Point, low: boolean): void;
+  /** 다가오는 사람을 delay초 뒤에 마주 안아요. 누워 있으면 그대로 누운 채예요. */
+  hugBack(id: string, face: Point, delay: number): void;
 }
 
 /** 같은 병동의 다른 사람들이에요. 걷는 모습은 목적지만 받아 각자 화면에서 그려요. */
@@ -152,11 +171,14 @@ export function createRemoteGuests(
       yaw: Math.PI,
       yawGoal: null,
       walkPhase: 0,
+      breathPhase: Math.random() * Math.PI * 2,
       walkWeight: 0,
       gesture: null,
       gestureElapsed: 0,
       queued: null,
       light: null,
+      afterWalk: null,
+      delayed: null,
       shownX: start.x,
       shownZ: start.z,
       visible: true,
@@ -219,8 +241,19 @@ export function createRemoteGuests(
         remove(event.id);
         return;
       }
-      // 선물과 불빛은 협탁과 창가의 일이라 화면에서 따로 다뤄요.
-      if (event.kind === "gift" || event.kind === "lamp" || event.kind === "cat-visit" || event.kind === "stats") return;
+      // 선물과 불빛, 창문과 화분, 안아 주기와 퇴원 안내는 화면에서 따로 다뤄요.
+      if (
+        event.kind === "gift" ||
+        event.kind === "lamp" ||
+        event.kind === "cat-visit" ||
+        event.kind === "stats" ||
+        event.kind === "hug" ||
+        event.kind === "window-open" ||
+        event.kind === "planter" ||
+        event.kind === "discharge"
+      ) {
+        return;
+      }
       const remote = remotes.get(event.kind === "update" ? event.guest.id : event.id);
       if (!remote) return;
 
@@ -240,6 +273,7 @@ export function createRemoteGuests(
           return;
         }
         case "walk":
+          remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
         case "lie":
@@ -296,6 +330,19 @@ export function createRemoteGuests(
           if (remote.path.length === 0 && remote.flow.kind === "heading") {
             applyStep(remote, arrivedAtBed(remote.flow, true));
           }
+          if (remote.path.length === 0 && remote.afterWalk) {
+            const action = remote.afterWalk;
+            remote.afterWalk = null;
+            action();
+          }
+        }
+        if (remote.delayed) {
+          remote.delayed.left -= dt;
+          if (remote.delayed.left <= 0) {
+            const action = remote.delayed.action;
+            remote.delayed = null;
+            action();
+          }
         }
         if (remote.yawGoal !== null) {
           remote.yaw = turnToward(remote.yaw, remote.yawGoal, 1 - Math.exp(-dt * BODY_TURN_RATE));
@@ -313,8 +360,10 @@ export function createRemoteGuests(
         }
 
         const progress = bedProgress(remote.flow, BED_TRANSITION_SECONDS);
+        remote.breathPhase = advanceBreath(remote.breathPhase, dt, stillMotion);
         composePose(remote.pose, {
           walkPhase: remote.walkPhase,
+          breathPhase: remote.breathPhase,
           walkWeight: (remote.walkWeight += ((walking && !stillMotion ? 1 : 0) - remote.walkWeight) * (1 - Math.exp(-dt * WALK_BLEND_RATE))),
           gesture: remote.gesture,
           gestureElapsed: remote.gestureElapsed,
@@ -389,6 +438,48 @@ export function createRemoteGuests(
     },
     guests() {
       return [...remotes.values()].map((remote) => remote.guest);
+    },
+    position(id) {
+      const remote = remotes.get(id);
+      return remote ? { x: remote.position.x, z: remote.position.z } : null;
+    },
+    hugTo(id, spot, face, low) {
+      const remote = remotes.get(id);
+      if (!remote) return;
+      const embrace = (): void => {
+        remote.yawGoal = Math.atan2(face.x - remote.position.x, face.z - remote.position.z);
+        play(remote, low ? "hug-low" : "hug");
+      };
+      whenStanding(remote, () => {
+        startWalk(remote, { kind: "spot", point: spot });
+        if (remote.path.length === 0) embrace();
+        else remote.afterWalk = embrace;
+      });
+    },
+    hugBack(id, face, delay) {
+      const remote = remotes.get(id);
+      if (!remote || remote.flow.kind !== "free") return;
+      remote.delayed = {
+        left: delay,
+        action: () => {
+          if (remote.flow.kind !== "free") return;
+          remote.yawGoal = Math.atan2(face.x - remote.position.x, face.z - remote.position.z);
+          play(remote, "hug");
+        },
+      };
+    },
+    tap(origin, reach) {
+      const shown = [...remotes.values()].filter((remote) => remote.visible);
+      const boxes = shown.map((remote) => ({
+        minX: remote.shownX - GUEST_TAP_HALF,
+        maxX: remote.shownX + GUEST_TAP_HALF,
+        minZ: remote.shownZ - GUEST_TAP_HALF,
+        maxZ: remote.shownZ + GUEST_TAP_HALF,
+        minY: 0,
+        maxY: GUEST_TAP_HEIGHT,
+      }));
+      const picked = pickBox(origin, reach, boxes, WALL_BOXES);
+      return picked === null ? null : shown[picked].guest;
     },
   };
 }
