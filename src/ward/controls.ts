@@ -60,9 +60,9 @@ import {
   PLAYER_START,
   WALK_AREAS,
   WALL_BOXES,
-} from "./layout";
+} from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "./movement";
-import type { Point } from "./movement";
+import type { NavGrid, Point } from "./movement";
 
 const WALK_SPEED = 1.8;
 const TARGET_HEIGHT = 1.1;
@@ -103,6 +103,34 @@ const MARKER_SECONDS = 0.9;
 /** 누른 방향으로 살펴보는 거리예요. 앞마당 끝에서 건물 안쪽까지 닿아요. */
 const TAP_REACH = 80;
 
+/**
+ * 쓰고 있거나 눕으러 가는 침대예요. 일어나서 다른 침대로 가는 중이면 그 침대예요.
+ * 서버에는 침대가 하나뿐이라, 이 값이 비는 순간에만 일어났다고 알려요.
+ */
+function claimedOf(flow: BedFlow): number | null {
+  switch (flow.kind) {
+    case "heading":
+      return flow.lie ? flow.bed : null;
+    case "entering":
+    case "lying":
+      return flow.bed;
+    case "leaving":
+      return flow.next?.kind === "bed" && flow.next.lie ? flow.next.bed : null;
+    default:
+      return null;
+  }
+}
+
+/** 내 동작을 병동 서버에 알리는 곳이에요. */
+export interface PlayerNet {
+  askBed(bed: number): Promise<boolean>;
+  isBedTaken(bed: number): boolean;
+  walkTo(x: number, z: number): void;
+  getUp(): void;
+  /** 다른 분이 먼저 침대를 차지했을 때예요. */
+  bedRefused(): void;
+}
+
 export interface PlayerControls {
   update(dt: number): void;
   /** 캐릭터의 현재 위치예요. 누워 있으면 침대 위 자리예요. */
@@ -116,6 +144,14 @@ export interface PlayerControls {
   setFacingCamera(facing: boolean): void;
   /** 입장 전처럼 탭으로 움직이면 안 될 때 꺼요. 드래그로 둘러보기는 그대로예요. */
   setInputEnabled(enabled: boolean): void;
+  /** 병동 서버와 이어지면 침대와 걷기를 서버에 알려요. 혼자 쓰는 화면이면 null이에요. */
+  setNet(net: PlayerNet | null): void;
+  /** 서버가 목적지를 고쳐 주면 그쪽으로 다시 걸어요. 서버에는 다시 알리지 않아요. */
+  correctDestination(x: number, z: number): void;
+  /** 서버가 침대를 내주지 않으면 일어나요. 다시 이어졌을 때 침대를 잃었을 때예요. */
+  forceGetUp(): void;
+  /** 길찾기 격자예요. 다른 사람의 걸음을 그릴 때 함께 써요. */
+  readonly nav: NavGrid;
   /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
   setBedPicker(picker: ((bed: number) => void) | null): void;
   /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
@@ -249,6 +285,10 @@ export function createPlayerControls(
   let bedPicker: ((bed: number) => void) | null = null;
   let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
   let afterUp: (() => void) | null = null;
+  let net: PlayerNet | null = null;
+  /** 가장 최근에 침대를 물어본 번호예요. 답이 늦게 오면 이미 다른 곳을 눌렀는지 견줘요. */
+  let askToken = 0;
+  let lastClaimed: number | null = null;
   const pose = createPose();
   /** 로비에 들어서며 간호사실을 비추는 중이면 경과 시간과 돌아갈 각도를 담아요. */
   let glance: { elapsed: number; returnAngle: number } | null = null;
@@ -291,7 +331,7 @@ export function createPlayerControls(
   };
 
   /** 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요. */
-  const startWalk = (order: WalkOrder): void => {
+  const startWalk = (order: WalkOrder, tellServer = true): void => {
     const spot = order.kind === "bed" ? bedApproach(BEDS[order.bed]) : order.point;
     const goal = nav.nearestFree(spot);
     const nextPath = goal ? nav.findPath(position, goal) : [];
@@ -299,6 +339,8 @@ export function createPlayerControls(
       if (flow.kind === "heading") flow = FREE;
       return;
     }
+    // 눕으러 가는 길은 서버가 침대를 내줄 때 이미 알고 있어요. 그 밖의 걸음만 목적지를 알려요.
+    if (tellServer && !(order.kind === "bed" && order.lie)) net?.walkTo(goal.x, goal.z);
     path = nextPath;
     gesture = null;
     yawGoal = null;
@@ -339,14 +381,34 @@ export function createPlayerControls(
     if (tapFilter?.(origin, reach)) return;
     // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
     afterUp = null;
+    const token = ++askToken;
     if (bed !== null) {
+      const canLie = outfit === "patient";
+      const mine =
+        (flow.kind === "heading" || flow.kind === "entering" || flow.kind === "lying") && flow.bed === bed;
+      if (net && canLie && !mine) {
+        if (net.isBedTaken(bed)) {
+          net.bedRefused();
+          return;
+        }
+        // 서버에 먼저 물어보고, 허락받으면 걸어가서 누워요.
+        const asking = net;
+        void asking.askBed(bed).then((granted) => {
+          if (token !== askToken) {
+            // 그사이 다른 곳을 눌렀어요. 받은 침대가 필요 없으면 돌려줘요.
+            if (granted && lastClaimed === null) asking.getUp();
+            return;
+          }
+          if (!granted) {
+            asking.bedRefused();
+            return;
+          }
+          applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
+        });
+        return;
+      }
       applyStep(
-        tapBed(
-          flow,
-          bed,
-          { canLie: outfit === "patient", isFree: bedGate.isFree(bed) },
-          BED_TRANSITION_SECONDS,
-        ),
+        tapBed(flow, bed, { canLie, isFree: bedGate.isFree(bed) }, BED_TRANSITION_SECONDS),
       );
       return;
     }
@@ -405,7 +467,8 @@ export function createPlayerControls(
     },
     playGesture(next) {
       if (!canStartGesture(flow)) return;
-      // 걷던 중이면 멈춰 서서 해요.
+      // 걷던 중이면 멈춰 서서 해요. 다른 사람 화면에서도 여기서 멈추게 알려요.
+      if (path.length > 0) net?.walkTo(position.x, position.z);
       flow = FREE;
       path = [];
       gesture = next;
@@ -417,6 +480,23 @@ export function createPlayerControls(
     setInputEnabled(enabled) {
       inputEnabled = enabled;
     },
+    setNet(next) {
+      net = next;
+    },
+    correctDestination(x, z) {
+      if (path.length === 0 || flow.kind !== "free") return;
+      startWalk({ kind: "spot", point: { x, z } }, false);
+    },
+    forceGetUp() {
+      afterUp = null;
+      if (flow.kind === "heading") {
+        flow = FREE;
+        path = [];
+        return;
+      }
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
+    },
+    nav,
     setBedPicker(picker) {
       bedPicker = picker;
     },
@@ -454,8 +534,7 @@ export function createPlayerControls(
       return flow.kind === "lying" ? flow.bed : null;
     },
     get claimedBed() {
-      if (flow.kind === "heading") return flow.lie ? flow.bed : null;
-      return flow.kind === "entering" || flow.kind === "lying" ? flow.bed : null;
+      return claimedOf(flow);
     },
     update(dt) {
       const stillMotion = reduceMotion.matches;
@@ -465,6 +544,10 @@ export function createPlayerControls(
         afterUp = null;
         action();
       }
+      // 쓰던 침대를 내놓았으면 서버에 알려요.
+      const claimed = claimedOf(flow);
+      if (lastClaimed !== null && claimed === null) net?.getUp();
+      lastClaimed = claimed;
 
       let walked = 0;
       if (path.length > 0) {

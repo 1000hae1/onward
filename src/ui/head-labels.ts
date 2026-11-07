@@ -11,10 +11,12 @@ export interface HeadLabels {
   showBubble(text: string): void;
   /** 화면을 그린 뒤에 불러요. headWorld가 null이면 아바타가 안 보이는 때예요. */
   update(dt: number, camera: Camera, headWorld: Vector3 | null): void;
+  dispose(): void;
 }
 
 /** 아바타 머리 위의 닉네임과 말풍선이에요. 글자는 textContent로만 넣어요. */
 export function createHeadLabels(root: HTMLElement): HeadLabels {
+  root.classList.add("head-label");
   const bubble = document.createElement("p");
   bubble.className = "head-bubble";
   bubble.hidden = true;
@@ -43,6 +45,9 @@ export function createHeadLabels(root: HTMLElement): HeadLabels {
       bubble.textContent = text;
       bubble.hidden = false;
       bubbleLeft = BUBBLE_SECONDS;
+    },
+    dispose() {
+      root.remove();
     },
     update(dt, camera, headWorld) {
       if (bubbleLeft > 0) {

@@ -1,5 +1,3 @@
-const WARD_LABEL = "온기병동 · 1/36";
-
 const loading = document.querySelector<HTMLElement>("#loading");
 if (loading) loading.textContent = "병동을 여는 중";
 
@@ -10,11 +8,9 @@ if (canvas) {
     .then(({ startScene }) => {
       startScene(canvas);
       if (loading) loading.hidden = true;
+      // 상단의 병동 이름과 접속자 수는 화면이 서버 소식을 받아 채워요.
       const hud = document.querySelector<HTMLElement>("#hud");
-      if (hud) {
-        hud.textContent = WARD_LABEL;
-        hud.hidden = false;
-      }
+      if (hud) hud.hidden = false;
     })
     .catch((error: unknown) => {
       // WebGL을 쓸 수 없어도 로딩 문구와 배경색은 그대로 보여요.

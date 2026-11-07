@@ -29,7 +29,7 @@ test("저장된 값은 형식이 맞을 때만 읽어요", () => {
 });
 
 test("저장소를 고쳐 규칙에 어긋난 닉네임을 넣어도 받지 않아요", () => {
-  for (const nickname of ["곰", "가나다라마바사아자차카", "www.a", "010곰", "병신"]) {
+  for (const nickname of ["곰", "가나다라마바사아자차카", "www.a", "0101곰", "병신", "a@b"]) {
     assert.equal(parseProfile(JSON.stringify({ ...good, nickname })), null, nickname);
   }
 });

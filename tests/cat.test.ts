@@ -18,7 +18,7 @@ import {
   GIFT_SLOTS_PER_STAND,
   lampSlotPosition,
   LAMPS_PER_WINDOW,
-} from "../src/ward/offering-rules.ts";
+} from "../shared/offering-rules.ts";
 import { createNavGrid } from "../src/ward/movement.ts";
 import {
   BEDS,
@@ -34,7 +34,7 @@ import {
   roomRect,
   ROOMS,
   windowLampSpot,
-} from "../src/ward/layout.ts";
+} from "../shared/ward-layout.ts";
 import { CAT_COATS, getCatKit, catTriangles, getCatMaterial } from "../src/cat/cat-kit.ts";
 import { blinkAmount, composeCatPose, createCatPose } from "../src/cat/cat-pose.ts";
 

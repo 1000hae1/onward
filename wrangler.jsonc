@@ -4,8 +4,8 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-11-05",
   "assets": {
-    // /api/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요.
-    "run_worker_first": ["/api/*"],
+    // /api/* 와 /ws 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요.
+    "run_worker_first": ["/api/*", "/ws"],
     "not_found_handling": "single-page-application"
   },
   "durable_objects": {

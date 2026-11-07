@@ -27,7 +27,7 @@ import {
   roomToWorld,
   WALK_AREAS,
   YARD,
-} from "../src/ward/layout.ts";
+} from "../shared/ward-layout.ts";
 import { createNavGrid, stepAlong } from "../src/ward/movement.ts";
 import type { Point } from "../src/ward/movement.ts";
 

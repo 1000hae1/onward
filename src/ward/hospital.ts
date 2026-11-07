@@ -9,7 +9,7 @@ import {
 } from "three";
 import type { BufferGeometry, Matrix4, Object3D } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
-import { BUILDING, BUILDING_HEIGHT, ENTRANCE, FLOOR_COUNT, FLOOR_HEIGHT } from "./layout";
+import { BUILDING, BUILDING_HEIGHT, ENTRANCE, FLOOR_COUNT, FLOOR_HEIGHT } from "../../shared/ward-layout";
 import { addInstances, createRandom, transform } from "./parts";
 
 const WINDOW_SPACING = 3.6;

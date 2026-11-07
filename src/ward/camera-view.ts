@@ -1,4 +1,4 @@
-import type { WallBox } from "./layout";
+import type { WallBox } from "../../shared/ward-layout";
 
 export interface Point3 {
   x: number;

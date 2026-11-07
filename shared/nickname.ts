@@ -1,9 +1,11 @@
-/** 닉네임 규칙이에요. 서버를 붙이면 Worker에서도 같은 규칙으로 검사해요. */
+import { BANNED_WORDS } from "./bannedWords.ts";
+
+/** 닉네임 규칙이에요. 화면과 Worker가 같은 규칙으로 검사해요. */
 
 export const NICKNAME_MIN = 2;
 export const NICKNAME_MAX = 10;
 
-export type NicknameProblem = "short" | "long" | "digits" | "url" | "banned";
+export type NicknameProblem = "short" | "long" | "digits" | "url" | "email" | "banned";
 
 export type NicknameCheck =
   | { ok: true; value: string }
@@ -22,37 +24,18 @@ const ADJECTIVES = [
   "나른한",
 ] as const;
 
-/** 시작 목록이에요. 실제로 열기 전에 검토해서 늘려야 해요. */
-const BANNED_WORDS = [
-  "시발",
-  "씨발",
-  "ㅅㅂ",
-  "병신",
-  "ㅂㅅ",
-  "개새끼",
-  "새끼",
-  "좆",
-  "존나",
-  "지랄",
-  "섹스",
-  "fuck",
-  "shit",
-  "sex",
-  "관리자",
-  "운영자",
-  "의사",
-  "간호사",
-] as const;
-
-const REPEATED_DIGITS = /\p{Nd}{2,}/u;
+/** 연락처를 적지 못하게 숫자 4개 이상이 이어지면 거절해요. */
+const REPEATED_DIGITS = /\p{Nd}{4,}/u;
+const LOOKS_LIKE_EMAIL = /[@＠]/u;
 const LOOKS_LIKE_URL = /https?:|www\.|[\p{L}\p{N}]\.[a-z]{2,}|닷컴/iu;
 const SEPARATORS = /[\s\p{P}\p{S}\p{C}]/gu;
 
 const MESSAGES: Record<NicknameProblem, string> = {
   short: `닉네임은 ${NICKNAME_MIN}자 이상으로 지어 주세요.`,
   long: `닉네임은 ${NICKNAME_MAX}자까지 쓸 수 있어요.`,
-  digits: "숫자를 이어서 쓸 수는 없어요.",
+  digits: "숫자는 4개 넘게 이어서 쓸 수 없어요.",
   url: "주소처럼 보이는 글자는 쓸 수 없어요.",
+  email: "이메일처럼 보이는 글자는 쓸 수 없어요.",
   banned: "다른 닉네임으로 지어 주세요.",
 };
 
@@ -73,6 +56,7 @@ export function checkNickname(raw: string): NicknameCheck {
   const length = Array.from(value).length;
   if (length < NICKNAME_MIN) return { ok: false, problem: "short" };
   if (length > NICKNAME_MAX) return { ok: false, problem: "long" };
+  if (LOOKS_LIKE_EMAIL.test(value)) return { ok: false, problem: "email" };
   if (LOOKS_LIKE_URL.test(value)) return { ok: false, problem: "url" };
   if (REPEATED_DIGITS.test(value)) return { ok: false, problem: "digits" };
   // 띄어 쓰거나 기호를 끼워도 걸러지도록 붙여서 살펴봐요.

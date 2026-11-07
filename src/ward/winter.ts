@@ -11,7 +11,7 @@ import {
   SpriteMaterial,
 } from "three";
 import type { Object3D, Texture } from "three";
-import { isInsideWard, NIGHTSTAND_HEIGHT, NIGHTSTANDS, TABLE_HEIGHT, TABLES } from "./layout";
+import { isInsideWard, NIGHTSTAND_HEIGHT, NIGHTSTANDS, TABLE_HEIGHT, TABLES } from "../../shared/ward-layout";
 import { addInstances, repeatAt, transform } from "./parts";
 
 /** 눈은 캐릭터 둘레에만 내려요. 병원 전체에 뿌리면 입자가 너무 많이 필요해서요. */

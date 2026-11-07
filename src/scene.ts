@@ -1,5 +1,11 @@
 import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { nicknameMessage } from "../shared/nickname";
+import { WARD_CAPACITY } from "../shared/protocol";
+import type { WardEvent } from "../shared/protocol";
 import { createCats } from "./cat/cats";
+import { createRemoteGuests } from "./net/remote-guests";
+import { createWardClient } from "./net/ward-client";
+import { loadGuestId, readWardParams, wardLabel } from "./net/ward-params";
 import { createActionBar } from "./ui/action-bar";
 import type { ActionBar } from "./ui/action-bar";
 import { createEntryScreen } from "./ui/entry-screen";
@@ -30,6 +36,16 @@ const LANDSCAPE_VIEW_SHIFT = 0.08;
 const PICKER_VIEW_SHIFT = -0.09;
 const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
+
+/** 서버가 동작을 받지 않았을 때의 안내예요. */
+const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast", string> = {
+  "out-of-season": "귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요.",
+  "gift-limit": "오늘은 선물을 넉넉히 놓았어요. 내일 또 놓아 주세요.",
+  "lamp-full": "창가가 불빛으로 가득해요.",
+  "not-in-room": "병실에 들어가면 놓을 수 있어요.",
+  "no-target": "그곳에는 보낼 수 없어요.",
+  "too-fast": "조금 천천히 눌러 주세요.",
+};
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
 function isPhoneLike(): boolean {
@@ -78,9 +94,34 @@ export function startScene(canvas: HTMLCanvasElement): void {
     species: profile.species,
     outfit: profile.outfit,
   });
-  const cats = createCats(scene, player, false);
-  player.setTapFilter((origin, reach) => cats.tap(origin, reach));
+  const remoteLabels = document.querySelector<HTMLElement>("#remote-labels");
   const offerings = createOfferings(scene, softCircle);
+  const myHeadPoint = new Vector3();
+  const myHead = () => {
+    const head = player.headWorld(myHeadPoint);
+    return head ? { x: head.x, y: head.y, z: head.z } : { x: player.x, y: 1, z: player.z };
+  };
+  const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
+  const cats = createCats(
+    scene,
+    {
+      get walkX() {
+        return player.walkX;
+      },
+      get walkZ() {
+        return player.walkZ;
+      },
+      get lyingBed() {
+        return player.lyingBed;
+      },
+      get claimedBed() {
+        return player.claimedBed;
+      },
+      othersInRoom: (roomIndex) => remotes.othersInRoom(roomIndex),
+    },
+    false,
+  );
+  player.setTapFilter((origin, reach) => cats.tap(origin, reach));
 
   let pickerShift: number | null = ENTRY_VIEW_SHIFT;
   let viewShift: number | null = null;
@@ -107,27 +148,107 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const labelsRoot = element("head-labels");
   const labels = labelsRoot ? createHeadLabels(labelsRoot) : null;
   let actionBar: ActionBar | null = null;
+  let current = profile;
+  let entered = false;
+
+  const params = readWardParams(window.location.search);
+  const hud = element("hud");
+  const setHud = (count: number | null): void => {
+    if (hud) hud.textContent = wardLabel(params.ward, count, WARD_CAPACITY);
+  };
+  setHud(null);
+  const toast = (text: string): void => actionBar?.showToast(text);
+  let warnedOffline = false;
+
+  const client = createWardClient(params, loadGuestId(), {
+    onSnapshot(snapshot, reconnected) {
+      remotes.reset(snapshot.guests, snapshot.you);
+      offerings.loadGifts(snapshot.gifts);
+      offerings.setLamps(snapshot.lamps);
+      setHud(remotes.count + 1);
+      warnedOffline = false;
+      // 다시 이어졌으면 서버는 나를 앞마당에 두었으니, 지금 자리와 침대를 다시 알려요.
+      client.send({ type: "walk-to", x: player.walkX, z: player.walkZ });
+      const bed = player.claimedBed;
+      if (reconnected && bed !== null) {
+        void client.askBed(bed).then((granted) => {
+          if (!granted) {
+            player.forceGetUp();
+            toast("다시 이어지는 사이 다른 분이 침대에 누웠어요.");
+          }
+        });
+      }
+    },
+    onEvent(event: WardEvent) {
+      if (event.kind === "gift") {
+        const from = remotes.handSpot(event.id) ?? player.handSpot();
+        offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion());
+        return;
+      }
+      if (event.kind === "lamp") {
+        offerings.setLampCount(event.room, event.count);
+        return;
+      }
+      remotes.apply(event);
+      if (event.kind === "join" || event.kind === "leave") setHud(remotes.count + 1);
+    },
+    onCorrected(x, z) {
+      player.correctDestination(x, z);
+    },
+    onNicknameRejected(problem) {
+      reopenEntry(nicknameMessage(problem));
+    },
+    onDenied(denied) {
+      toast(DENIED_TEXT[denied.reason]);
+    },
+    onStatus(status) {
+      if (status === "online") return;
+      setHud(null);
+      remotes.reset([], "");
+      if (status === "replaced") {
+        toast("다른 창에서 병동에 들어와서 이 창은 쉬어요.");
+      } else if (status === "full") {
+        toast("병동이 모두 차서 혼자 머물러요.");
+      } else if (status === "offline" && !warnedOffline) {
+        warnedOffline = true;
+        toast("병동 서버에 닿지 않아 혼자 머물러요. 다시 이어 볼게요.");
+      }
+    },
+  });
+
+  player.setNet({
+    askBed: (bed) => client.askBed(bed),
+    isBedTaken: (bed) => client.online && remotes.isBedTaken(bed),
+    walkTo: (x, z) => client.send({ type: "walk-to", x, z }),
+    getUp: () => client.send({ type: "get-up" }),
+    bedRefused: () => toast("다른 분이 먼저 자리를 잡았어요."),
+  });
 
   const applyProfile = (next: Profile): void => {
+    current = next;
     player.setChoice({ species: next.species, outfit: next.outfit });
     cats.setCompanion(next.withCat);
     labels?.setName(next.nickname);
   };
 
-  const enterWard = (entered: Profile): void => {
-    saveProfile(entered);
-    applyProfile(entered);
+  const enterWard = (chosen: Profile): void => {
+    saveProfile(chosen);
+    applyProfile(chosen);
     pickerShift = null;
     player.setFacingCamera(false);
     player.setInputEnabled(true);
+    client.hello(chosen);
+    if (entered) return;
+    entered = true;
 
     const settingsRoot = element("settings");
     if (settingsRoot) {
       createSettings(settingsRoot, {
-        initial: entered,
+        initial: chosen,
         onChange: (next) => {
           saveProfile(next);
           applyProfile(next);
+          client.hello(next);
         },
         onOpenChange: (open) => {
           pickerShift = open ? PICKER_VIEW_SHIFT : null;
@@ -136,16 +257,44 @@ export function startScene(canvas: HTMLCanvasElement): void {
       });
     }
     const barRoot = element("action-bar");
-    const toast = element("toast");
-    if (barRoot && toast && labels) {
-      actionBar = createActionBar({ root: barRoot, toast, player, offerings, labels, stillMotion });
+    const toastRoot = element("toast");
+    if (barRoot && toastRoot && labels) {
+      actionBar = createActionBar({
+        root: barRoot,
+        toast: toastRoot,
+        player,
+        offerings,
+        labels,
+        stillMotion,
+        sink: {
+          online: () => client.online,
+          bless: (bedId) => client.send({ type: "bless", bedId }),
+          bow: (phrase) => client.send({ type: "bow", phrase }),
+          gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
+          lamp: () => client.send({ type: "lamp" }),
+        },
+      });
     }
   };
 
-  player.setFacingCamera(true);
-  player.setInputEnabled(false);
   const entryRoot = element("entry");
+  /** 서버가 닉네임을 받지 않으면 입장 화면을 다시 열어 고칠 수 있게 해요. */
+  const reopenEntry = (message?: string): void => {
+    if (!entryRoot) return;
+    pickerShift = ENTRY_VIEW_SHIFT;
+    player.setFacingCamera(true);
+    player.setInputEnabled(false);
+    createEntryScreen(entryRoot, {
+      initial: { ...current, nicknameAuto: false },
+      onPreview: applyProfile,
+      onEnter: enterWard,
+      message,
+    });
+  };
+
   if (entryRoot) {
+    player.setFacingCamera(true);
+    player.setInputEnabled(false);
     createEntryScreen(entryRoot, { initial: profile, onPreview: applyProfile, onEnter: enterWard });
   } else {
     enterWard(profile);
@@ -190,6 +339,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
     applyViewShift(dt);
     player.update(dt);
+    remotes.update(dt, { x: player.x, z: player.z }, camera, reduceMotion.matches);
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
     actionBar?.update(dt);

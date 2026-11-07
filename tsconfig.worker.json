@@ -8,6 +8,7 @@
     "lib": ["ES2023"],
     "module": "ESNext",
     "moduleResolution": "bundler",
+    "allowImportingTsExtensions": true,
     "types": [],
     "strict": true,
     "noUnusedLocals": true,

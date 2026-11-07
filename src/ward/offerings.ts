@@ -13,16 +13,16 @@ import type { Object3D, Texture } from "three";
 import { blobs, merged } from "../avatar/shapes.ts";
 import { getAvatarMaterial } from "../avatar/kit";
 import type { BlobSpec } from "../avatar/species";
-import { bedHeadSpot, BEDS, giftSpot, NIGHTSTANDS, ROOMS, windowLampSpot } from "./layout";
-import type { WardRoom } from "./layout";
+import { giftSpot, NIGHTSTANDS, ROOMS, windowLampSpot } from "../../shared/ward-layout";
+import type { WardRoom } from "../../shared/ward-layout";
 import {
   canAddLamp,
   chooseGiftSlot,
   GIFT_SLOTS_PER_STAND,
   lampSlotPosition,
   LAMPS_PER_WINDOW,
-} from "./offering-rules";
-import type { PlacedGift } from "./offering-rules";
+} from "../../shared/offering-rules";
+import type { PlacedGift } from "../../shared/offering-rules";
 import { transform } from "./parts";
 
 interface Spot {
@@ -81,12 +81,19 @@ const LAMP_SHAPE: BlobSpec[] = [
 
 export interface Offerings {
   update(dt: number, stillMotion: boolean): void;
-  /** 작은 빛이 from에서 그 침대 머리맡으로 날아가요. */
-  sendLight(from: Spot, bed: number, stillMotion: boolean): void;
-  /** 선물을 그 침대의 협탁으로 보내요. */
+  /** 작은 빛이 from에서 to로 날아가요. 침대 머리맡이나 사람의 머리예요. */
+  sendLight(from: Spot, to: Spot, stillMotion: boolean): void;
+  /** 혼자 쓸 때예요. 빈 칸을 골라 선물을 그 침대의 협탁으로 보내요. */
   sendGift(from: Spot, bed: number, gift: number, stillMotion: boolean): void;
-  /** 병실 창틀에 램프를 하나 놓아요. 가득 찼으면 false예요. */
+  /** 서버가 정한 칸으로 선물을 보내요. */
+  placeGift(from: Spot, stand: number, slot: number, gift: number, stillMotion: boolean): void;
+  /** 들어올 때 받은 선물들로 협탁을 채워요. */
+  loadGifts(gifts: readonly { stand: number; slot: number; item: number }[]): void;
+  /** 혼자 쓸 때예요. 병실 창틀에 램프를 하나 놓아요. 가득 찼으면 false예요. */
   addLamp(room: WardRoom): boolean;
+  /** 서버가 알려 준 병실별 램프 수로 맞춰요. */
+  setLamps(counts: readonly number[]): void;
+  setLampCount(room: number, count: number): void;
 }
 
 interface LightFlight {
@@ -195,7 +202,55 @@ export function createOfferings(parent: Object3D, softCircle: Texture): Offering
   halos.renderOrder = 3;
   parent.add(halos);
   const lampCounts = ROOMS.map(() => 0);
-  let lampTotal = 0;
+
+  /** 병실별 램프 수대로 창틀을 다시 채워요. 램프가 늘어날 때만 불러요. */
+  const refreshLamps = (): void => {
+    let total = 0;
+    ROOMS.forEach((room) => {
+      for (let slot = 0; slot < lampCounts[room.index]; slot++) {
+        const spot = windowLampSpot(room, lampSlotPosition(slot));
+        lampMesh.setMatrixAt(total, transform(spot.x, spot.y, spot.z));
+        haloPositions.set([spot.x, spot.y + 0.05, spot.z], total * 3);
+        total++;
+      }
+    });
+    lampMesh.instanceMatrix.needsUpdate = true;
+    haloGeometry.getAttribute("position").needsUpdate = true;
+    lampMesh.count = total;
+    lampMesh.visible = total > 0;
+    haloGeometry.setDrawRange(0, total);
+    halos.visible = total > 0;
+  };
+
+  const setLampCount = (room: number, count: number): void => {
+    if (room < 0 || room >= lampCounts.length) return;
+    lampCounts[room] = Math.min(count, LAMPS_PER_WINDOW);
+    refreshLamps();
+  };
+
+  const placeGift = (from: Spot, stand: number, slot: number, gift: number, stillMotion: boolean): void => {
+    if (!slots[stand] || slot >= GIFT_SLOTS_PER_STAND || !giftGeometries[gift]) return;
+    const placed: PlacedGift = { order: giftOrder++, gift };
+    slots[stand][slot] = placed;
+    if (stillMotion) {
+      refreshGifts();
+      return;
+    }
+    const flight: GiftFlight = {
+      mesh: new Mesh(giftGeometries[gift], material),
+      gift,
+      from,
+      to: giftSpot(stand, slot),
+      age: 0,
+      placed,
+    };
+    flying.add(placed);
+    parent.add(flight.mesh);
+    flight.mesh.position.set(from.x, from.y, from.z);
+    giftFlights.push(flight);
+    // 밀려난 선물을 지우려고 다시 채워요. 날아가는 선물은 도착한 뒤에 들어가요.
+    refreshGifts();
+  };
 
   const landGift = (flight: GiftFlight): void => {
     flying.delete(flight.placed);
@@ -204,55 +259,41 @@ export function createOfferings(parent: Object3D, softCircle: Texture): Offering
   };
 
   return {
-    sendLight(from, bed, stillMotion) {
+    sendLight(from, to, stillMotion) {
       const light = lights.find((candidate) => !candidate.busy) ?? lights[0];
-      light.from = stillMotion ? bedHeadSpot(BEDS[bed]) : from;
-      light.to = bedHeadSpot(BEDS[bed]);
-      // 움직임을 줄이면 날아가지 않고 머리맡에서 바로 빛나요.
+      // 움직임을 줄이면 날아가지 않고 닿는 곳에서 바로 빛나요.
+      light.from = stillMotion ? to : from;
+      light.to = to;
       light.age = stillMotion ? LIGHT_FLIGHT_SECONDS : 0;
       light.busy = true;
       light.sprite.visible = true;
     },
     sendGift(from, bed, gift, stillMotion) {
-      const stand = slots[bed];
-      const slot = chooseGiftSlot(stand);
-      const placed: PlacedGift = { order: giftOrder++, gift };
-      stand[slot] = placed;
-      const flight: GiftFlight = {
-        mesh: new Mesh(giftGeometries[gift], material),
-        gift,
-        from,
-        to: giftSpot(bed, slot),
-        age: 0,
-        placed,
-      };
-      if (stillMotion) {
-        refreshGifts();
-        return;
+      placeGift(from, bed, chooseGiftSlot(slots[bed]), gift, stillMotion);
+    },
+    placeGift,
+    loadGifts(gifts) {
+      for (const stand of slots) stand.fill(null);
+      for (const gift of gifts) {
+        if (slots[gift.stand] && gift.slot < GIFT_SLOTS_PER_STAND) {
+          slots[gift.stand][gift.slot] = { order: giftOrder++, gift: gift.item };
+        }
       }
-      flying.add(placed);
-      parent.add(flight.mesh);
-      flight.mesh.position.set(from.x, from.y, from.z);
-      giftFlights.push(flight);
-      // 밀려난 선물을 지우려고 다시 채워요. 날아가는 선물은 도착한 뒤에 들어가요.
       refreshGifts();
     },
     addLamp(room) {
       const count = lampCounts[room.index];
       if (!canAddLamp(count)) return false;
-      const spot = windowLampSpot(room, lampSlotPosition(count));
-      lampMesh.setMatrixAt(lampTotal, transform(spot.x, spot.y, spot.z));
-      lampMesh.instanceMatrix.needsUpdate = true;
-      haloPositions.set([spot.x, spot.y + 0.05, spot.z], lampTotal * 3);
-      haloGeometry.getAttribute("position").needsUpdate = true;
-      lampCounts[room.index] = count + 1;
-      lampTotal++;
-      lampMesh.count = lampTotal;
-      lampMesh.visible = true;
-      haloGeometry.setDrawRange(0, lampTotal);
-      halos.visible = true;
+      setLampCount(room.index, count + 1);
       return true;
     },
+    setLamps(counts) {
+      counts.forEach((count, room) => {
+        if (room < lampCounts.length) lampCounts[room] = Math.min(count, LAMPS_PER_WINDOW);
+      });
+      refreshLamps();
+    },
+    setLampCount,
     update(dt) {
       for (const light of lights) {
         if (!light.busy) continue;

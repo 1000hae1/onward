@@ -24,7 +24,7 @@ import {
   NURSE_STATION_CENTER_X,
   NURSES,
   WALL_HEIGHT,
-} from "./layout";
+} from "../../shared/ward-layout";
 import { addInstances, createRandom, repeatAt, transform } from "./parts";
 
 const lambert = (color: string): MeshLambertMaterial => new MeshLambertMaterial({ color });

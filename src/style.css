@@ -190,7 +190,13 @@ input:focus-visible {
   box-sizing: border-box;
 }
 
-#head-labels {
+#remote-labels {
+  position: fixed;
+  inset: 0;
+  pointer-events: none;
+}
+
+.head-label {
   position: fixed;
   top: 0;
   left: 0;
@@ -201,7 +207,7 @@ input:focus-visible {
   will-change: transform;
 }
 
-#head-labels p {
+.head-label p {
   margin: 0;
   white-space: nowrap;
 }

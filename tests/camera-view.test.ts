@@ -9,7 +9,7 @@ import {
   pullCamera,
   turnToward,
 } from "../src/ward/camera-view.ts";
-import { CORRIDOR, ENTRANCE, LOBBY, lightSpots, NURSES, ROOMS, roomRect, WALL_BOXES, WALL_HEIGHT, YARD } from "../src/ward/layout.ts";
+import { CORRIDOR, ENTRANCE, LOBBY, lightSpots, NURSES, ROOMS, roomRect, WALL_BOXES, WALL_HEIGHT, YARD } from "../shared/ward-layout.ts";
 
 const CLEARANCE = 0.25;
 

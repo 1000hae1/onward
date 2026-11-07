@@ -10,13 +10,10 @@ import {
 } from "../../shared/cat-brain";
 import type { CatBrain, CatPlan } from "../../shared/cat-brain";
 import { pickBox, turnToward } from "../ward/camera-view";
-import { addCrumb, followTrail } from "../ward/companion-trail";
-import type { TrailPoint } from "../ward/companion-trail";
 import {
   bedApproach,
   bedCatSeat,
   bedCatYaw,
-  bedCurlSpot,
   BED_SURFACE_Y,
   BEDS,
   catSpots,
@@ -25,32 +22,24 @@ import {
   roomRect,
   ROOMS,
   WALL_BOXES,
-} from "../ward/layout";
-import type { WallBox, WardRoom } from "../ward/layout";
+} from "../../shared/ward-layout";
+import type { WallBox, WardRoom } from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "../ward/movement";
 import type { NavGrid, Point } from "../ward/movement";
 import { CAT_NOSE_REACH } from "./cat-kit";
-import { blinkAmount, CAT_NOTICE_SECONDS, composeCatPose, createCatPose } from "./cat-pose";
+import { createCatPose } from "./cat-pose";
+import { createCompanion, drawCat, ease, newMoves, STRIDE, TURN_RATE } from "./companion";
+import type { Moves } from "./companion";
 import { createCatView } from "./cat-view";
 
 const CAT_RADIUS = 0.14;
 const CAT_NAV_CELL = 0.2;
 const WARD_WALK_SPEED = 0.42;
-const COMPANION_SPEED = 2.4;
-/** 내 뒤로 이만큼 떨어져서 따라와요. */
-const COMPANION_LAG = 1.1;
-const COMPANION_SIT_AFTER = 0.8;
-/** 켜는 순간 아바타와 겹치지 않게 곁에서 나타나요. */
-const COMPANION_SPAWN_X = 0.45;
-const COMPANION_SPAWN_Z = 0.25;
 /** 이보다 가까운 병동 고양이만 그려요. */
 const ACTIVE_DISTANCE = 12;
 /** 안 보이는 고양이는 이 간격으로만 판단해요. */
 const HIDDEN_THINK_SECONDS = 1;
 const HOP_HEIGHT = 0.22;
-const STRIDE = 0.34;
-const BLEND_RATE = 7;
-const TURN_RATE = 7;
 const CAT_TAP_HALF = 0.22;
 const CAT_TAP_HEIGHT = 0.46;
 
@@ -60,6 +49,8 @@ export interface CatOwner {
   readonly walkZ: number;
   /** 다 누운 침대예요. 오르내리는 중이면 null이에요. */
   readonly lyingBed: number | null;
+  /** 이 병실에 나 말고 다른 사람이 있는지 알려 줘요. 혼자 누워 있을 때만 병동 고양이가 찾아와요. */
+  othersInRoom?(roomIndex: number): boolean;
   /** 내가 쓰거나 가고 있는 침대예요. */
   readonly claimedBed: number | null;
 }
@@ -70,38 +61,6 @@ export interface CatsHandle {
   tap(origin: Vector3, reach: Vector3): boolean;
   setCompanion(enabled: boolean): void;
 }
-
-interface Moves {
-  x: number;
-  z: number;
-  yaw: number;
-  walkPhase: number;
-  walkWeight: number;
-  sit: number;
-  curl: number;
-  nose: number;
-  /** 고개를 들고 눈을 깜빡이기 시작한 뒤 흐른 시간이에요. 하지 않으면 null이에요. */
-  notice: number | null;
-}
-
-const newMoves = (x: number, z: number, yaw: number): Moves => ({
-  x,
-  z,
-  yaw,
-  walkPhase: 0,
-  walkWeight: 0,
-  sit: 1,
-  curl: 0,
-  nose: 0,
-  notice: null,
-});
-
-const ease = (current: number, goal: number, dt: number): number =>
-  current + (goal - current) * (1 - Math.exp(-dt * BLEND_RATE));
-
-/** 고개 들기가 부드럽게 시작하고 끝나는 세기예요. */
-const noticeStrength = (seconds: number): number =>
-  Math.min(1, seconds / 0.4, (CAT_NOTICE_SECONDS - seconds) / 0.4);
 
 /** 병실마다 사는 고양이와, 입장 때 고른 경우 함께 다니는 고양이예요. */
 export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: boolean): CatsHandle {
@@ -161,33 +120,8 @@ export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: 
   });
   type WardCat = (typeof wardCats)[number];
 
-  const companionView = createCatView("companion");
-  companionView.root.visible = false;
-  parent.add(companionView.root);
-  const companion = {
-    enabled: false,
-    moves: newMoves(owner.walkX, owner.walkZ, 0),
-    trail: [] as readonly TrailPoint[],
-    curlBed: null as number | null,
-    still: 0,
-  };
-
-  const setCompanion = (enabled: boolean): void => {
-    if (companion.enabled === enabled) return;
-    companion.enabled = enabled;
-    companionView.root.visible = enabled;
-    if (enabled) {
-      // 내 곁에서 나타나 다시 따라오기 시작해요.
-      companion.moves = newMoves(
-        owner.walkX + COMPANION_SPAWN_X,
-        owner.walkZ + COMPANION_SPAWN_Z,
-        companion.moves.yaw,
-      );
-      companion.trail = [];
-      companion.curlBed = null;
-      companion.still = COMPANION_SIT_AFTER;
-    }
-  };
+  const companion = createCompanion(parent);
+  const setCompanion = (enabled: boolean): void => companion.setEnabled(enabled, owner);
 
   /** 새 계획을 받았을 때 걸어갈 길이나 뛰어오를 자리를 정해요. */
   const startPlan = (cat: WardCat, plan: CatPlan): void => {
@@ -247,7 +181,7 @@ export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: 
         beds: cat.beds,
         takenBeds: claimed !== null ? [claimed] : [],
         lying,
-        alone: true,
+        alone: !(owner.othersInRoom?.(room.index) ?? false),
         arrived: cat.arrived,
         spotCount: cat.spots.length,
       });
@@ -304,76 +238,7 @@ export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: 
     moves.walkWeight = ease(moves.walkWeight, goalWalk, dt);
     moves.sit = ease(moves.sit, !walking && !cat.hop && !(onBed && plan.purpose === "rest") ? 1 : 0, dt);
     moves.curl = ease(moves.curl, onBed && plan.purpose === "rest" ? 1 : 0, dt);
-    drawCat(cat.view, moves, cat.y + lift, dt);
-  };
-
-  const drawCat = (view: ReturnType<typeof createCatView>, moves: Moves, y: number, dt: number): void => {
-    let lookUp = 0;
-    let blink = 0;
-    if (moves.notice !== null) {
-      moves.notice += dt;
-      if (moves.notice >= CAT_NOTICE_SECONDS) {
-        moves.notice = null;
-      } else {
-        lookUp = noticeStrength(moves.notice);
-        blink = blinkAmount(moves.notice - 0.4);
-      }
-    }
-    composeCatPose(pose, {
-      walkPhase: moves.walkPhase,
-      walkWeight: moves.walkWeight,
-      sit: moves.sit,
-      curl: moves.curl,
-      lookUp,
-      blink,
-      nose: moves.nose,
-    });
-    view.place(moves.x, y, moves.z, moves.yaw);
-    view.apply(pose);
-  };
-
-  const updateCompanion = (dt: number, stillMotion: boolean): void => {
-    const { moves } = companion;
-    const lying = owner.lyingBed;
-
-    if (lying !== null && companion.curlBed !== lying) {
-      // 내가 누우면 침대 옆 바닥으로 가서 웅크려요.
-      companion.curlBed = lying;
-      companion.trail = [...companion.trail, bedCurlSpot(BEDS[lying])];
-    } else if (lying === null && companion.curlBed !== null) {
-      companion.curlBed = null;
-    }
-    if (companion.curlBed === null) {
-      companion.trail = addCrumb(companion.trail, { x: owner.walkX, z: owner.walkZ });
-    }
-
-    let walking = false;
-    if (greetLeft <= 0) {
-      const step = followTrail(
-        moves,
-        companion.trail,
-        COMPANION_SPEED * dt,
-        companion.curlBed === null ? COMPANION_LAG : 0,
-      );
-      companion.trail = step.trail;
-      if (step.walked > 0) {
-        const dx = step.position.x - moves.x;
-        const dz = step.position.z - moves.z;
-        moves.x = step.position.x;
-        moves.z = step.position.z;
-        moves.walkPhase += (step.walked / STRIDE) * Math.PI * 2;
-        moves.yaw = turnToward(moves.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * TURN_RATE));
-        walking = true;
-      }
-    }
-    companion.still = walking ? 0 : companion.still + dt;
-
-    const curled = companion.curlBed !== null && companion.trail.length === 0;
-    moves.walkWeight = ease(moves.walkWeight, walking && !stillMotion ? 1 : 0, dt);
-    moves.sit = ease(moves.sit, !curled && companion.still >= COMPANION_SIT_AFTER ? 1 : 0, dt);
-    moves.curl = ease(moves.curl, curled ? 1 : 0, dt);
-    moves.nose = ease(moves.nose, greetLeft > 0 ? 1 : 0, dt);
-    drawCat(companionView, moves, 0, dt);
+    drawCat(cat.view, moves, cat.y + lift, dt, pose);
   };
 
   /** 두 고양이가 가까워지면 서로 보고 코를 맞대요. */
@@ -401,8 +266,7 @@ export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: 
     }
     cat.moves.nose = ease(cat.moves.nose, 0, dt);
 
-    const curled = companion.curlBed !== null;
-    if (curled || cat.y > 0 || cat.hop || !catCanGreet(cat.brain.plan)) return;
+    if (companion.curling || cat.y > 0 || cat.hop || !catCanGreet(cat.brain.plan)) return;
     const distance = Math.hypot(moves.x - cat.moves.x, moves.z - cat.moves.z);
     if (shouldGreet(distance, now, lastGreet)) {
       lastGreet = now;
@@ -424,7 +288,7 @@ export function createCats(parent: Object3D, owner: CatOwner, initialCompanion: 
       }
       for (const cat of wardCats) updateWardCat(cat, dt, stillMotion);
       updateGreeting(dt);
-      if (companion.enabled) updateCompanion(dt, stillMotion);
+      if (companion.enabled) companion.update(dt, owner, stillMotion, greetLeft > 0);
     },
     tap(origin, reach) {
       const candidates: { moves: Moves; y: number }[] = [

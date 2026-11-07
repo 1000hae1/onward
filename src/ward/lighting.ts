@@ -8,7 +8,7 @@ import type {
 } from "three";
 import type { HospitalHandles } from "./hospital";
 import type { LandscapeHandles } from "./landscape";
-import { lightSpots } from "./layout";
+import { lightSpots } from "../../shared/ward-layout";
 import type { SkyHandles } from "./sky";
 import type { TimeSlot } from "./time-of-day";
 

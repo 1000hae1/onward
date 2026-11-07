@@ -9,11 +9,14 @@ export interface EntryOptions {
   /** 고르는 동안 뒤의 병동에서 바로 보여 줘요. */
   onPreview(profile: Profile): void;
   onEnter(profile: Profile): void;
+  /** 서버가 닉네임을 받지 않아 다시 열 때 보여 줄 안내예요. */
+  message?: string;
 }
 
 /** 병동에 들어가기 전에 모습과 닉네임, 고양이와 함께 갈지 고르는 화면이에요. */
 export function createEntryScreen(root: HTMLElement, options: EntryOptions): void {
   let profile = options.initial;
+  let serverMessage = options.message ?? "";
 
   const form = document.createElement("form");
   form.className = "ward-panel entry-form";
@@ -46,6 +49,7 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
   input.enterKeyHint = "go";
   input.value = profile.nickname;
   input.addEventListener("input", () => {
+    serverMessage = "";
     update({ ...profile, nickname: input.value, nicknameAuto: false });
   });
   const message = createText("p", "");
@@ -83,7 +87,7 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     outfitRow.select(profile.outfit);
     catRow.select(profile.withCat);
     const checked = checkNickname(profile.nickname);
-    message.textContent = checked.ok ? "" : nicknameMessage(checked.problem);
+    message.textContent = checked.ok ? serverMessage : nicknameMessage(checked.problem);
     enter.disabled = !checked.ok;
   }
 

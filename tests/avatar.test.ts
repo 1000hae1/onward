@@ -23,7 +23,7 @@ import {
   PLAYER_START,
   WALK_AREAS,
   WALL_BOXES,
-} from "../src/ward/layout.ts";
+} from "../shared/ward-layout.ts";
 
 const idle = {
   walkPhase: 0,

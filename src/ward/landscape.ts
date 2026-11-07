@@ -15,7 +15,7 @@ import {
 } from "three";
 import type { Object3D } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { BUILDING, ENTRANCE_GARDENS, ROOMS, YARD, YARD_LAMPS } from "./layout";
+import { BUILDING, ENTRANCE_GARDENS, ROOMS, YARD, YARD_LAMPS } from "../../shared/ward-layout";
 import { addInstances, createRandom, repeatAt, transform } from "./parts";
 
 /** 정원 안 자리는 화단 크기에 대한 비율이에요. 나무는 [가로, 세로, 크기]예요. */

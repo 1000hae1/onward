@@ -1,4 +1,4 @@
-import type { Rect } from "./layout";
+import type { Rect } from "../../shared/ward-layout";
 
 export interface Point {
   x: number;
@@ -67,6 +67,56 @@ function clipSegment(
     if (enter > exit) return null;
   }
   return { enter, exit };
+}
+
+/** 우선순위가 가장 낮은 칸부터 꺼내는 힙이에요. 같은 칸이 여러 번 들어와도 먼저 꺼낸 것만 써요. */
+class MinHeap {
+  private items: number[] = [];
+  private keys: number[] = [];
+
+  get size(): number {
+    return this.items.length;
+  }
+
+  push(item: number, key: number): void {
+    const { items, keys } = this;
+    let index = items.length;
+    items.push(item);
+    keys.push(key);
+    while (index > 0) {
+      const parent = (index - 1) >> 1;
+      if (keys[parent] <= key) break;
+      items[index] = items[parent];
+      keys[index] = keys[parent];
+      index = parent;
+    }
+    items[index] = item;
+    keys[index] = key;
+  }
+
+  pop(): number {
+    const { items, keys } = this;
+    const top = items[0];
+    const lastItem = items.pop() as number;
+    const lastKey = keys.pop() as number;
+    if (items.length > 0) {
+      let index = 0;
+      const length = items.length;
+      for (;;) {
+        const left = index * 2 + 1;
+        if (left >= length) break;
+        const right = left + 1;
+        const child = right < length && keys[right] < keys[left] ? right : left;
+        if (keys[child] >= lastKey) break;
+        items[index] = items[child];
+        keys[index] = keys[child];
+        index = child;
+      }
+      items[index] = lastItem;
+      keys[index] = lastKey;
+    }
+    return top;
+  }
 }
 
 /** 바닥을 격자로 나눠 길을 찾아요. 눌렀을 때만 계산해서 매 프레임 비용이 없어요. */
@@ -142,17 +192,14 @@ export function createNavGrid(options: NavOptions): NavGrid {
       Math.hypot(index % columns - goalColumn, Math.floor(index / columns) - goalRow);
 
     cost[start] = 0;
-    const open = [start];
-    while (open.length > 0) {
-      let bestSlot = 0;
-      for (let slot = 1; slot < open.length; slot++) {
-        if (cost[open[slot]] + estimate(open[slot]) < cost[open[bestSlot]] + estimate(open[bestSlot])) {
-          bestSlot = slot;
-        }
-      }
-      const current = open[bestSlot];
-      open[bestSlot] = open[open.length - 1];
-      open.pop();
+    // 후보를 힙에 담아 가장 가까워 보이는 칸을 빨리 꺼내요. 먼 길도 휴대폰에서 멈칫하지 않게 해요.
+    const heap = new MinHeap();
+    heap.push(start, estimate(start));
+    const closed = new Uint8Array(free.length);
+    while (heap.size > 0) {
+      const current = heap.pop();
+      if (closed[current]) continue;
+      closed[current] = 1;
 
       if (current === goal) {
         const cells = [current];
@@ -174,9 +221,9 @@ export function createNavGrid(options: NavOptions): NavGrid {
         }
         const nextCost = cost[current] + Math.hypot(dx, dz);
         if (nextCost < cost[next]) {
-          if (cost[next] === Infinity) open.push(next);
           cost[next] = nextCost;
           cameFrom[next] = current;
+          heap.push(next, nextCost + estimate(next));
         }
       }
     }

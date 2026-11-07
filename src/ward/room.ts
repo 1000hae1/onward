@@ -52,8 +52,8 @@ import {
   TABLES,
   WALL_HEIGHT,
   WINDOW,
-} from "./layout";
-import type { WardRoom } from "./layout";
+} from "../../shared/ward-layout";
+import type { WardRoom } from "../../shared/ward-layout";
 import { addInstances, repeatAt, transform } from "./parts";
 
 const SHADOW_Y = 0.012;
