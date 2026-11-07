@@ -83,6 +83,8 @@ export interface RemoteGuests {
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
   headSpot(id: string): Spot | null;
+  /** 지금 침대에 누운 사람 수예요. 소등 안내에 써요. */
+  lyingCount(): number;
   /** 이 평안 주소의 사람이 지금 같은 병실에 있으면 그 사람의 공개 id예요. */
   idForAddress(address: string): string | null;
   /** 지금 함께 있는 사람들이에요. 오늘 만난 사람 목록에 더할 때 써요. */
@@ -218,7 +220,7 @@ export function createRemoteGuests(
         return;
       }
       // 선물과 불빛은 협탁과 창가의 일이라 화면에서 따로 다뤄요.
-      if (event.kind === "gift" || event.kind === "lamp" || event.kind === "cat-visit") return;
+      if (event.kind === "gift" || event.kind === "lamp" || event.kind === "cat-visit" || event.kind === "stats") return;
       const remote = remotes.get(event.kind === "update" ? event.guest.id : event.id);
       if (!remote) return;
 
@@ -375,6 +377,11 @@ export function createRemoteGuests(
     headSpot(id) {
       const remote = remotes.get(id);
       return remote ? { x: remote.shownX, y: HEAD_HEIGHT, z: remote.shownZ } : null;
+    },
+    lyingCount() {
+      let count = 0;
+      for (const remote of remotes.values()) if (remote.flow.kind === "lying" || remote.flow.kind === "entering") count++;
+      return count;
     },
     idForAddress(address) {
       for (const [id, remote] of remotes) if (remote.guest.address === address) return id;

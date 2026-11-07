@@ -11,11 +11,16 @@ export interface EntryOptions {
   onEnter(profile: Profile): void;
   /** 서버가 닉네임을 받지 않아 다시 열 때 보여 줄 안내예요. */
   message?: string;
+  /** 문병 링크로 왔으면 "따뜻한 곰님에게 문병 왔어요"처럼 바뀌어요. */
+  title?: string;
+  /** 문병 링크로 왔으면 옷은 고르지 않고 평상복이에요. */
+  lockOutfit?: Outfit;
 }
 
 /** 병동에 들어가기 전에 모습과 닉네임, 고양이와 함께 갈지 고르는 화면이에요. */
 export function createEntryScreen(root: HTMLElement, options: EntryOptions): void {
-  let profile = options.initial;
+  const lock = options.lockOutfit;
+  let profile = lock ? { ...options.initial, outfit: lock } : options.initial;
   let serverMessage = options.message ?? "";
 
   const form = document.createElement("form");
@@ -39,6 +44,7 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     ],
     (outfit) => update({ ...profile, outfit }),
   );
+  outfitRow.element.hidden = lock !== undefined;
 
   const nameLabel = createText("label", "닉네임");
   nameLabel.setAttribute("for", "entry-nickname");
@@ -65,12 +71,12 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     (withCat) => update({ ...profile, withCat }),
   );
 
-  const enter = createButton("병동에 들어갈게요", () => undefined);
+  const enter = createButton(lock ? "문병 갈게요" : "병동에 들어갈게요", () => undefined);
   enter.type = "submit";
   enter.className = "entry-enter";
 
   form.append(
-    createText("h1", "어떤 모습으로 머물까요?"),
+    createText("h1", options.title ?? "어떤 모습으로 머물까요?"),
     speciesRow.element,
     outfitRow.element,
     nameLabel,

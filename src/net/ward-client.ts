@@ -34,7 +34,9 @@ export type ConnectionStatus =
   | "reconnecting"
   | "replaced"
   | "full"
-  | "outdated";
+  | "outdated"
+  /** 오래 입력이 없어 이 화면이 연결을 잠시 닫았어요. 누르면 다시 이어요. */
+  | "paused";
 
 type Snapshot = Extract<ServerMessage, { type: "snapshot" }>;
 type Denied = Extract<ServerMessage, { type: "action-denied" }>;
@@ -48,6 +50,10 @@ export interface WardClientHandlers {
   onLeftBlessings(message: Extract<ServerMessage, { type: "left-blessings" }>): void;
   onLeftSaved(): void;
   onStatus(status: ConnectionStatus, instance: number): void;
+  /** 문병 링크로 들어오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
+  onVisitDenied(reason: "closed" | "busy"): void;
+  onVisitLink(status: Extract<ServerMessage, { type: "visit-link" }>): void;
+  onVisitorArrived(nickname: string): void;
 }
 
 export interface WardClient {
@@ -60,6 +66,13 @@ export interface WardClient {
   send(message: DistributiveOmit<ClientMessage, "v">): void;
   /** 침대를 달라고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
   askBed(bed: number): Promise<boolean>;
+  /** 문병 링크로 들어갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
+  setVisit(visit: { token: string; ward: number; instance: number } | null): void;
+  readonly ward: number;
+  /** 오래 입력이 없을 때 연결을 닫아요. 다시 잇지 않고 resume을 기다려요. */
+  pause(): void;
+  resume(): void;
+  readonly paused: boolean;
 }
 
 type DistributiveOmit<T, K extends PropertyKey> = T extends unknown ? Omit<T, K> : never;
@@ -75,9 +88,13 @@ export function createWardClient(
   let everOnline = false;
   let profile: Profile | null = null;
   let instance = params.instance;
+  let ward = params.ward;
+  /** 문병 링크 토큰이에요. 서버가 받거나 거절하면 지워서 다시 이을 때 보내지 않아요. */
+  let visitToken: string | null = null;
   let overflow = 0;
   let retry = 0;
   let stopped = false;
+  let paused = false;
   let ping: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
   /** 서버 시각에서 이 기기 시각을 뺀 값이에요. */
@@ -92,6 +109,7 @@ export function createWardClient(
     outfit: current.outfit,
     nickname: current.nickname,
     withCat: current.withCat,
+    ...(visitToken ? { visitToken } : {}),
   });
 
   const rawSend = (message: ClientMessage): void => {
@@ -112,6 +130,8 @@ export function createWardClient(
         online = true;
         everOnline = true;
         retry = 0;
+        // 받아들여졌으면 30초 안에 다시 이어도 서버가 역할을 기억해요. 토큰을 다시 보낼 필요가 없어요.
+        if (!message.visit) visitToken = null;
         handlers.onStatus("online", instance);
         handlers.onSnapshot(message, reconnected);
         return;
@@ -150,6 +170,16 @@ export function createWardClient(
       case "left-saved":
         handlers.onLeftSaved();
         return;
+      case "visit-denied":
+        if (message.reason === "closed") visitToken = null;
+        handlers.onVisitDenied(message.reason);
+        return;
+      case "visit-link":
+        handlers.onVisitLink(message);
+        return;
+      case "visitor-arrived":
+        handlers.onVisitorArrived(message.nickname);
+        return;
     }
   };
 
@@ -174,7 +204,7 @@ export function createWardClient(
   function connect(): void {
     if (stopped || !profile) return;
     const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-    const url = `${protocol}//${window.location.host}/ws?ward=${params.ward}&instance=${instance}`;
+    const url = `${protocol}//${window.location.host}/ws?ward=${ward}&instance=${instance}`;
     handlers.onStatus("connecting", instance);
     let opened: WebSocket;
     try {
@@ -210,6 +240,10 @@ export function createWardClient(
       ping = null;
       settleBeds(false);
       if (stopped) return;
+      if (paused) {
+        handlers.onStatus("paused", instance);
+        return;
+      }
       if (event.code === REPLACED_CODE) {
         // 다른 창에서 같은 사람이 들어왔어요. 이 창은 다시 잇지 않아요.
         stopped = true;
@@ -240,6 +274,34 @@ export function createWardClient(
     },
     serverNow() {
       return Date.now() + clockOffset;
+    },
+    get paused() {
+      return paused;
+    },
+    get ward() {
+      return ward;
+    },
+    setVisit(visit) {
+      visitToken = visit?.token ?? null;
+      if (visit) {
+        ward = visit.ward;
+        instance = visit.instance;
+      }
+    },
+    pause() {
+      if (paused || stopped) return;
+      paused = true;
+      if (retryTimer) clearTimeout(retryTimer);
+      retryTimer = null;
+      if (socket) socket.close(1000, "idle");
+      else handlers.onStatus("paused", instance);
+    },
+    resume() {
+      if (!paused) return;
+      paused = false;
+      retry = 0;
+      // 같은 병실로 다시 이어요. 30초 안이면 침대와 자리를 그대로 돌려받아요.
+      if (!socket) connect();
     },
     hello(next) {
       profile = next;

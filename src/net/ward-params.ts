@@ -42,3 +42,10 @@ export function loadGuestId(): string {
     return crypto.randomUUID();
   }
 }
+
+/** 테스트용 ?clockShift=분 이에요. 화면의 시각만 앞당기거나 늦춰서 소등과 밤을 미리 볼 수 있어요. */
+export function readClockShiftMs(search: string): number {
+  const value = new URLSearchParams(search).get("clockShift");
+  if (value === null || !/^-?\d{1,5}$/.test(value)) return 0;
+  return Number(value) * 60_000;
+}

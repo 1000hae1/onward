@@ -1,5 +1,7 @@
 import { BLESSINGS, blessingText, GIFTS } from "../../shared/gestures";
 import { giftAllowedNow } from "../../shared/ward-rules";
+import { visitCountText } from "../../shared/visit-rules";
+import { loadMyLink, saveMyLink, shareVisit, visitUrl } from "../net/visit-link";
 import { bedHeadSpot, BEDS, roomAt } from "../../shared/ward-layout";
 import { gestureDuration } from "../avatar/pose";
 import type { PlayerControls } from "../ward/controls";
@@ -22,6 +24,15 @@ export interface ActionSink {
   blessPerson(id: string): void;
   /** 자리에 없는 사람에게 평안이나 선물을 남겨요. */
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
+  /** 내 문병 링크를 만들거나 끄거나 상태를 물어요. 답은 showVisitLink로 와요. */
+  visitLink(action: "create" | "off" | "info"): void;
+}
+
+/** 서버가 알려 준 내 문병 링크예요. token은 새로 만든 그때만 있어요. */
+export interface VisitLinkStatus {
+  token: string | null;
+  active: boolean;
+  visits: number;
 }
 
 /** 오늘 같은 병실에서 만난 사람이에요. present는 지금 같은 병실에 있으면 그 사람의 머리 자리예요. */
@@ -41,16 +52,19 @@ export interface ActionBarOptions {
   stillMotion(): boolean;
   /** 오늘 만난 사람들이에요. 서버에 닿지 않을 때는 빈 목록이에요. */
   people(): PersonChoice[];
+  /** 문병 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
+  visiting(): boolean;
 }
 
 export interface ActionBar {
   update(dt: number): void;
   showToast(text: string): void;
+  showVisitLink(status: VisitLinkStatus): void;
 }
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
-  const { root, toast, player, offerings, labels, sink, stillMotion, people } = options;
+  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting } = options;
 
   const sheet = document.createElement("div");
   sheet.className = "ward-panel action-sheet";
@@ -132,7 +146,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     onBed: (bed: number) => void,
     onPerson: (person: PersonChoice) => void,
   ): void => {
-    if (!sink.online()) {
+    if (!sink.online() || visiting()) {
       pickBed(name, bedTitle, onBed);
       return;
     }
@@ -168,6 +182,79 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     if (sheetName === name) closeSheet();
     else open();
   };
+
+  /** 내 문병 링크의 지금 상태예요. 메뉴를 열 때 서버에 물어서 채워요. */
+  let link: { active: boolean; visits: number } | null = null;
+  let linkNote = "";
+  /** 공유 창도 복사도 안 되면 링크를 직접 보여 줘요. */
+  let manualLink: string | null = null;
+
+  const share = (token: string): void => {
+    void shareVisit(token).then((result) => {
+      if (result === "copied") showToast("링크를 복사했어요. 보내고 싶은 분께 붙여 넣어 주세요.");
+      else if (result === "shared") showToast("링크를 보냈어요.");
+      else if (result === "failed") {
+        manualLink = visitUrl(token);
+        renderBedMenu();
+      }
+    });
+  };
+
+  const renderBedMenu = (): void => {
+    if (sheetName !== "bed") return;
+    const children: HTMLElement[] = [];
+    if (link === null) {
+      children.push(createText("p", "확인하는 중이에요."));
+    } else {
+      children.push(createText("p", link.active ? visitCountText(link.visits) : "지금은 켜진 문병 링크가 없어요."));
+      if (linkNote) children.push(createText("p", linkNote));
+      const token = loadMyLink();
+      const row = document.createElement("div");
+      row.className = "action-choices";
+      if (link.active && token) {
+        row.append(
+          createButton("내 침대로 문병 오기", () => share(token)),
+          createButton("새로 만들기", () => sink.visitLink("create")),
+          createButton("링크 끄기", () => sink.visitLink("off")),
+        );
+      } else if (link.active) {
+        // 다른 기기에서 만들었거나 저장소가 지워져서 이 기기에는 링크 원본이 없어요.
+        children.push(createText("p", "이 기기에는 링크가 없어요. 새로 만들면 예전 링크는 열리지 않아요."));
+        row.append(
+          createButton("새로 만들기", () => sink.visitLink("create")),
+          createButton("링크 끄기", () => sink.visitLink("off")),
+        );
+      } else {
+        row.append(createButton("내 침대로 문병 오기", () => sink.visitLink("create")));
+      }
+      children.push(row);
+      if (manualLink) {
+        const input = document.createElement("input");
+        input.type = "text";
+        input.readOnly = true;
+        input.value = manualLink;
+        input.className = "visit-link-text";
+        input.setAttribute("aria-label", "문병 링크");
+        input.addEventListener("focus", () => input.select());
+        children.push(createText("p", "아래 링크를 길게 눌러 복사해 주세요."), input);
+      }
+    }
+    openSheet("bed", "내 침대로 문병 오기", children);
+  };
+
+  const bedButton = createButton(
+    "내 침대",
+    toggleable("bed", () => {
+      link = null;
+      linkNote = "";
+      manualLink = null;
+      openSheet("bed", "내 침대로 문병 오기", []);
+      renderBedMenu();
+      sink.visitLink("info");
+    }),
+  );
+  bedButton.hidden = true;
+  const lamp = lampButton();
 
   buttons.append(
     createButton(
@@ -243,7 +330,12 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         ]);
       }),
     ),
-    createButton("창가에 불빛", () => {
+    lamp,
+    bedButton,
+  );
+
+  function lampButton(): HTMLButtonElement {
+    return createButton("창가에 불빛", () => {
       closeSheet();
       if (sink.online()) {
         sink.lamp();
@@ -255,13 +347,34 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       } else if (!offerings.addLamp(room)) {
         showToast("창가가 불빛으로 가득해요.");
       }
-    }),
-  );
+    });
+  }
   root.hidden = false;
 
   return {
     showToast,
+    showVisitLink(status) {
+      if (status.token) {
+        saveMyLink(status.token);
+        // 공유 창은 누른 순간에만 열 수 있어서, 서버 답을 받은 뒤에는 한 번 더 눌러 보내요.
+        linkNote = link?.active ? "새 링크를 만들었어요. 예전 링크는 이제 열리지 않아요." : "링크가 준비됐어요. 눌러서 보내 주세요.";
+      } else if (!status.active) {
+        if (link?.active) linkNote = "링크를 껐어요. 이제 이 링크로는 들어올 수 없어요.";
+        saveMyLink(null);
+      }
+      manualLink = null;
+      link = { active: status.active, visits: status.visits };
+      renderBedMenu();
+    },
     update(dt) {
+      // 침대에 누워 있는 동안만 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.
+      const showBed = sink.online() && !visiting() && player.lyingBed !== null;
+      if (bedButton.hidden === showBed) {
+        bedButton.hidden = !showBed;
+        if (!showBed && sheetName === "bed") closeSheet();
+      }
+      const showLamp = !visiting();
+      if (lamp.hidden === showLamp) lamp.hidden = !showLamp;
       if (toastLeft > 0) {
         toastLeft -= dt;
         if (toastLeft <= 0) toast.hidden = true;

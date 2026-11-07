@@ -8,6 +8,8 @@ export interface SettingsOptions {
   initial: Profile;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
+  /** 문병 링크로 왔으면 옷은 바꿀 수 없어요. */
+  lockOutfit?: boolean;
 }
 
 /** 입장한 뒤에 모습과 고양이를 바꾸는 패널이에요. 오른쪽 위 버튼으로 열어요. */
@@ -37,6 +39,7 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): voi
     ],
     (outfit) => change({ ...profile, outfit }),
   );
+  outfitRow.element.hidden = options.lockOutfit === true;
   const catRow = createChoiceRow<boolean>(
     [
       { value: true, label: "켜기" },

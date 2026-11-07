@@ -2,7 +2,7 @@ import { z } from "zod";
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 1;
+export const PROTOCOL_VERSION = 2;
 /** 이보다 긴 메시지는 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 연결 유지용 글자예요. 서버가 객체를 깨우지 않고 자동으로 답해요. */
@@ -43,6 +43,8 @@ export const clientMessageSchema = z.union([
     outfit: outfitSchema,
     nickname: z.string().max(64),
     withCat: z.boolean(),
+    /** 문병 링크로 들어올 때만 담아요. 서버가 directory에서 확인해요. */
+    visitToken: address.optional(),
   }),
   z.object({ v, type: z.literal("walk-to"), x: coordinate, z: coordinate }),
   z.object({ v, type: z.literal("lie-down"), bedId }),
@@ -59,6 +61,8 @@ export const clientMessageSchema = z.union([
   z
     .object({ v, type: z.literal("leave-for"), address, kind: z.enum(["bless", "gift"]), item: item.optional() })
     .refine((value) => (value.kind === "gift") === (value.item !== undefined)),
+  /** 내 침대로 오는 문병 링크를 만들거나(create), 끄거나(off), 지금 상태를 물어요(info). */
+  z.object({ v, type: z.literal("visit-link"), action: z.enum(["create", "off", "info"]) }),
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HelloMessage = Extract<ClientMessage, { type: "hello" }>;
@@ -86,6 +90,14 @@ const blessingCardSchema = z.object({
 });
 export type BlessingCardMessage = z.infer<typeof blessingCardSchema>;
 
+/** 오늘 이 병실의 집계예요. 한국 날짜가 바뀌면 0부터 다시 세요. */
+const statsSchema = z.object({
+  visitors: z.number().int().min(0),
+  blessings: z.number().int().min(0),
+  lamps: z.number().int().min(0),
+});
+export type WardStats = z.infer<typeof statsSchema>;
+
 const catVisitSchema = z.object({
   room: z.number().int().min(0).max(5),
   bed: bedId,
@@ -110,6 +122,8 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("bow"), id: publicId, phrase }),
   z.object({ kind: z.literal("gift"), id: publicId, gift: placedGiftSchema }),
   z.object({ kind: z.literal("lamp"), id: publicId, room: z.number().int().min(0).max(5), count: z.number().int().min(0) }),
+  /** 오늘의 집계가 바뀌었어요. 새 사람이 처음 오거나 평안이 모일 때만 보내요. */
+  z.object({ kind: z.literal("stats"), stats: statsSchema }),
   /** 병동 고양이가 찾아갈 침대예요. visit이 null이면 changedAt부터 찾아가기를 그만둬요. */
   z.object({
     kind: z.literal("cat-visit"),
@@ -128,6 +142,8 @@ export const deniedReasonSchema = z.enum([
   "no-target",
   "too-fast",
   "once-a-day",
+  /** 문병 링크는 침대에 누운 뒤 만들 수 있어요. */
+  "no-bed",
 ]);
 export type DeniedReason = z.infer<typeof deniedReasonSchema>;
 
@@ -149,6 +165,11 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     restored: z.boolean(),
     /** 내가 없는 동안 도착한 평안이에요. 보내고 나면 서버에서 지워요. */
     inbox: z.array(blessingCardSchema),
+    stats: statsSchema,
+    /** 문병 링크로 들어왔으면 누구에게 왔는지예요. 주인 닉네임은 링크를 가진 사람에게만 보내요. */
+    visit: z
+      .object({ ownerNickname: z.string().max(64), ownerPresent: z.boolean(), bed: bedId })
+      .nullable(),
   }),
   /** 받은 침대에 남겨져 있던 평안이에요. 보내고 나면 서버에서 지워요. */
   z.object({ v, type: z.literal("left-blessings"), bedId, cards: z.array(blessingCardSchema) }),
@@ -164,13 +185,25 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     problem: z.enum(["short", "long", "digits", "url", "email", "banned"]),
   }),
   z.object({ v, type: z.literal("room-full"), capacity: z.number().int(), next: z.number().int().min(1) }),
+  /** 내 문병 링크의 상태예요. token은 새로 만든 그 순간에만 주인에게 보내요. 서버에는 해시만 있어요. */
+  z.object({
+    v,
+    type: z.literal("visit-link"),
+    token: address.nullable(),
+    active: z.boolean(),
+    visits: z.number().int().min(0),
+  }),
+  /** 문병 링크로 들어오지 못했어요. closed면 일반 입장으로 이어 가고, busy면 들어가지 않아요. */
+  z.object({ v, type: z.literal("visit-denied"), reason: z.enum(["closed", "busy"]) }),
+  /** 내 침대로 문병객이 왔어요. 주인의 연결에만 보내요. */
+  z.object({ v, type: z.literal("visitor-arrived"), id: publicId, nickname: z.string().max(64) }),
   /** 보낸 메시지의 버전이 서버와 달라요. v에는 서버의 버전이 있어요. */
   z.object({ v, type: z.literal("version-mismatch") }),
   /** 선물과 불빛처럼 서버가 받지 않은 동작이에요. 요청 목록에는 없지만 안내 문구를 보여 주려고 더했어요. */
   z.object({
     v,
     type: z.literal("action-denied"),
-    action: z.enum(["bless", "bow", "gift", "lamp"]),
+    action: z.enum(["bless", "bow", "gift", "lamp", "visit-link"]),
     reason: deniedReasonSchema,
     /** 선물이면 어떤 선물이었는지예요. 오잎클로버 안내를 따로 보여 주려고요. */
     item: item.optional(),
@@ -190,3 +223,17 @@ export function parseMessage<T>(schema: z.ZodType<T>, raw: unknown): T | null {
   const result = schema.safeParse(value);
   return result.success ? result.data : null;
 }
+
+/** /api/visit/{토큰}의 답이에요. 열리는 링크면 주인 닉네임과 동물, 들어갈 병동을 알려 줘요. */
+export const visitPreviewSchema = z.union([
+  z.object({
+    v,
+    open: z.literal(true),
+    ownerNickname: z.string().max(64),
+    ownerAnimal: animalSchema,
+    ward: z.number().int().min(1).max(99),
+    instance: z.number().int().min(1).max(20),
+  }),
+  z.object({ v, open: z.literal(false) }),
+]);
+export type VisitPreview = z.infer<typeof visitPreviewSchema>;

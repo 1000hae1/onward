@@ -8,6 +8,17 @@ import { chooseGiftSlot, GIFT_SLOTS_PER_STAND, LAMPS_PER_WINDOW } from "./offeri
 import type { Guest, HelloMessage } from "./protocol.ts";
 import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
+/** 문병 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
+export interface VisitRole {
+  /** 주인의 guestId 해시예요. */
+  owner: string;
+  /** 문병 온 침대예요. 주인이 지금 누운 침대, 없으면 마지막에 있던 침대예요. */
+  bed: number;
+  /** directory에서 동시 3명을 세는 번호예요. 나갈 때 돌려줘요. */
+  session: string;
+  ownerNickname: string;
+}
+
 /** 연결 하나에 붙여 두는 정보예요. 하이버네이션 뒤에 이것으로 병실을 다시 만들어요. */
 export interface GuestRecord {
   id: string;
@@ -24,7 +35,13 @@ export interface GuestRecord {
   /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
-  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp", number>>;
+  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link", number>>;
+  /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
+  key?: string;
+  /** 문병 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
+  visit?: VisitRole;
+  /** 켜진 문병 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
+  linked?: boolean;
 }
 
 /** 같은 동작은 이만큼 간격을 둬요. */
@@ -66,21 +83,26 @@ export function admit(
   capacity: number,
   newId: string,
   returning: GuestRecord | null = null,
+  visit: { role: VisitRole; spot: { x: number; z: number } } | null = null,
 ): Admission {
   const nickname = checkNickname(hello.nickname);
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
   const same = others.find((record) => record.guestId === hello.guestId) ?? null;
+  const role = visit?.role ?? returning?.visit ?? null;
+  // 문병객은 평상복에 꽃다발을 들어요. 화면에서 무엇을 골랐든 서버가 정해요.
+  const outfit = role ? "visitor" : hello.outfit;
   if (returning) {
-    const bed = hello.outfit === "visitor" ? null : returning.bed;
+    const bed = outfit === "visitor" ? null : returning.bed;
     return {
       kind: "admitted",
       replaces: same?.id ?? null,
       restored: true,
       record: {
         ...returning,
+        ...(role ? { visit: role } : {}),
         guestId: hello.guestId,
         animal: hello.animal,
-        outfit: hello.outfit,
+        outfit,
         nickname: nickname.value,
         withCat: hello.withCat,
         bed,
@@ -88,8 +110,13 @@ export function admit(
       },
     };
   }
-  const count = others.length + awayCount - (same ? 1 : 0);
-  if (count >= capacity) return { kind: "full" };
+  // 문병객은 정원에 세지 않아요. 남은 자리도 문병객을 빼고 세요.
+  if (!visit) {
+    const patients = others.filter((record) => !record.visit);
+    const count = patients.length + awayCount - (same && !same.visit ? 1 : 0);
+    if (count >= capacity) return { kind: "full" };
+  }
+  const start = visit?.spot ?? PLAYER_START;
   return {
     kind: "admitted",
     replaces: same?.id ?? null,
@@ -98,11 +125,12 @@ export function admit(
       id: newId,
       guestId: hello.guestId,
       animal: hello.animal,
-      outfit: hello.outfit,
+      outfit,
       nickname: nickname.value,
       withCat: hello.withCat,
-      x: PLAYER_START.x,
-      z: PLAYER_START.z,
+      x: start.x,
+      z: start.z,
+      ...(visit ? { visit: visit.role } : {}),
       bed: null,
       address: "",
       lyingSince: null,
@@ -118,15 +146,17 @@ export function updateProfile(
 ): { kind: "rejected"; problem: NicknameProblem } | { kind: "updated"; record: GuestRecord } {
   const nickname = checkNickname(hello.nickname);
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
+  // 링크로 온 문병객은 옷을 바꿀 수 없어요.
+  const outfit = record.visit ? "visitor" : hello.outfit;
   // 문병객으로 바꾸면 누워 있던 침대를 비워요.
-  const bed = hello.outfit === "visitor" ? null : record.bed;
+  const bed = outfit === "visitor" ? null : record.bed;
   const lyingSince = bed === null ? null : record.lyingSince;
   return {
     kind: "updated",
     record: {
       ...record,
       animal: hello.animal,
-      outfit: hello.outfit,
+      outfit,
       nickname: nickname.value,
       withCat: hello.withCat,
       bed,
@@ -162,7 +192,7 @@ export function claimBed(
   bed: number,
   nowMs: number,
 ): { granted: boolean; record: GuestRecord } {
-  if (record.outfit !== "patient") return { granted: false, record };
+  if (record.outfit !== "patient" || record.visit) return { granted: false, record };
   const taken = guests.some((other) => other.id !== record.id && other.bed === bed);
   if (taken) return { granted: false, record };
   // 같은 침대를 다시 받으면 누운 시각은 그대로예요.

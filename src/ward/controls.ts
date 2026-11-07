@@ -150,6 +150,8 @@ export interface PlayerControls {
   correctDestination(x: number, z: number): void;
   /** 서버가 침대를 내주지 않으면 일어나요. 다시 이어졌을 때 침대를 잃었을 때예요. */
   forceGetUp(): void;
+  /** 수면 모드에서는 카메라를 지금 자리에 고정해요. 드래그와 확대를 받지 않아요. */
+  setCameraLocked(locked: boolean): void;
   /** 길찾기 격자예요. 다른 사람의 걸음을 그릴 때 함께 써요. */
   readonly nav: NavGrid;
   /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
@@ -159,6 +161,8 @@ export interface PlayerControls {
   /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
   whenUp(action: () => void): void;
   faceToward(x: number, z: number): void;
+  /** 문병 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
+  placeAt(x: number, z: number, faceX: number, faceZ: number): void;
   /** 빛과 선물이 떠나는 손 앞 자리예요. */
   handSpot(): { x: number; y: number; z: number };
   /** 화면에 보이면 머리 자리를 target에 쓰고, 숨어 있으면 null을 돌려줘요. */
@@ -497,6 +501,9 @@ export function createPlayerControls(
       applyStep(getUp(flow, BED_TRANSITION_SECONDS));
     },
     nav,
+    setCameraLocked(locked) {
+      controls.enabled = !locked;
+    },
     setBedPicker(picker) {
       bedPicker = picker;
     },
@@ -513,6 +520,28 @@ export function createPlayerControls(
     },
     faceToward(x, z) {
       yawGoal = Math.atan2(x - position.x, z - position.z);
+    },
+    placeAt(x, z, faceX, faceZ) {
+      const dx = x - position.x;
+      const dz = z - position.z;
+      afterUp = null;
+      flow = FREE;
+      path = [];
+      glance = null;
+      position = { x, z };
+      shownX = x;
+      shownZ = z;
+      desired.x += dx;
+      desired.z += dz;
+      controls.target.x += dx;
+      controls.target.z += dz;
+      yaw = Math.atan2(faceX - x, faceZ - z);
+      yawGoal = yaw;
+      // 카메라는 캐릭터 뒤에서 침대 쪽을 봐요.
+      orbitToward(yaw + Math.PI, 1);
+      avatar.place(x, z, yaw);
+      shadow.position.x = x;
+      shadow.position.z = z;
     },
     handSpot() {
       return {

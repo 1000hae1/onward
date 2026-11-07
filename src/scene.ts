@@ -32,10 +32,31 @@ import { buildWard } from "./ward/room";
 import { buildSky } from "./ward/sky";
 import { createSoftCircleTexture } from "./ward/soft-texture";
 import { currentSlot } from "./ward/time-of-day";
+import {
+  countNight,
+  lightsOutText,
+  nextSlotChange,
+  NIGHT_STAY_MS,
+  nightKey,
+  nightsText,
+  parseNightRecord,
+  shouldPause,
+  statsLine,
+} from "../shared/daily";
+import type { NightRecord } from "../shared/daily";
+import type { WardStats } from "../shared/protocol";
+import { createNotice } from "./ui/notice";
+import { createSleepMode } from "./ui/sleep-mode";
+import { readClockShiftMs } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
+import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
+import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 
 const MAX_FRAME_SECONDS = 0.05;
-const SLOT_CHECK_SECONDS = 60;
+/** 수면 모드에서는 화면이 거의 검으니 초당 4번만 그려요. */
+const SLEEP_FRAME_SECONDS = 0.25;
+const SLEEP_MAX_FRAME_SECONDS = 0.3;
+const NIGHTS_KEY = "onward.nights";
 const PORTRAIT_FOV = 68;
 const LANDSCAPE_FOV = 54;
 /** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
@@ -47,7 +68,8 @@ const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
 
 /** 서버가 동작을 받지 않았을 때의 안내예요. */
-const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast" | "once-a-day", string> = {
+const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast" | "once-a-day" | "no-bed", string> = {
+  "no-bed": "침대에 누운 뒤 만들 수 있어요.",
   "once-a-day": "그분께는 오늘 이미 남겼어요. 내일 또 남겨 주세요.",
   "out-of-season": "귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요.",
   "gift-limit": "오늘은 선물을 넉넉히 놓았어요. 내일 또 놓아 주세요.",
@@ -162,11 +184,27 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let entered = false;
 
   const params = readWardParams(window.location.search);
-  const hud = element("hud");
+  /** 문병 링크로 따라 들어온 토큰이에요. 링크를 미리 확인한 뒤에 입장 화면을 열어요. */
+  const visitToken = takeVisitToken();
+  /** 링크가 열려서 문병 온 주인의 닉네임이에요. 일반 입장이면 null이에요. */
+  let visitOwner: string | null = null;
+  /** 서버가 문병객으로 받아 준 동안 true예요. */
+  let visitingNow = false;
+  const hudMain = element("hud-main");
+  const hudStats = element("hud-stats");
   const setHud = (count: number | null): void => {
-    if (hud) hud.textContent = wardLabel(params.ward, count, WARD_CAPACITY);
+    if (hudMain) hudMain.textContent = wardLabel(client.ward, count, WARD_CAPACITY);
   };
-  setHud(null);
+  /** 오늘의 집계예요. 한국 날짜가 바뀌면 화면에서도 0부터 다시 세요. */
+  let statsDay: string | null = null;
+  const setStats = (stats: WardStats | null): void => {
+    if (!hudStats) return;
+    statsDay = stats ? koreanDay(new Date(serverNow())) : null;
+    hudStats.textContent = stats ? statsLine(stats.visitors, stats.blessings) : "";
+    hudStats.hidden = stats === null;
+  };
+  const noticeRoot = element("notice");
+  const notice = noticeRoot ? createNotice(noticeRoot) : null;
   const toast = (text: string): void => actionBar?.showToast(text);
   let warnedOffline = false;
 
@@ -198,6 +236,19 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const client = createWardClient(params, loadGuestId(), {
     onSnapshot(snapshot) {
       myId = snapshot.you;
+      visitingNow = snapshot.visit !== null;
+      if (snapshot.visit && !snapshot.restored) {
+        // 주인 침대 곁에서 바로 시작해요. 서버가 정한 자리예요.
+        const me = snapshot.guests.find((guest) => guest.id === snapshot.you);
+        const bed = BEDS[snapshot.visit.bed];
+        if (me && bed) player.placeAt(me.x, me.z, bed.x, bed.z);
+        const owner = snapshot.visit.ownerNickname;
+        notice?.show(
+          snapshot.visit.ownerPresent
+            ? `${owner}님 곁에 왔어요.`
+            : `${owner}님은 지금 자리에 없어요. 남긴 평안과 선물은 돌아오시면 전해져요.`,
+        );
+      }
       remotes.reset(snapshot.guests, snapshot.you);
       remember(snapshot.guests, snapshot.you);
       // 내가 없는 동안 도착한 평안이 있으면 들어오자마자 보여 줘요.
@@ -207,8 +258,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
       serverVisits.clear();
       for (const visit of snapshot.catVisits) serverVisits.set(visit.room, { bed: visit.bed, at: visit.at, until: null });
       setHud(remotes.count + 1);
+      setStats(snapshot.stats);
       setBanner(null);
       warnedOffline = false;
+      // 서버 시계를 받았으니 다음 시간대 바뀜도 다시 계산해요.
+      refreshSlot(false);
       // 서버가 기억하는 내 자리와 이 화면의 자리가 다를 때만 맞춰요. 30초 안에 돌아왔으면 대개 같아요.
       const me = snapshot.guests.find((guest) => guest.id === snapshot.you);
       const bed = player.claimedBed;
@@ -234,6 +288,10 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
       if (event.kind === "lamp") {
         offerings.setLampCount(event.room, event.count);
+        return;
+      }
+      if (event.kind === "stats") {
+        setStats(event.stats);
         return;
       }
       if (event.kind === "cat-visit") {
@@ -271,14 +329,39 @@ export function startScene(canvas: HTMLCanvasElement): void {
     onLeftSaved() {
       toast("남겨두었어요. 다음에 들어오시면 전해져요.");
     },
+    onVisitDenied(reason) {
+      if (reason === "busy") {
+        // 들어가지 않았어요. 입장 화면에서 조금 뒤에 다시 눌러 들어올 수 있어요.
+        reopenEntry(VISIT_BUSY_TEXT);
+        return;
+      }
+      // 링크가 그사이 꺼졌어요. 서버는 일반 입장으로 이어 줬어요.
+      forgetVisitToken();
+      visitOwner = null;
+      notice?.show(VISIT_CLOSED_TEXT, 8);
+    },
+    onVisitLink(status) {
+      actionBar?.showVisitLink(status);
+    },
+    onVisitorArrived(nickname) {
+      notice?.show(visitorArrivedText(nickname));
+    },
     onStatus(status) {
       if (status === "online" || status === "connecting") return;
+      if (status === "paused") {
+        setHud(null);
+        setStats(null);
+        remotes.reset([], "");
+        setBanner("오래 쉬셔서 연결을 잠시 닫았어요. 화면을 누르면 다시 이어져요.");
+        return;
+      }
       if (status === "reconnecting") {
         // 다른 사람과 고양이는 그대로 두고 기다려요. 다시 이어지면 snapshot으로 맞춰요.
         setBanner("연결이 잠시 끊겼어요. 다시 이어지는 중이에요.");
         return;
       }
       setHud(null);
+      setStats(null);
       remotes.reset([], "");
       if (status === "outdated") {
         setBanner("새 버전이 나왔어요. 새로고침해 주세요.");
@@ -295,6 +378,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   serverNow = () => client.serverNow();
   online = () => client.online;
+  setHud(null);
 
   player.setNet({
     askBed: (bed) => client.askBed(bed),
@@ -311,8 +395,15 @@ export function startScene(canvas: HTMLCanvasElement): void {
     labels?.setName(next.nickname);
   };
 
+  /** 문병객으로 고른 평상복은 저장하지 않아요. 다음에 일반으로 들어올 때는 원래 옷이에요. */
+  const persist = (next: Profile): void => {
+    saveProfile(visitOwner ? { ...next, outfit: profile.outfit } : next);
+  };
+
+  let enteredAt: number | null = null;
   const enterWard = (chosen: Profile): void => {
-    saveProfile(chosen);
+    enteredAt ??= performance.now();
+    persist(chosen);
     applyProfile(chosen);
     pickerShift = null;
     player.setFacingCamera(false);
@@ -325,8 +416,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (settingsRoot) {
       createSettings(settingsRoot, {
         initial: chosen,
+        lockOutfit: visitOwner !== null,
         onChange: (next) => {
-          saveProfile(next);
+          persist(next);
           applyProfile(next);
           client.hello(next);
         },
@@ -346,6 +438,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         offerings,
         labels,
         stillMotion,
+        visiting: () => visitingNow,
         people: () =>
           client.online
             ? metList.people.map((person) => {
@@ -363,6 +456,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
           lamp: () => client.send({ type: "lamp" }),
+          visitLink: (action) => client.send({ type: "visit-link", action }),
         },
       });
     }
@@ -380,20 +474,97 @@ export function startScene(canvas: HTMLCanvasElement): void {
       onPreview: applyProfile,
       onEnter: enterWard,
       message,
+      ...visitEntry(),
     });
   };
 
-  if (entryRoot) {
-    player.setFacingCamera(true);
-    player.setInputEnabled(false);
-    createEntryScreen(entryRoot, { initial: profile, onPreview: applyProfile, onEnter: enterWard });
+  /** 문병 링크로 왔으면 제목이 바뀌고 옷은 평상복이에요. */
+  const visitEntry = (): { title?: string; lockOutfit?: "visitor" } =>
+    visitOwner ? { title: visitTitle(visitOwner), lockOutfit: "visitor" } : {};
+
+  const openFirstEntry = (message?: string): void => {
+    if (entryRoot) {
+      player.setFacingCamera(true);
+      player.setInputEnabled(false);
+      createEntryScreen(entryRoot, { initial: profile, onPreview: applyProfile, onEnter: enterWard, message, ...visitEntry() });
+    } else {
+      enterWard(profile);
+    }
+  };
+
+  if (visitToken) {
+    // 링크를 먼저 확인해요. 열리면 주인이 있는 병동으로 가고, 아니면 일반 입장으로 안내해요.
+    void previewVisit(visitToken).then((preview) => {
+      if (preview?.open) {
+        visitOwner = preview.ownerNickname;
+        client.setVisit({ token: visitToken, ward: preview.ward, instance: preview.instance });
+        setHud(null);
+        openFirstEntry();
+        return;
+      }
+      // 서버에 닿지 않았을 때는 다음에 다시 확인하려고 토큰을 남겨 둬요.
+      if (preview) forgetVisitToken();
+      openFirstEntry(preview ? VISIT_CLOSED_TEXT : undefined);
+    });
   } else {
-    enterWard(profile);
+    openFirstEntry();
   }
 
-  const readSlot = () => currentSlot(new Date(), window.location.search);
+  /** 화면에 보이는 시각이에요. 서버 시계에 테스트용 ?clockShift(분)만큼 더해요. 병동 고양이는 이 값을 쓰지 않아요. */
+  const clockShiftMs = readClockShiftMs(window.location.search);
+  const displayNow = (): number => serverNow() + clockShiftMs;
+  const readSlot = () => currentSlot(new Date(displayNow()), window.location.search);
   let slot = readSlot();
+  let nextChangeAt = nextSlotChange(displayNow());
   lighting.setSlot(slot, true);
+
+  /** 지금 누워 있는 사람 수예요. 나도 포함해요. */
+  const sleepers = (): number => remotes.lyingCount() + (player.lyingBed !== null ? 1 : 0);
+
+  /** 시간대가 바뀌었으면 조명을 바꾸고, 소등이 되는 순간이면 안내해요. */
+  function refreshSlot(announce: boolean): void {
+    nextChangeAt = nextSlotChange(displayNow());
+    const next = readSlot();
+    if (next === slot) return;
+    slot = next;
+    lighting.setSlot(slot, reduceMotion.matches || !announce);
+    if (announce && slot === "night" && entered) notice?.show(lightsOutText(sleepers()));
+  }
+
+  // 함께한 밤이에요. 밤(22시~6시)에 1분 넘게 머물면 그 밤을 한 번 세요. 줄지 않아요.
+  let nights: NightRecord = parseNightRecord(readStorage(NIGHTS_KEY));
+  /** 이번 밤에 머물기 시작한 실제 시각이에요. 느린 기기에서도 1분을 바르게 재려고 화면 시간 대신 써요. */
+  let nightSince: number | null = null;
+  let stayingNight: string | null = null;
+  let greeted = false;
+
+  // 오래 누르지 않으면 연결을 잠시 닫아요. 수면 모드에서는 닫지 않아요.
+  let lastInputMs = Date.now();
+  const noteInput = (): void => {
+    lastInputMs = Date.now();
+    if (client.paused) client.resume();
+  };
+  for (const type of ["pointerdown", "keydown", "wheel"] as const) {
+    window.addEventListener(type, noteInput, { capture: true, passive: true });
+  }
+
+  const sleepRoot = element("sleep-root");
+  const sleepOverlay = element("sleep-overlay");
+  const sleep =
+    sleepRoot && sleepOverlay
+      ? createSleepMode({
+          buttonRoot: sleepRoot,
+          overlay: sleepOverlay,
+          onChange: (sleeping) => {
+            // 카메라는 내 침대를 비추는 자리에 고정하고, 서버로는 아무것도 보내지 않아요.
+            player.setCameraLocked(sleeping);
+            player.setInputEnabled(!sleeping);
+            lastInputMs = Date.now();
+          },
+        })
+      : null;
+  let sleepWaitMs = 0;
+  let lastTickMs: number | null = null;
 
   const resize = (): void => {
     const width = window.innerWidth;
@@ -410,22 +581,59 @@ export function startScene(canvas: HTMLCanvasElement): void {
   window.addEventListener("resize", resize);
   resize();
 
+  /** 1초마다 한 번씩 살피는 것들이에요. */
+  function tickEverySecond(): void {
+    const now = displayNow();
+    // 입장한 뒤 서버 소식을 받으면(또는 3초 뒤 혼자 쓰는 화면이면) 밤 인사를 한 번 해요.
+    if (entered && !greeted && (client.online || (enteredAt !== null && performance.now() - enteredAt > 3000))) {
+      greeted = true;
+      const night = nightKey(now);
+      if (night) notice?.show(lightsOutText(sleepers()));
+      const text = nightsText(nights, night);
+      if (text) notice?.show(text, 4);
+    }
+    // 밤에 1분 넘게 머물면 그 밤을 세요.
+    const night = entered ? nightKey(now) : null;
+    if (night !== stayingNight) {
+      stayingNight = night;
+      nightSince = Date.now();
+    }
+    if (night && nights.lastNight !== night && nightSince !== null) {
+      if (Date.now() - nightSince >= NIGHT_STAY_MS) {
+        nights = countNight(nights, night);
+        writeStorage(NIGHTS_KEY, JSON.stringify(nights));
+      }
+    }
+    // 한국 날짜가 바뀌면 오늘의 집계를 0부터 다시 세요.
+    if (statsDay && statsDay !== koreanDay(new Date(serverNow()))) {
+      setStats({ visitors: 0, blessings: 0, lamps: 0 });
+    }
+    if (entered && client.online && shouldPause(lastInputMs, Date.now(), sleep?.sleeping ?? false)) {
+      client.pause();
+    }
+  }
+
   const headPoint = new Vector3();
   let lastMs: number | null = null;
-  let sinceSlotCheck = 0;
 
   renderer.setAnimationLoop((timeMs) => {
-    const dt = lastMs === null ? 0 : Math.min(MAX_FRAME_SECONDS, (timeMs - lastMs) / 1000);
+    const rawDt = lastMs === null ? 0 : (timeMs - lastMs) / 1000;
     lastMs = timeMs;
+    let dt = Math.min(MAX_FRAME_SECONDS, rawDt);
+    if (sleep?.sleeping) {
+      sleepWaitMs += rawDt;
+      if (sleepWaitMs < SLEEP_FRAME_SECONDS) return;
+      dt = Math.min(SLEEP_MAX_FRAME_SECONDS, sleepWaitMs);
+      sleepWaitMs = 0;
+    }
 
-    sinceSlotCheck += dt;
-    if (sinceSlotCheck >= SLOT_CHECK_SECONDS) {
-      sinceSlotCheck = 0;
-      const next = readSlot();
-      if (next !== slot) {
-        slot = next;
-        lighting.setSlot(slot, reduceMotion.matches);
-      }
+    // 소등은 다음 바뀜 시각과 견주기만 해요. 매 프레임 시계를 해석하지 않아요.
+    if (displayNow() >= nextChangeAt) refreshSlot(true);
+
+    // 1초마다 실제 시계로 살펴요. 프레임이 느려도 늦어지지 않아요.
+    if (lastTickMs === null || timeMs - lastTickMs >= 1000) {
+      lastTickMs = timeMs;
+      tickEverySecond();
     }
 
     applyViewShift(dt);
@@ -446,6 +654,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     offerings.update(dt, reduceMotion.matches);
     actionBar?.update(dt);
     blessingCards?.update(dt);
+    notice?.update(dt);
+    sleep?.setLying(player.lyingBed !== null);
     if (pendingLeft) {
       if (player.lyingBed === pendingLeft.bedId) {
         blessingCards?.showBedCards(pendingLeft.cards, serverNow());
@@ -465,4 +675,20 @@ export function startScene(canvas: HTMLCanvasElement): void {
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
   });
+}
+
+function readStorage(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // 저장하지 못해도 이번 방문 동안은 그대로예요.
+  }
 }
