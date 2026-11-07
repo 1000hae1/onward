@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { defaultProfile, parseProfile } from "../src/ui/profile.ts";
 
 const good = { species: "otter", outfit: "visitor", nickname: "졸린 수달", nicknameAuto: true, withCat: true };

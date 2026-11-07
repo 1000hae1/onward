@@ -9,7 +9,7 @@
     "preview": "npm run build && vite preview",
     "deploy": "npm run build && wrangler deploy",
     "typecheck": "tsc -b",
-    "test": "node --test \"tests/*.test.ts\"",
+    "test": "vitest run",
     "cf-typegen": "wrangler types"
   },
   "dependencies": {
@@ -21,6 +21,7 @@
     "@types/three": "^0.187.0",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",
+    "vitest": "^5.1.0",
     "wrangler": "^4.158.0"
   }
 }

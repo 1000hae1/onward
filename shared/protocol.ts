@@ -68,6 +68,12 @@ export const guestSchema = z.object({
 });
 export type Guest = z.infer<typeof guestSchema>;
 
+const catVisitSchema = z.object({
+  room: z.number().int().min(0).max(5),
+  bed: bedId,
+  at: z.number().finite(),
+});
+
 const placedGiftSchema = z.object({
   stand: bedId,
   slot: z.number().int().min(0).max(1),
@@ -86,6 +92,13 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("bow"), id: publicId, phrase }),
   z.object({ kind: z.literal("gift"), id: publicId, gift: placedGiftSchema }),
   z.object({ kind: z.literal("lamp"), id: publicId, room: z.number().int().min(0).max(5), count: z.number().int().min(0) }),
+  /** 병동 고양이가 찾아갈 침대예요. visit이 null이면 changedAt부터 찾아가기를 그만둬요. */
+  z.object({
+    kind: z.literal("cat-visit"),
+    room: z.number().int().min(0).max(5),
+    visit: catVisitSchema.nullable(),
+    changedAt: z.number().finite(),
+  }),
 ]);
 export type WardEvent = z.infer<typeof wardEventSchema>;
 
@@ -110,6 +123,11 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     lamps: z.array(z.number().int().min(0)),
     /** 귤·홍시·호빵을 놓을 수 있는 철인지예요. */
     seasonalGifts: z.boolean(),
+    /** 서버 시각이에요. 병동 고양이를 모두 같은 시계로 움직이려고 보내요. */
+    serverNow: z.number().finite(),
+    catVisits: z.array(catVisitSchema),
+    /** 30초 안에 돌아와 침대와 자리를 그대로 받았는지예요. */
+    restored: z.boolean(),
   }),
   z.object({ v, type: z.literal("event"), event: wardEventSchema }),
   z.object({ v, type: z.literal("position-corrected"), x: coordinate, z: coordinate }),
@@ -120,7 +138,9 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     type: z.literal("nickname-rejected"),
     problem: z.enum(["short", "long", "digits", "url", "email", "banned"]),
   }),
-  z.object({ v, type: z.literal("room-full"), capacity: z.number().int() }),
+  z.object({ v, type: z.literal("room-full"), capacity: z.number().int(), next: z.number().int().min(1) }),
+  /** 보낸 메시지의 버전이 서버와 달라요. v에는 서버의 버전이 있어요. */
+  z.object({ v, type: z.literal("version-mismatch") }),
   /** 선물과 불빛처럼 서버가 받지 않은 동작이에요. 요청 목록에는 없지만 안내 문구를 보여 주려고 더했어요. */
   z.object({ v, type: z.literal("action-denied"), action: z.enum(["bless", "bow", "gift", "lamp"]), reason: deniedReasonSchema }),
 ]);

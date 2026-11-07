@@ -1,16 +1,7 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
-import {
-  CAT_GREET_GAP_SECONDS,
-  CAT_HOP_SECONDS,
-  CAT_VISIT_AFTER_SECONDS,
-  catCanGreet,
-  createCatBrain,
-  decideCat,
-  shouldGreet,
-  startGreet,
-} from "../shared/cat-brain.ts";
-import type { CatBrain, CatFacts, CatPlan } from "../shared/cat-brain.ts";
+import { test } from "vitest";
+import { CAT_GREET_GAP_SECONDS, catFrameAt, CAT_SLOT_MS, shouldGreet, slotGoal, slotOf } from "../src/cat/cat-path.ts";
+import type { CatRoom } from "../src/cat/cat-path.ts";
 import { addCrumb, followTrail, trailLength } from "../src/ward/companion-trail.ts";
 import {
   canAddLamp,
@@ -38,129 +29,119 @@ import {
 import { CAT_COATS, getCatKit, catTriangles, getCatMaterial } from "../src/cat/cat-kit.ts";
 import { blinkAmount, composeCatPose, createCatPose } from "../src/cat/cat-pose.ts";
 
-const beds = [0, 1, 2, 3, 4, 5];
-const facts = (over: Partial<CatFacts> = {}): CatFacts => ({
-  now: 0,
-  beds,
-  takenBeds: [],
-  lying: null,
-  alone: true,
-  arrived: false,
-  spotCount: 6,
-  ...over,
-});
-const brainWith = (plan: CatPlan): CatBrain => ({ seed: 7, plan });
-
-test("시드가 같으면 같은 순서로 움직여요. 서버와 화면이 같은 결과를 내기 위해서예요", () => {
-  const run = (seed: number): string[] => {
-    let brain = createCatBrain(seed, 0);
-    const log: string[] = [];
-    for (let now = 0; now < 600; now += 1) {
-      brain = decideCat(brain, facts({ now, arrived: true }));
-      log.push(JSON.stringify(brain.plan));
-    }
-    return log;
-  };
-  assert.deepEqual(run(11), run(11));
-  assert.notDeepEqual(run(11), run(12));
-});
-
-test("바뀔 일이 없으면 같은 객체를 돌려줘요. 계획이 바뀔 때만 알리기 위해서예요", () => {
-  const brain = brainWith({ kind: "pause", until: 10 });
-  assert.equal(decideCat(brain, facts({ now: 5 })), brain);
-  const walking = brainWith({ kind: "stroll", spot: 1 });
-  assert.equal(decideCat(walking, facts({ now: 5 })), walking);
-});
-
-test("쉬고 나면 걷거나 빈 침대로 가요", () => {
-  const seen = new Set<string>();
-  for (let seed = 0; seed < 200; seed++) {
-    const next = decideCat({ seed, plan: { kind: "pause", until: 0 } }, facts({ now: 1 }));
-    seen.add(next.plan.kind);
-    if (next.plan.kind === "stroll") assert.ok(next.plan.spot >= 0 && next.plan.spot < 6);
-  }
-  assert.deepEqual([...seen].sort(), ["stroll", "toBed"]);
-});
-
-test("누가 쓰는 침대로는 쉬러 가지 않아요", () => {
-  for (let seed = 0; seed < 200; seed++) {
-    const next = decideCat(
-      { seed, plan: { kind: "pause", until: 0 } },
-      facts({ now: 1, takenBeds: [0, 1, 2, 3, 4] }),
-    );
-    if (next.plan.kind === "toBed") assert.equal(next.plan.bed, 5);
-  }
-});
-
-test("쉬는 침대에 사람이 오면 내려와요", () => {
-  const resting = brainWith({ kind: "onBed", bed: 2, purpose: "rest", until: 100 });
-  assert.equal(decideCat(resting, facts({ now: 5, takenBeds: [2] })).plan.kind, "offBed");
-  assert.equal(decideCat(resting, facts({ now: 5 })), resting);
-  assert.equal(decideCat(resting, facts({ now: 100 })).plan.kind, "offBed");
-});
-
-test("쉬러 가는 길에 침대에 사람이 오면 멈춰요", () => {
-  const going = brainWith({ kind: "toBed", bed: 2, purpose: "rest" });
-  assert.equal(decideCat(going, facts({ takenBeds: [2] })).plan.kind, "pause");
-});
-
-test("2분이 되기 전에는 찾아오지 않아요", () => {
-  const brain = brainWith({ kind: "pause", until: 500 });
-  const lying = { bed: 3, since: 0 };
-  assert.equal(decideCat(brain, facts({ now: CAT_VISIT_AFTER_SECONDS - 1, lying })), brain);
-  const next = decideCat(brain, facts({ now: CAT_VISIT_AFTER_SECONDS, lying }));
-  assert.deepEqual(next.plan, { kind: "toBed", bed: 3, purpose: "visit" });
-});
-
-test("다른 병실에 누워 있거나 혼자가 아니면 찾아오지 않아요", () => {
-  const brain = brainWith({ kind: "pause", until: 500 });
-  const now = CAT_VISIT_AFTER_SECONDS * 2;
-  assert.equal(decideCat(brain, facts({ now, lying: { bed: 99, since: 0 } })), brain);
-  assert.equal(decideCat(brain, facts({ now, lying: { bed: 3, since: 0 }, alone: false })), brain);
-});
-
-test("다른 침대에서 쉬던 고양이는 내려온 뒤에 찾아와요", () => {
-  const now = CAT_VISIT_AFTER_SECONDS;
-  const lying = { bed: 3, since: 0 };
-  const resting = brainWith({ kind: "onBed", bed: 1, purpose: "rest", until: 900 });
-  const off = decideCat(resting, facts({ now, lying }));
-  assert.deepEqual(off.plan, { kind: "offBed", bed: 1, until: now + CAT_HOP_SECONDS });
-  assert.equal(decideCat(off, facts({ now: now + 0.1, lying })), off);
-  // 바닥에 내려선 다음 판단에서 찾아가요.
-  const landed = decideCat(off, facts({ now: now + CAT_HOP_SECONDS, lying }));
-  assert.equal(landed.plan.kind, "pause");
-  assert.deepEqual(decideCat(landed, facts({ now: now + CAT_HOP_SECONDS, lying })).plan, {
-    kind: "toBed",
-    bed: 3,
-    purpose: "visit",
+const roomOf = (index: number): CatRoom => {
+  const room = ROOMS[index];
+  const rect = roomRect(room);
+  const nav = createNavGrid({
+    areas: [{ minX: rect.minX + 0.17, maxX: rect.maxX - 0.17, minZ: rect.minZ + 0.17, maxZ: rect.maxZ - 0.17 }],
+    obstacles: OBSTACLES,
+    radius: 0.14,
+    cellSize: 0.2,
   });
+  return {
+    roomIndex: index,
+    spots: catSpots(room),
+    beds: BEDS.flatMap((bed, id) => (bed.roomIndex === index ? [id] : [])),
+    path: (from, to) => {
+      const found = nav.findPath(from, to);
+      return found.length > 0 ? [...found.slice(0, -1), to] : [to];
+    },
+  };
+};
+const free = () => false;
+const T0 = Date.UTC(2026, 10, 7, 3, 0, 0);
+
+test("같은 병실, 같은 시각이면 어느 화면에서 계산해도 같은 자리예요", () => {
+  // 화면 둘을 흉내 내려고 길 캐시도 따로 만들어요.
+  const a = roomOf(2);
+  const b = roomOf(2);
+  for (let t = T0; t < T0 + CAT_SLOT_MS * 30; t += 731) {
+    assert.deepEqual(catFrameAt(a, t, free, null), catFrameAt(b, t, free, null));
+  }
 });
 
-test("도착하면 발치에 머물다가 내가 일어나면 내려가요", () => {
-  const lying = { bed: 3, since: 0 };
-  const now = 200;
-  const going = brainWith({ kind: "toBed", bed: 3, purpose: "visit" });
-  const seated = decideCat(going, facts({ now, lying, arrived: true }));
-  assert.deepEqual(seated.plan, { kind: "onBed", bed: 3, purpose: "visit", until: null });
-  assert.equal(decideCat(seated, facts({ now: 9999, lying })), seated);
-  assert.equal(decideCat(seated, facts({ now: 9999 })).plan.kind, "offBed");
+test("병실이 다르면 고양이마다 다르게 움직여요", () => {
+  const goals = (index: number) => Array.from({ length: 40 }, (_, k) => JSON.stringify(slotGoal(roomOf(index), slotOf(T0) + k)));
+  assert.notDeepEqual(goals(0), goals(1));
 });
 
-test("찾아가는 길에 내가 일어나면 가던 길을 멈춰요", () => {
-  const going = brainWith({ kind: "toBed", bed: 3, purpose: "visit" });
-  assert.equal(decideCat(going, facts({ now: 200 })).plan.kind, "pause");
+test("칸이 바뀌는 순간에도 순간이동하지 않아요", () => {
+  for (const index of [0, 3, 5]) {
+    const room = roomOf(index);
+    for (let k = 1; k < 200; k++) {
+      const boundary = (slotOf(T0) + k) * CAT_SLOT_MS;
+      const before = catFrameAt(room, boundary - 1, free, null);
+      const after = catFrameAt(room, boundary + 1, free, null);
+      assert.ok(Math.hypot(before.x - after.x, before.z - after.z) < 0.05, `${index} ${k}`);
+      assert.ok(Math.abs(before.y - after.y) < 0.05, `${index} ${k} y`);
+    }
+  }
 });
 
-test("바닥에 있을 때만 코를 맞대고, 너무 자주 하지 않아요", () => {
-  assert.equal(catCanGreet({ kind: "pause", until: 1 }), true);
-  assert.equal(catCanGreet({ kind: "stroll", spot: 1 }), true);
-  assert.equal(catCanGreet({ kind: "onBed", bed: 1, purpose: "rest", until: 1 }), false);
-  assert.equal(catCanGreet({ kind: "offBed", bed: 1, until: 1 }), false);
+test("어느 자리에서 어느 자리로 가든 한 칸 안에 도착해요", () => {
+  for (const index of [0, 1, 2, 3, 4, 5]) {
+    const room = roomOf(index);
+    for (let k = 0; k < 300; k++) {
+      const end = (slotOf(T0) + k + 1) * CAT_SLOT_MS - 1;
+      const frame = catFrameAt(room, end, free, null);
+      assert.notEqual(frame.pose, "walk", `${index} ${k}`);
+      assert.notEqual(frame.pose, "hop", `${index} ${k}`);
+    }
+  }
+});
+
+test("가끔 침대에서 쉬고, 누가 쓰는 침대에서는 쉬지 않아요", () => {
+  const room = roomOf(1);
+  let resting = 0;
+  for (let k = 0; k < 400; k++) {
+    const end = (slotOf(T0) + k + 1) * CAT_SLOT_MS - 1;
+    const goal = slotGoal(room, slotOf(end));
+    const frame = catFrameAt(room, end, free, null);
+    if (goal.kind === "rest") {
+      resting++;
+      assert.equal(frame.pose, "curl");
+      assert.ok(frame.y > 0.5);
+      const taken = catFrameAt(room, end, (bed) => bed === goal.bed, null);
+      assert.equal(taken.y, 0);
+      assert.equal(taken.pose, "sit");
+    }
+  }
+  assert.ok(resting > 40 && resting < 160, `${resting}`);
+});
+
+test("서버가 정한 방문 시각이 되면 그 침대 발치로 가서 앉아요", () => {
+  const room = roomOf(3);
+  const bed = room.beds[2];
+  const visit = { bed, at: T0 + 5000, until: null };
+  assert.deepEqual(catFrameAt(room, T0 + 4000, free, visit), catFrameAt(room, T0 + 4000, free, null));
+  const seated = catFrameAt(room, T0 + 5000 + CAT_SLOT_MS, (b) => b === bed, visit);
+  const seat = bedCatSeat(BEDS[bed], true);
+  assert.ok(Math.hypot(seated.x - seat.x, seated.z - seat.z) < 1e-9);
+  assert.equal(seated.pose, "sit");
+  assert.ok(seated.y > 0.5);
+  // 몇 시간이 지나도 그대로예요. 서버가 그만두라고 할 때까지요.
+  const later = catFrameAt(room, T0 + 3_600_000, (b) => b === bed, visit);
+  assert.deepEqual([later.x, later.z], [seated.x, seated.z]);
+});
+
+test("방문을 그만두면 그 시각부터 내려와 원래 길로 돌아가요", () => {
+  const room = roomOf(3);
+  const bed = room.beds[2];
+  const stop = T0 + 60_000;
+  const visit = { bed, at: T0 + 5000, until: stop };
+  const atStop = catFrameAt(room, stop - 1, (b) => b === bed, visit);
+  const justAfter = catFrameAt(room, stop + 1, free, visit);
+  assert.ok(Math.hypot(atStop.x - justAfter.x, atStop.z - justAfter.z) < 0.05);
+  // 다음 칸부터는 방문이 없던 것과 같아요.
+  const next = (slotOf(stop) + 1) * CAT_SLOT_MS + 3000;
+  assert.deepEqual(catFrameAt(room, next, free, visit), catFrameAt(room, next, free, null));
+});
+
+test("코 맞대기는 가까울 때만, 너무 자주 하지 않아요", () => {
   assert.equal(shouldGreet(0.5, 10, null), true);
   assert.equal(shouldGreet(0.9, 10, null), false);
   assert.equal(shouldGreet(0.5, 10, 5), false);
   assert.equal(shouldGreet(0.5, 5 + CAT_GREET_GAP_SECONDS, 5), true);
-  assert.equal(startGreet(brainWith({ kind: "stroll", spot: 1 }), 3).plan.kind, "pause");
 });
 
 test("데리고 온 고양이는 내가 지나온 길을 몇 걸음 뒤에서 따라와요", () => {

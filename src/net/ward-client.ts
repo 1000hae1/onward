@@ -7,19 +7,34 @@ import {
 } from "../../shared/protocol";
 import type { ClientMessage, ServerMessage, WardEvent } from "../../shared/protocol";
 import type { NicknameProblem } from "../../shared/nickname";
+import { readVersion } from "../../shared/ward-rules";
 import type { Profile } from "../ui/profile";
 import { MAX_INSTANCE } from "./ward-params";
 import type { WardParams } from "./ward-params";
 
 /** 연결을 유지하려고 보내는 간격이에요. 서버는 깨어나지 않고 자동으로 답해요. */
 const PING_SECONDS = 30;
-const RETRY_SECONDS = [1, 2, 5, 10, 30] as const;
+/** 끊기면 1초, 2초, 4초… 최대 30초 간격으로 다시 이어요. */
+export function retryDelaySeconds(attempt: number): number {
+  return Math.min(30, 2 ** attempt);
+}
 /** 정원이 차면 다음 인스턴스로 넘어가는 횟수예요. */
 const MAX_OVERFLOW = 5;
 const BED_ANSWER_MS = 5000;
 const REPLACED_CODE = 4000;
 
-export type ConnectionStatus = "connecting" | "online" | "offline" | "replaced" | "full";
+/**
+ * offline은 한 번도 닿지 못한 때, reconnecting은 이어졌다가 끊긴 때예요.
+ * outdated는 화면과 서버의 버전이 달라 새로고침이 필요한 때예요.
+ */
+export type ConnectionStatus =
+  | "connecting"
+  | "online"
+  | "offline"
+  | "reconnecting"
+  | "replaced"
+  | "full"
+  | "outdated";
 
 type Snapshot = Extract<ServerMessage, { type: "snapshot" }>;
 type Denied = Extract<ServerMessage, { type: "action-denied" }>;
@@ -35,6 +50,8 @@ export interface WardClientHandlers {
 
 export interface WardClient {
   readonly online: boolean;
+  /** 서버 시계로 맞춘 지금 시각이에요. 아직 닿지 못했으면 이 기기의 시각이에요. */
+  serverNow(): number;
   readonly instance: number;
   /** 들어가거나, 들어간 뒤 모습을 바꿀 때 보내요. */
   hello(profile: Profile): void;
@@ -61,6 +78,8 @@ export function createWardClient(
   let stopped = false;
   let ping: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** 서버 시각에서 이 기기 시각을 뺀 값이에요. */
+  let clockOffset = 0;
   const bedAnswers = new Map<number, (granted: boolean) => void>();
 
   const helloMessage = (current: Profile): ClientMessage => ({
@@ -86,6 +105,8 @@ export function createWardClient(
     switch (message.type) {
       case "snapshot": {
         const reconnected = everOnline;
+        clockOffset = message.serverNow - Date.now();
+        overflow = 0;
         online = true;
         everOnline = true;
         retry = 0;
@@ -110,10 +131,13 @@ export function createWardClient(
         handlers.onNicknameRejected(message.problem);
         return;
       case "room-full":
-        // 다음 인스턴스로 넘어가요. 연결은 서버가 닫아요.
+        // 서버가 알려 준 다음 병실로 넘어가요. 연결은 서버가 닫아요.
         overflow++;
-        instance = instance >= MAX_INSTANCE ? 1 : instance + 1;
+        instance = Math.min(MAX_INSTANCE, message.next);
         retry = 0;
+        return;
+      case "version-mismatch":
+        outdated();
         return;
       case "action-denied":
         handlers.onDenied(message);
@@ -121,9 +145,17 @@ export function createWardClient(
     }
   };
 
+  /** 버전이 다르면 다시 이어도 소용없으니 멈추고 새로고침을 부탁해요. */
+  const outdated = (): void => {
+    stopped = true;
+    online = false;
+    handlers.onStatus("outdated", instance);
+    socket?.close(1000, "outdated");
+  };
+
   const scheduleRetry = (): void => {
     if (stopped || retryTimer) return;
-    const seconds = RETRY_SECONDS[Math.min(retry, RETRY_SECONDS.length - 1)];
+    const seconds = retryDelaySeconds(retry);
     retry++;
     retryTimer = setTimeout(() => {
       retryTimer = null;
@@ -153,6 +185,11 @@ export function createWardClient(
     });
     opened.addEventListener("message", (event) => {
       if (event.data === PONG) return;
+      const version = readVersion(event.data);
+      if (version !== null && version !== PROTOCOL_VERSION) {
+        outdated();
+        return;
+      }
       const message = parseMessage(serverMessageSchema, event.data);
       // 맞지 않는 메시지는 무시해요.
       if (message) handle(message);
@@ -164,6 +201,7 @@ export function createWardClient(
       if (ping) clearInterval(ping);
       ping = null;
       settleBeds(false);
+      if (stopped) return;
       if (event.code === REPLACED_CODE) {
         // 다른 창에서 같은 사람이 들어왔어요. 이 창은 다시 잇지 않아요.
         stopped = true;
@@ -179,7 +217,8 @@ export function createWardClient(
         handlers.onStatus("full", instance);
         return;
       }
-      handlers.onStatus("offline", instance);
+      // 이어졌던 적이 있으면 같은 병실로 다시 이어서 침대와 자리를 돌려받아요.
+      handlers.onStatus(everOnline ? "reconnecting" : "offline", instance);
       scheduleRetry();
     });
   }
@@ -190,6 +229,9 @@ export function createWardClient(
     },
     get instance() {
       return instance;
+    },
+    serverNow() {
+      return Date.now() + clockOffset;
     },
     hello(next) {
       profile = next;

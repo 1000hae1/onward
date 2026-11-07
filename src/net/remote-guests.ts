@@ -214,7 +214,7 @@ export function createRemoteGuests(
         return;
       }
       // 선물과 불빛은 협탁과 창가의 일이라 화면에서 따로 다뤄요.
-      if (event.kind === "gift" || event.kind === "lamp") return;
+      if (event.kind === "gift" || event.kind === "lamp" || event.kind === "cat-visit") return;
       const remote = remotes.get(event.kind === "update" ? event.guest.id : event.id);
       if (!remote) return;
 

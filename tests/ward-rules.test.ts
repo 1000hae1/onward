@@ -1,11 +1,20 @@
 import assert from "node:assert/strict";
-import { test } from "node:test";
+import { test } from "vitest";
 import { clientMessageSchema, parseMessage, serverMessageSchema, WARD_CAPACITY } from "../shared/protocol.ts";
 import type { HelloMessage } from "../shared/protocol.ts";
 import { BEDS, bedApproach, PLAYER_START, ROOMS, WALK_AREAS } from "../shared/ward-layout.ts";
 import {
   actionReady,
   admit,
+  alarmToSet,
+  catVisits,
+  CAT_VISIT_AFTER_MS,
+  changedVisits,
+  expireAway,
+  GRACE_MS,
+  nextInstance,
+  readVersion,
+  toAway,
   claimBed,
   clampToWalkable,
   giftAllowedNow,
@@ -40,6 +49,7 @@ const record = (id: string, over: Partial<GuestRecord> = {}): GuestRecord => ({
   x: PLAYER_START.x,
   z: PLAYER_START.z,
   bed: null,
+  lyingSince: null,
   lastAction: {},
   ...over,
 });
@@ -78,27 +88,27 @@ test("서버 메시지도 같은 방법으로 검사해요", () => {
 });
 
 test("닉네임이 규칙에 어긋나면 들어오지 못해요", () => {
-  assert.deepEqual(admit([], hello({ nickname: "곰" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "short" });
-  assert.deepEqual(admit([], hello({ nickname: "관리자곰" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "banned" });
-  assert.deepEqual(admit([], hello({ nickname: "곰0101" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "digits" });
+  assert.deepEqual(admit([], 0, hello({ nickname: "곰" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "short" });
+  assert.deepEqual(admit([], 0, hello({ nickname: "관리자곰" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "banned" });
+  assert.deepEqual(admit([], 0, hello({ nickname: "곰0101" }), WARD_CAPACITY, "abcd1234"), { kind: "rejected", problem: "digits" });
 });
 
 test("정원이 차면 들어오지 못해요", () => {
   const full = Array.from({ length: WARD_CAPACITY }, (_, index) => record(`g${String(index).padStart(7, "0")}`));
-  assert.deepEqual(admit(full, hello(), WARD_CAPACITY, "abcd1234"), { kind: "full" });
+  assert.deepEqual(admit(full, 0, hello(), WARD_CAPACITY, "abcd1234"), { kind: "full" });
   const almost = full.slice(1);
-  assert.equal(admit(almost, hello(), WARD_CAPACITY, "abcd1234").kind, "admitted");
+  assert.equal(admit(almost, 0, hello(), WARD_CAPACITY, "abcd1234").kind, "admitted");
 });
 
 test("같은 guestId로 다시 들어오면 정원이 차 있어도 예전 연결과 바꿔요", () => {
   const full = Array.from({ length: WARD_CAPACITY }, (_, index) => record(`g${String(index).padStart(7, "0")}`));
-  const again = admit(full, hello({ guestId: full[3].guestId }), WARD_CAPACITY, "abcd1234");
+  const again = admit(full, 0, hello({ guestId: full[3].guestId }), WARD_CAPACITY, "abcd1234");
   assert.equal(again.kind, "admitted");
   if (again.kind === "admitted") assert.equal(again.replaces, full[3].id);
 });
 
 test("들어오면 앞마당에서 시작하고, 남에게는 guestId를 보이지 않아요", () => {
-  const result = admit([], hello({ nickname: "  졸린   수달 " }), WARD_CAPACITY, "abcd1234");
+  const result = admit([], 0, hello({ nickname: "  졸린   수달 " }), WARD_CAPACITY, "abcd1234");
   assert.equal(result.kind, "admitted");
   if (result.kind !== "admitted") return;
   assert.equal(result.record.nickname, "졸린 수달");
@@ -111,24 +121,24 @@ test("들어오면 앞마당에서 시작하고, 남에게는 guestId를 보이�
 test("침대는 먼저 처리된 한 사람만 가져가요", () => {
   const a = record("aaaaaaaa");
   const b = record("bbbbbbbb");
-  const first = claimBed([a, b], a, 5);
+  const first = claimBed([a, b], a, 5, 1000);
   assert.equal(first.granted, true);
   const guests = [first.record, b];
-  const second = claimBed(guests, b, 5);
+  const second = claimBed(guests, b, 5, 1000);
   assert.equal(second.granted, false);
   assert.equal(second.record.bed, null);
   // 같은 사람이 다시 눌러도 그대로예요.
-  assert.equal(claimBed(guests, first.record, 5).granted, true);
+  assert.equal(claimBed(guests, first.record, 5, 1000).granted, true);
 });
 
 test("다른 침대를 받으면 예전 침대는 비고, 문병객은 눕지 못해요", () => {
   const a = record("aaaaaaaa", { bed: 1 });
-  const moved = claimBed([a], a, 2);
+  const moved = claimBed([a], a, 2, 1000);
   assert.equal(moved.record.bed, 2);
   const b = record("bbbbbbbb");
-  assert.equal(claimBed([moved.record, b], b, 1).granted, true);
+  assert.equal(claimBed([moved.record, b], b, 1, 1000).granted, true);
   const visitor = record("cccccccc", { outfit: "visitor" });
-  assert.equal(claimBed([visitor], visitor, 7).granted, false);
+  assert.equal(claimBed([visitor], visitor, 7, 1000).granted, false);
 });
 
 test("문병객으로 바꾸면 침대를 비워요", () => {
@@ -210,4 +220,91 @@ test("불빛은 병실 안에서만, 창마다 12개까지 놓아요", () => {
   assert.deepEqual(lampRoom(inside, [0, 0, 0, 0, 0, 0]), { room: 2 });
   assert.deepEqual(lampRoom(inside, [0, 0, 12, 0, 0, 0]), { denied: "lamp-full" });
   assert.deepEqual(lampRoom(record("bbbbbbbb"), [0, 0, 0, 0, 0, 0]), { denied: "not-in-room" });
+});
+
+test("끊긴 지 30초 안에 돌아오면 침대와 자리를 그대로 돌려받아요", () => {
+  const lying = record("aaaaaaaa", { bed: 7, lyingSince: 500, x: 1, z: 2 });
+  const away = toAway(lying, "hash-a", 10_000);
+  assert.equal(away.until, 10_000 + GRACE_MS);
+  // 해시만 남기고 guestId는 지워요.
+  assert.equal(away.record.guestId, "");
+  const back = admit([], 0, hello({ guestId: "guest-aaaa-0001" }), WARD_CAPACITY, "new00000", away.record);
+  assert.equal(back.kind, "admitted");
+  if (back.kind !== "admitted") return;
+  assert.equal(back.restored, true);
+  assert.equal(back.record.id, "aaaaaaaa");
+  assert.equal(back.record.bed, 7);
+  assert.equal(back.record.lyingSince, 500);
+  assert.deepEqual([back.record.x, back.record.z], [1, 2]);
+  assert.equal(back.record.guestId, "guest-aaaa-0001");
+});
+
+test("돌아온 사람은 정원이 차 있어도 맡아 둔 자리로 들어와요", () => {
+  const full = Array.from({ length: WARD_CAPACITY - 1 }, (_, index) => record(`g${String(index).padStart(7, "0")}`));
+  const away = toAway(record("aaaaaaaa"), "hash-a", 0);
+  // 맡아 둔 자리도 정원에 들어가요. 새 사람은 못 들어와요.
+  assert.equal(admit(full, 1, hello({ guestId: "guest-new-0001" }), WARD_CAPACITY, "x0000000").kind, "full");
+  assert.equal(admit(full, 0, hello(), WARD_CAPACITY, "x0000000", away.record).kind, "admitted");
+});
+
+test("유예가 끝난 사람만 내보내고, 다음 alarm은 남은 사람 가운데 가장 이른 때예요", () => {
+  const a = toAway(record("aaaaaaaa"), "a", 0);
+  const b = toAway(record("bbbbbbbb"), "b", 10_000);
+  const first = expireAway([a, b], GRACE_MS);
+  assert.deepEqual(first.expired.map((guest) => guest.key), ["a"]);
+  assert.equal(first.nextAlarm, 10_000 + GRACE_MS);
+  const second = expireAway(first.kept, 10_000 + GRACE_MS);
+  assert.equal(second.kept.length, 0);
+  // 맡아 둔 사람이 없으면 alarm을 다시 맞추지 않아요.
+  assert.equal(second.nextAlarm, null);
+});
+
+test("alarm은 더 이른 것이 필요할 때만 맞춰요", () => {
+  assert.equal(alarmToSet(null, 5000), 5000);
+  assert.equal(alarmToSet(3000, 5000), null);
+  assert.equal(alarmToSet(8000, 5000), 5000);
+  assert.equal(alarmToSet(3000, null), null);
+});
+
+test("정원이 차면 다음 병실을 알려 줘요", () => {
+  assert.equal(nextInstance(1, 20), 2);
+  assert.equal(nextInstance(20, 20), 1);
+});
+
+test("메시지의 버전만 따로 읽어요", () => {
+  assert.equal(readVersion(JSON.stringify({ v: 2, type: "anything" })), 2);
+  assert.equal(readVersion(JSON.stringify({ v: 1 })), 1);
+  assert.equal(readVersion("ping"), null);
+  assert.equal(readVersion("{"), null);
+  assert.equal(readVersion(JSON.stringify({ type: "x" })), null);
+  assert.equal(readVersion(new ArrayBuffer(2)), null);
+});
+
+test("병실에 혼자 누워 있으면 고양이가 2분 뒤에 찾아와요", () => {
+  const bed = BEDS.findIndex((candidate) => candidate.roomIndex === 2);
+  const spot = bedApproach(BEDS[bed]);
+  const alone = record("aaaaaaaa", { bed, lyingSince: 1000, x: spot.x, z: spot.z });
+  assert.deepEqual(catVisits([alone]), [{ room: 2, bed, at: 1000 + CAT_VISIT_AFTER_MS }]);
+  // 같은 병실에 다른 사람이 있으면 찾아오지 않아요.
+  const friend = record("bbbbbbbb", { x: ROOMS[2].x, z: ROOMS[2].z });
+  assert.deepEqual(catVisits([alone, friend]), []);
+  // 다른 병실에 있는 사람은 상관없어요.
+  const elsewhere = record("cccccccc", { x: ROOMS[4].x, z: ROOMS[4].z });
+  assert.equal(catVisits([alone, elsewhere]).length, 1);
+  // 누워 있지 않으면 찾아오지 않아요.
+  assert.deepEqual(catVisits([record("dddddddd", { x: spot.x, z: spot.z })]), []);
+});
+
+test("고양이 방문은 바뀐 병실만 알려요", () => {
+  const one = { room: 2, bed: 13, at: 5000 };
+  assert.deepEqual(changedVisits([one], [one]), []);
+  assert.deepEqual(changedVisits([], [one]), [{ room: 2, visit: one }]);
+  assert.deepEqual(changedVisits([one], []), [{ room: 2, visit: null }]);
+  assert.deepEqual(changedVisits([one], [{ ...one, at: 9000 }]), [{ room: 2, visit: { ...one, at: 9000 } }]);
+});
+
+test("다시 같은 침대를 받으면 누운 시각이 그대로라 고양이 시각도 바뀌지 않아요", () => {
+  const a = record("aaaaaaaa", { bed: 3, lyingSince: 100 });
+  assert.equal(claimBed([a], a, 3, 9999).record.lyingSince, 100);
+  assert.equal(claimBed([a], a, 4, 9999).record.lyingSince, 9999);
 });

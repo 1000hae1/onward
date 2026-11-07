@@ -6,7 +6,7 @@ import { checkNickname } from "./nickname.ts";
 import type { NicknameProblem } from "./nickname.ts";
 import { chooseGiftSlot, GIFT_SLOTS_PER_STAND, LAMPS_PER_WINDOW } from "./offering-rules.ts";
 import type { Guest, HelloMessage } from "./protocol.ts";
-import { PLAYER_START, roomAt, WALK_AREAS } from "./ward-layout.ts";
+import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
 /** 연결 하나에 붙여 두는 정보예요. 하이버네이션 뒤에 이것으로 병실을 다시 만들어요. */
 export interface GuestRecord {
@@ -19,6 +19,8 @@ export interface GuestRecord {
   x: number;
   z: number;
   bed: number | null;
+  /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
+  lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
   lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp", number>>;
 }
@@ -48,23 +50,47 @@ export type Admission =
   | { kind: "rejected"; problem: NicknameProblem }
   | { kind: "full" }
   /** 같은 guestId로 먼저 들어와 있던 연결이 있으면 그 연결을 내보내요. */
-  | { kind: "admitted"; record: GuestRecord; replaces: string | null };
+  | { kind: "admitted"; record: GuestRecord; replaces: string | null; restored: boolean };
 
-/** 들어오려는 사람을 받을지 정해요. others에는 이미 들어온 사람만 넣어요. */
+/**
+ * 들어오려는 사람을 받을지 정해요. others에는 연결된 사람, awayCount에는 잠시 끊긴 사람 수를 넣어요.
+ * returning은 30초 안에 돌아온 같은 사람의 기록이에요. 자리가 이미 맡아져 있으니 정원을 다시 세지 않아요.
+ */
 export function admit(
   others: readonly GuestRecord[],
+  awayCount: number,
   hello: HelloMessage,
   capacity: number,
   newId: string,
+  returning: GuestRecord | null = null,
 ): Admission {
   const nickname = checkNickname(hello.nickname);
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
   const same = others.find((record) => record.guestId === hello.guestId) ?? null;
-  const count = others.length - (same ? 1 : 0);
+  if (returning) {
+    const bed = hello.outfit === "visitor" ? null : returning.bed;
+    return {
+      kind: "admitted",
+      replaces: same?.id ?? null,
+      restored: true,
+      record: {
+        ...returning,
+        guestId: hello.guestId,
+        animal: hello.animal,
+        outfit: hello.outfit,
+        nickname: nickname.value,
+        withCat: hello.withCat,
+        bed,
+        lyingSince: bed === null ? null : returning.lyingSince,
+      },
+    };
+  }
+  const count = others.length + awayCount - (same ? 1 : 0);
   if (count >= capacity) return { kind: "full" };
   return {
     kind: "admitted",
     replaces: same?.id ?? null,
+    restored: false,
     record: {
       id: newId,
       guestId: hello.guestId,
@@ -75,6 +101,7 @@ export function admit(
       x: PLAYER_START.x,
       z: PLAYER_START.z,
       bed: null,
+      lyingSince: null,
       lastAction: {},
     },
   };
@@ -89,6 +116,7 @@ export function updateProfile(
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
   // 문병객으로 바꾸면 누워 있던 침대를 비워요.
   const bed = hello.outfit === "visitor" ? null : record.bed;
+  const lyingSince = bed === null ? null : record.lyingSince;
   return {
     kind: "updated",
     record: {
@@ -98,6 +126,7 @@ export function updateProfile(
       nickname: nickname.value,
       withCat: hello.withCat,
       bed,
+      lyingSince,
     },
   };
 }
@@ -127,11 +156,14 @@ export function claimBed(
   guests: readonly GuestRecord[],
   record: GuestRecord,
   bed: number,
+  nowMs: number,
 ): { granted: boolean; record: GuestRecord } {
   if (record.outfit !== "patient") return { granted: false, record };
   const taken = guests.some((other) => other.id !== record.id && other.bed === bed);
   if (taken) return { granted: false, record };
-  return { granted: true, record: { ...record, bed } };
+  // 같은 침대를 다시 받으면 누운 시각은 그대로예요.
+  const lyingSince = record.bed === bed && record.lyingSince !== null ? record.lyingSince : nowMs;
+  return { granted: true, record: { ...record, bed, lyingSince } };
 }
 
 /** 한국 시간으로 몇 월인지예요. */
@@ -192,4 +224,101 @@ export function lampRoom(
   if (!room) return { denied: "not-in-room" };
   if ((counts[room.index] ?? 0) >= LAMPS_PER_WINDOW) return { denied: "lamp-full" };
   return { room: room.index };
+}
+
+/** 연결이 끊긴 뒤 이 시간 안에 돌아오면 침대와 자리를 그대로 돌려줘요. */
+export const GRACE_MS = 30_000;
+
+/** 잠시 끊긴 사람이에요. guestId는 해시로만 두고, 기록 안의 guestId는 비워 둬요. */
+export interface AwayGuest {
+  key: string;
+  record: GuestRecord;
+  until: number;
+}
+
+export function toAway(record: GuestRecord, key: string, nowMs: number): AwayGuest {
+  return { key, record: { ...record, guestId: "" }, until: nowMs + GRACE_MS };
+}
+
+/** 유예가 끝난 사람과 남은 사람을 나누고, 다음 alarm 시각을 알려 줘요. 남은 사람이 없으면 null이에요. */
+export function expireAway(
+  away: readonly AwayGuest[],
+  nowMs: number,
+): { expired: AwayGuest[]; kept: AwayGuest[]; nextAlarm: number | null } {
+  const expired = away.filter((guest) => guest.until <= nowMs);
+  const kept = away.filter((guest) => guest.until > nowMs);
+  return { expired, kept, nextAlarm: nextAlarmAt(kept) };
+}
+
+export function nextAlarmAt(away: readonly { until: number }[]): number | null {
+  return away.length === 0 ? null : Math.min(...away.map((guest) => guest.until));
+}
+
+/** 이미 맞춰 둔 alarm이 있으면 더 이른 경우에만 바꿔요. 바꿀 필요가 없으면 null이에요. */
+export function alarmToSet(current: number | null, wanted: number | null): number | null {
+  if (wanted === null) return null;
+  if (current !== null && current <= wanted) return null;
+  return wanted;
+}
+
+/** 정원이 차면 가 볼 다음 병실이에요. 끝 번호 다음은 1번이에요. */
+export function nextInstance(instance: number, max: number): number {
+  return instance >= max ? 1 : instance + 1;
+}
+
+/** 메시지의 v만 느슨하게 읽어요. 버전이 다른지 알아볼 때 써요. JSON이 아니거나 v가 없으면 null이에요. */
+export function readVersion(raw: unknown): number | null {
+  if (typeof raw !== "string" || raw.length > 4096) return null;
+  try {
+    const value: unknown = JSON.parse(raw);
+    if (typeof value === "object" && value !== null && typeof (value as { v?: unknown }).v === "number") {
+      return (value as { v: number }).v;
+    }
+  } catch {
+    return null;
+  }
+  return null;
+}
+
+/** 오래 혼자 누워 있으면 병동 고양이가 찾아와요. */
+export const CAT_VISIT_AFTER_MS = 120_000;
+
+export interface CatVisit {
+  room: number;
+  bed: number;
+  /** 서버 시각으로 고양이가 출발하는 때예요. */
+  at: number;
+}
+
+/**
+ * 병실마다 고양이가 찾아갈 침대와 시각이에요. 이 병실에 그 사람 말고 아무도 없을 때만 찾아가고,
+ * 여럿이 혼자 누워 있을 수는 없으니 병실마다 많아야 하나예요.
+ * 입장·퇴장·눕기·일어나기·병실 이동 때만 다시 계산해요. 그래서 시간이 흘러도 방송할 일이 없어요.
+ */
+export function catVisits(guests: readonly GuestRecord[]): CatVisit[] {
+  const visits: CatVisit[] = [];
+  for (const room of ROOMS) {
+    const inRoom = guests.filter((guest) => roomAt(guest.x, guest.z)?.index === room.index);
+    if (inRoom.length !== 1) continue;
+    const [only] = inRoom;
+    if (only.bed === null || only.lyingSince === null) continue;
+    if (BEDS[only.bed]?.roomIndex !== room.index) continue;
+    visits.push({ room: room.index, bed: only.bed, at: only.lyingSince + CAT_VISIT_AFTER_MS });
+  }
+  return visits;
+}
+
+/** 바뀐 병실만 골라요. 사라진 병실은 null이에요. */
+export function changedVisits(
+  before: readonly CatVisit[],
+  after: readonly CatVisit[],
+): { room: number; visit: CatVisit | null }[] {
+  const changes: { room: number; visit: CatVisit | null }[] = [];
+  for (const room of ROOMS) {
+    const a = before.find((visit) => visit.room === room.index) ?? null;
+    const b = after.find((visit) => visit.room === room.index) ?? null;
+    if (a?.bed === b?.bed && a?.at === b?.at) continue;
+    changes.push({ room: room.index, visit: b });
+  }
+  return changes;
 }

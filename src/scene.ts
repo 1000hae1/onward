@@ -2,6 +2,9 @@ import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { nicknameMessage } from "../shared/nickname";
 import { WARD_CAPACITY } from "../shared/protocol";
 import type { WardEvent } from "../shared/protocol";
+import { CAT_VISIT_AFTER_MS } from "../shared/ward-rules";
+import { BEDS } from "../shared/ward-layout";
+import type { CatVisitPlan } from "./cat/cat-path";
 import { createCats } from "./cat/cats";
 import { createRemoteGuests } from "./net/remote-guests";
 import { createWardClient } from "./net/ward-client";
@@ -102,22 +105,22 @@ export function startScene(canvas: HTMLCanvasElement): void {
     return head ? { x: head.x, y: head.y, z: head.z } : { x: player.x, y: 1, z: player.z };
   };
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
+  /** 서버가 정한 병동 고양이 방문이에요. 병실 번호마다 하나예요. */
+  const serverVisits = new Map<number, CatVisitPlan>();
+  /** 서버에 닿지 않을 때 내 침대로 오는 방문이에요. 이 화면에서만 계산해요. */
+  let localVisit: { room: number; plan: CatVisitPlan } | null = null;
+  let lastLying: number | null = null;
+  // 서버 시계는 아래에서 연결을 만든 뒤 이어 줘요.
+  let serverNow = (): number => Date.now();
+  let online = (): boolean => false;
   const cats = createCats(
     scene,
+    player,
     {
-      get walkX() {
-        return player.walkX;
-      },
-      get walkZ() {
-        return player.walkZ;
-      },
-      get lyingBed() {
-        return player.lyingBed;
-      },
-      get claimedBed() {
-        return player.claimedBed;
-      },
-      othersInRoom: (roomIndex) => remotes.othersInRoom(roomIndex),
+      serverNow: () => serverNow(),
+      isTaken: (bed) => player.claimedBed === bed || remotes.isBedTaken(bed),
+      visitFor: (roomIndex) =>
+        online() ? (serverVisits.get(roomIndex) ?? null) : localVisit?.room === roomIndex ? localVisit.plan : null,
     },
     false,
   );
@@ -160,23 +163,38 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const toast = (text: string): void => actionBar?.showToast(text);
   let warnedOffline = false;
 
+  const banner = element("connection-banner");
+  const setBanner = (text: string | null): void => {
+    if (!banner) return;
+    banner.textContent = text ?? "";
+    banner.hidden = text === null;
+  };
+
   const client = createWardClient(params, loadGuestId(), {
-    onSnapshot(snapshot, reconnected) {
+    onSnapshot(snapshot) {
       remotes.reset(snapshot.guests, snapshot.you);
       offerings.loadGifts(snapshot.gifts);
       offerings.setLamps(snapshot.lamps);
+      serverVisits.clear();
+      for (const visit of snapshot.catVisits) serverVisits.set(visit.room, { bed: visit.bed, at: visit.at, until: null });
       setHud(remotes.count + 1);
+      setBanner(null);
       warnedOffline = false;
-      // 다시 이어졌으면 서버는 나를 앞마당에 두었으니, 지금 자리와 침대를 다시 알려요.
-      client.send({ type: "walk-to", x: player.walkX, z: player.walkZ });
+      // 서버가 기억하는 내 자리와 이 화면의 자리가 다를 때만 맞춰요. 30초 안에 돌아왔으면 대개 같아요.
+      const me = snapshot.guests.find((guest) => guest.id === snapshot.you);
       const bed = player.claimedBed;
-      if (reconnected && bed !== null) {
+      if (bed !== null && me?.bed !== bed) {
         void client.askBed(bed).then((granted) => {
           if (!granted) {
             player.forceGetUp();
             toast("다시 이어지는 사이 다른 분이 침대에 누웠어요.");
           }
         });
+      } else if (bed === null && me && me.bed !== null) {
+        client.send({ type: "get-up" });
+      }
+      if (bed === null && me && Math.hypot(me.x - player.walkX, me.z - player.walkZ) > 0.3) {
+        client.send({ type: "walk-to", x: player.walkX, z: player.walkZ });
       }
     },
     onEvent(event: WardEvent) {
@@ -187,6 +205,18 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
       if (event.kind === "lamp") {
         offerings.setLampCount(event.room, event.count);
+        return;
+      }
+      if (event.kind === "cat-visit") {
+        const before = serverVisits.get(event.room);
+        if (event.visit) {
+          serverVisits.set(event.room, { bed: event.visit.bed, at: event.visit.at, until: null });
+        } else if (before && before.at <= event.changedAt) {
+          // 이미 찾아간 고양이는 그 시각부터 내려와 원래 길로 돌아가요.
+          serverVisits.set(event.room, { ...before, until: event.changedAt });
+        } else {
+          serverVisits.delete(event.room);
+        }
         return;
       }
       remotes.apply(event);
@@ -202,10 +232,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
       toast(DENIED_TEXT[denied.reason]);
     },
     onStatus(status) {
-      if (status === "online") return;
+      if (status === "online" || status === "connecting") return;
+      if (status === "reconnecting") {
+        // 다른 사람과 고양이는 그대로 두고 기다려요. 다시 이어지면 snapshot으로 맞춰요.
+        setBanner("연결이 잠시 끊겼어요. 다시 이어지는 중이에요.");
+        return;
+      }
       setHud(null);
       remotes.reset([], "");
-      if (status === "replaced") {
+      if (status === "outdated") {
+        setBanner("새 버전이 나왔어요. 새로고침해 주세요.");
+      } else if (status === "replaced") {
         toast("다른 창에서 병동에 들어와서 이 창은 쉬어요.");
       } else if (status === "full") {
         toast("병동이 모두 차서 혼자 머물러요.");
@@ -215,6 +252,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
     },
   });
+
+  serverNow = () => client.serverNow();
+  online = () => client.online;
 
   player.setNet({
     askBed: (bed) => client.askBed(bed),
@@ -340,6 +380,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
     applyViewShift(dt);
     player.update(dt);
     remotes.update(dt, { x: player.x, z: player.z }, camera, reduceMotion.matches);
+    // 서버에 닿지 않을 때는 내 침대로 오는 고양이를 이 화면에서 정해요.
+    const lying = player.lyingBed;
+    if (lying !== lastLying) {
+      const now = serverNow();
+      if (lying !== null) {
+        localVisit = { room: BEDS[lying].roomIndex, plan: { bed: lying, at: now + CAT_VISIT_AFTER_MS, until: null } };
+      } else if (localVisit) {
+        localVisit = { ...localVisit, plan: { ...localVisit.plan, until: now } };
+      }
+      lastLying = lying;
+    }
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
     actionBar?.update(dt);
