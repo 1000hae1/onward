@@ -7,6 +7,12 @@ import { BEDS } from "../shared/ward-layout";
 import type { CatVisitPlan } from "./cat/cat-path";
 import { createCats } from "./cat/cats";
 import { createRemoteGuests } from "./net/remote-guests";
+import { loadMetList, rememberPerson, saveMetList } from "./net/met-list";
+import type { MetList } from "./net/met-list";
+import { createBlessingCards } from "./ui/blessing-cards";
+import { FIVE_LEAF_ITEM } from "../shared/left-blessings";
+import { koreanDay } from "../shared/ward-rules";
+import type { BlessingCardMessage, Guest } from "../shared/protocol";
 import { createWardClient } from "./net/ward-client";
 import { loadGuestId, readWardParams, wardLabel } from "./net/ward-params";
 import { createActionBar } from "./ui/action-bar";
@@ -41,7 +47,8 @@ const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
 
 /** 서버가 동작을 받지 않았을 때의 안내예요. */
-const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast", string> = {
+const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast" | "once-a-day", string> = {
+  "once-a-day": "그분께는 오늘 이미 남겼어요. 내일 또 남겨 주세요.",
   "out-of-season": "귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요.",
   "gift-limit": "오늘은 선물을 넉넉히 놓았어요. 내일 또 놓아 주세요.",
   "lamp-full": "창가가 불빛으로 가득해요.",
@@ -163,6 +170,24 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const toast = (text: string): void => actionBar?.showToast(text);
   let warnedOffline = false;
 
+  const cardsRoot = element("left-cards");
+  const inboxRoot = element("inbox");
+  const blessingCards = cardsRoot && inboxRoot ? createBlessingCards(cardsRoot, inboxRoot) : null;
+
+  /** 오늘 같은 병실에서 만난 사람들이에요. 평안 주소와 닉네임, 동물만 이 브라우저에 둬요. */
+  let metList: MetList = loadMetList(koreanDay(new Date()));
+  const remember = (guests: readonly Guest[], me: string): void => {
+    const today = koreanDay(new Date());
+    for (const guest of guests) {
+      if (guest.id === me) continue;
+      metList = rememberPerson(metList, { address: guest.address, nickname: guest.nickname, animal: guest.animal }, today);
+    }
+    saveMetList(metList);
+  };
+  let myId = "";
+  /** 침대를 받으면 서버가 남겨진 평안을 바로 보내 줘요. 걸어가서 다 누웠을 때 보여 줘요. */
+  let pendingLeft: { bedId: number; cards: BlessingCardMessage[] } | null = null;
+
   const banner = element("connection-banner");
   const setBanner = (text: string | null): void => {
     if (!banner) return;
@@ -172,7 +197,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   const client = createWardClient(params, loadGuestId(), {
     onSnapshot(snapshot) {
+      myId = snapshot.you;
       remotes.reset(snapshot.guests, snapshot.you);
+      remember(snapshot.guests, snapshot.you);
+      // 내가 없는 동안 도착한 평안이 있으면 들어오자마자 보여 줘요.
+      blessingCards?.showInbox(snapshot.inbox, client.serverNow());
       offerings.loadGifts(snapshot.gifts);
       offerings.setLamps(snapshot.lamps);
       serverVisits.clear();
@@ -220,6 +249,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         return;
       }
       remotes.apply(event);
+      if (event.kind === "join" || event.kind === "update") remember([event.guest], myId);
       if (event.kind === "join" || event.kind === "leave") setHud(remotes.count + 1);
     },
     onCorrected(x, z) {
@@ -229,7 +259,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
       reopenEntry(nicknameMessage(problem));
     },
     onDenied(denied) {
+      if (denied.reason === "gift-limit" && denied.item === FIVE_LEAF_ITEM) {
+        toast("오잎클로버는 내일 다시 놓을 수 있어요.");
+        return;
+      }
       toast(DENIED_TEXT[denied.reason]);
+    },
+    onLeftBlessings(message) {
+      pendingLeft = { bedId: message.bedId, cards: message.cards };
+    },
+    onLeftSaved() {
+      toast("남겨두었어요. 다음에 들어오시면 전해져요.");
     },
     onStatus(status) {
       if (status === "online" || status === "connecting") return;
@@ -306,8 +346,19 @@ export function startScene(canvas: HTMLCanvasElement): void {
         offerings,
         labels,
         stillMotion,
+        people: () =>
+          client.online
+            ? metList.people.map((person) => {
+                const id = remotes.idForAddress(person.address);
+                const head = id ? remotes.headSpot(id) : null;
+                return { address: person.address, nickname: person.nickname, present: id && head ? { id, head } : null };
+              })
+            : [],
         sink: {
           online: () => client.online,
+          blessPerson: (targetId) => client.send({ type: "bless", targetId }),
+          leaveFor: (address, kind, item) =>
+            client.send(item === undefined ? { type: "leave-for", address, kind } : { type: "leave-for", address, kind, item }),
           bless: (bedId) => client.send({ type: "bless", bedId }),
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
@@ -394,6 +445,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
     actionBar?.update(dt);
+    blessingCards?.update(dt);
+    if (pendingLeft) {
+      if (player.lyingBed === pendingLeft.bedId) {
+        blessingCards?.showBedCards(pendingLeft.cards, serverNow());
+        pendingLeft = null;
+      } else if (player.claimedBed !== pendingLeft.bedId) {
+        // 눕기 전에 다른 곳으로 가면 그 침대의 평안은 다음 사람을 위해 이미 지워졌으니 그대로 보여 줘요.
+        blessingCards?.showBedCards(pendingLeft.cards, serverNow());
+        pendingLeft = null;
+      }
+    }
     const motionDt = reduceMotion.matches ? 0 : dt;
     winter.update(motionDt, player.x, player.z);
     sky.update(motionDt);

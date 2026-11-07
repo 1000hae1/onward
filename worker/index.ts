@@ -1,5 +1,6 @@
 import { healthResponseSchema } from "../shared/protocol.ts";
 
+export { Directory } from "./directory";
 export { WardRoom } from "./ward-room";
 
 const MAX_WARD = 99;

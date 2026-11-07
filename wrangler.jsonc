@@ -9,10 +9,15 @@
     "not_found_handling": "single-page-application"
   },
   "durable_objects": {
-    "bindings": [{ "name": "WARD_ROOM", "class_name": "WardRoom" }]
+    "bindings": [
+      { "name": "WARD_ROOM", "class_name": "WardRoom" },
+      // 병동 전체가 함께 쓰는 하나뿐인 객체예요. 이름은 directory예요.
+      { "name": "DIRECTORY", "class_name": "Directory" }
+    ]
   },
   "migrations": [
     // 무료 플랜에서 쓰려면 반드시 new_sqlite_classes 로 만들어야 해요.
-    { "tag": "v1", "new_sqlite_classes": ["WardRoom"] }
+    { "tag": "v1", "new_sqlite_classes": ["WardRoom"] },
+    { "tag": "v2", "new_sqlite_classes": ["Directory"] }
   ]
 }

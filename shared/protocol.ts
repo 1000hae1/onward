@@ -1,4 +1,5 @@
 import { z } from "zod";
+import { ADDRESS_PATTERN } from "./left-blessings.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
 export const PROTOCOL_VERSION = 1;
@@ -24,6 +25,8 @@ const bedId = z.number().int().min(0).max(BED_COUNT - 1);
 const publicId = z.string().regex(/^[a-z0-9]{8}$/);
 const phrase = z.number().int().min(0).max(4);
 const item = z.number().int().min(0).max(4);
+/** 평안 주소예요. 다른 사람에게 보여도 되는 무작위 값이고, 서버에는 해시로만 있어요. */
+const address = z.string().regex(ADDRESS_PATTERN);
 export const animalSchema = z.enum(["rabbit", "bear", "penguin", "otter", "deer"]);
 export const outfitSchema = z.enum(["patient", "visitor"]);
 
@@ -52,6 +55,10 @@ export const clientMessageSchema = z.union([
     .object({ v, type: z.literal("gift"), item, targetId: publicId.optional(), bedId: bedId.optional() })
     .refine(exactlyOneTarget),
   z.object({ v, type: z.literal("lamp") }),
+  /** 지금 자리에 없는 사람에게 평안이나 선물을 남겨요. */
+  z
+    .object({ v, type: z.literal("leave-for"), address, kind: z.enum(["bless", "gift"]), item: item.optional() })
+    .refine((value) => (value.kind === "gift") === (value.item !== undefined)),
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HelloMessage = Extract<ClientMessage, { type: "hello" }>;
@@ -65,8 +72,19 @@ export const guestSchema = z.object({
   x: coordinate,
   z: coordinate,
   bed: bedId.nullable(),
+  address,
 });
 export type Guest = z.infer<typeof guestSchema>;
+
+/** 남겨진 평안 카드예요. 남긴 사람의 해시는 담지 않아요. */
+const blessingCardSchema = z.object({
+  nickname: z.string().max(64),
+  animal: animalSchema,
+  kind: z.enum(["bless", "gift"]),
+  item: item.nullable(),
+  at: z.number().finite(),
+});
+export type BlessingCardMessage = z.infer<typeof blessingCardSchema>;
 
 const catVisitSchema = z.object({
   room: z.number().int().min(0).max(5),
@@ -109,6 +127,7 @@ export const deniedReasonSchema = z.enum([
   "not-in-room",
   "no-target",
   "too-fast",
+  "once-a-day",
 ]);
 export type DeniedReason = z.infer<typeof deniedReasonSchema>;
 
@@ -128,7 +147,13 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     catVisits: z.array(catVisitSchema),
     /** 30초 안에 돌아와 침대와 자리를 그대로 받았는지예요. */
     restored: z.boolean(),
+    /** 내가 없는 동안 도착한 평안이에요. 보내고 나면 서버에서 지워요. */
+    inbox: z.array(blessingCardSchema),
   }),
+  /** 받은 침대에 남겨져 있던 평안이에요. 보내고 나면 서버에서 지워요. */
+  z.object({ v, type: z.literal("left-blessings"), bedId, cards: z.array(blessingCardSchema) }),
+  /** 자리에 없는 사람에게 남긴 평안이 잘 저장됐어요. */
+  z.object({ v, type: z.literal("left-saved") }),
   z.object({ v, type: z.literal("event"), event: wardEventSchema }),
   z.object({ v, type: z.literal("position-corrected"), x: coordinate, z: coordinate }),
   z.object({ v, type: z.literal("bed-granted"), bedId }),
@@ -142,7 +167,14 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   /** 보낸 메시지의 버전이 서버와 달라요. v에는 서버의 버전이 있어요. */
   z.object({ v, type: z.literal("version-mismatch") }),
   /** 선물과 불빛처럼 서버가 받지 않은 동작이에요. 요청 목록에는 없지만 안내 문구를 보여 주려고 더했어요. */
-  z.object({ v, type: z.literal("action-denied"), action: z.enum(["bless", "bow", "gift", "lamp"]), reason: deniedReasonSchema }),
+  z.object({
+    v,
+    type: z.literal("action-denied"),
+    action: z.enum(["bless", "bow", "gift", "lamp"]),
+    reason: deniedReasonSchema,
+    /** 선물이면 어떤 선물이었는지예요. 오잎클로버 안내를 따로 보여 주려고요. */
+    item: item.optional(),
+  }),
 ]);
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
 

@@ -19,6 +19,8 @@ export interface GuestRecord {
   x: number;
   z: number;
   bed: number | null;
+  /** 이번 입장에서 받은 평안 주소예요. 다른 사람에게 보여도 되는 값이에요. 서버는 연결 정보에만 들고 있어요. */
+  address: string;
   /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
@@ -43,6 +45,7 @@ export function toPublic(record: GuestRecord): Guest {
     x: record.x,
     z: record.z,
     bed: record.bed,
+    address: record.address,
   };
 }
 
@@ -101,6 +104,7 @@ export function admit(
       x: PLAYER_START.x,
       z: PLAYER_START.z,
       bed: null,
+      address: "",
       lyingSince: null,
       lastAction: {},
     },

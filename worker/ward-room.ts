@@ -33,6 +33,14 @@ import {
   updateProfile,
 } from "../shared/ward-rules.ts";
 import type { AwayGuest, CatVisit, GuestRecord } from "../shared/ward-rules.ts";
+import {
+  addLatest,
+  FIVE_LEAF_ITEM,
+  KEEP_MS,
+  LEFT_PER_BED,
+  takeForTaker,
+} from "../shared/left-blessings.ts";
+import type { BlessingCard, LeftKind, StoredBlessing } from "../shared/left-blessings.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
@@ -66,6 +74,10 @@ export class WardRoom extends DurableObject<Env> {
     // 잠시 끊긴 사람이에요. 30초 안에 돌아오면 침대와 자리를 돌려줘요.
     sql.exec(`CREATE TABLE IF NOT EXISTS away (
       key TEXT PRIMARY KEY, record TEXT NOT NULL, until INTEGER NOT NULL)`);
+    // 빈 침대에 남겨진 평안이에요. 침대마다 최근 5개, 7일까지이고, 누가 누우면 전하고 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS left_blessing (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, bed INTEGER NOT NULL, nickname TEXT NOT NULL,
+      animal TEXT NOT NULL, kind TEXT NOT NULL, item INTEGER, at INTEGER NOT NULL, sender TEXT NOT NULL)`);
     // 마지막으로 알린 고양이 방문이에요. 바뀐 것만 알리려고 둬요.
     sql.exec(`CREATE TABLE IF NOT EXISTS cat_visits (
       room INTEGER PRIMARY KEY, bed INTEGER NOT NULL, at INTEGER NOT NULL)`);
@@ -299,12 +311,21 @@ export class WardRoom extends DurableObject<Env> {
       }
     }
 
-    this.save(ws, attachment, admission.record);
+    // 새로 들어오면 directory에서 새 평안 주소를 받고, 없는 동안 도착한 평안을 꺼내요.
+    // 30초 안에 돌아온 사람은 쓰던 주소를 그대로 써서 directory에 묻지 않아요.
+    let record = admission.record;
+    let inbox: SendableCard[] = [];
+    if (!admission.restored || !record.address) {
+      const entered = await this.directory().enter(key, now);
+      record = { ...record, address: entered.address };
+      inbox = entered.inbox.filter(isCard);
+    }
+    this.save(ws, attachment, record);
     this.tidy(new Date(now));
     this.send(ws, {
       v: PROTOCOL_VERSION,
       type: "snapshot",
-      you: admission.record.id,
+      you: record.id,
       capacity: WARD_CAPACITY,
       guests: this.everyone().map(toPublic),
       gifts: this.ctx.storage.sql
@@ -315,12 +336,13 @@ export class WardRoom extends DurableObject<Env> {
       serverNow: now,
       catVisits: catVisits(this.everyone()),
       restored: admission.restored,
+      inbox,
     });
     if (admission.restored) {
       // 다른 사람에게는 자리를 비운 적이 없던 것처럼 보여요. 모습이 바뀌었을 때만 알려요.
-      this.broadcast({ kind: "update", guest: toPublic(admission.record) }, ws);
+      this.broadcast({ kind: "update", guest: toPublic(record) }, ws);
     } else {
-      this.broadcast({ kind: "join", guest: toPublic(admission.record) }, ws);
+      this.broadcast({ kind: "join", guest: toPublic(record) }, ws);
     }
     this.refreshCatVisits(before);
   }
@@ -328,8 +350,8 @@ export class WardRoom extends DurableObject<Env> {
   private async act(ws: WebSocket, attachment: Extract<Attachment, { joined: true }>, message: ClientMessage): Promise<void> {
     const record = attachment.record;
     const nowMs = Date.now();
-    const deny = (action: DeniedAction, reason: DeniedReason): void => {
-      this.send(ws, { v: PROTOCOL_VERSION, type: "action-denied", action, reason });
+    const deny = (action: DeniedAction, reason: DeniedReason, item?: number): void => {
+      this.send(ws, { v: PROTOCOL_VERSION, type: "action-denied", action, reason, ...(item === undefined ? {} : { item }) });
     };
     const save = (next: GuestRecord): void => this.save(ws, attachment, next);
 
@@ -364,6 +386,8 @@ export class WardRoom extends DurableObject<Env> {
         this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
         this.broadcast({ kind: "lie", id: record.id, bedId: message.bedId }, ws);
         this.refreshCatVisits(before);
+        // 그 침대에 남겨져 있던 평안을 전하고 바로 지워요.
+        await this.deliverLeft(ws, message.bedId, record, nowMs);
         return;
       }
       case "get-up": {
@@ -386,6 +410,10 @@ export class WardRoom extends DurableObject<Env> {
         if (!target) return deny("bless", "no-target");
         save({ ...record, lastAction: { ...record.lastAction, bless: nowMs } });
         this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
+        // 빈 침대면 다음에 누울 사람을 위해 남겨 둬요.
+        if (target.bedId !== null && target.targetId === null && this.bedIsEmpty(target.bedId)) {
+          await this.leaveOnBed(target.bedId, record, "bless", null, nowMs);
+        }
         return;
       }
       case "gift": {
@@ -403,6 +431,11 @@ export class WardRoom extends DurableObject<Env> {
             .exec<{ count: number }>("SELECT count FROM gift_counts WHERE guest = ? AND day = ?", guest, day)
             .toArray()[0]?.count ?? 0;
         if (used >= GIFTS_PER_DAY) return deny("gift", "gift-limit");
+        // 오잎클로버는 어느 병동에서든 하루 한 번이에요. 그래서 공용 directory에서 세요.
+        if (message.item === FIVE_LEAF_ITEM && !(await this.directory().useDailyGift(guest, FIVE_LEAF_ITEM, day))) {
+          return deny("gift", "gift-limit", FIVE_LEAF_ITEM);
+        }
+        const emptyBed = this.bedIsEmpty(target.bedId);
 
         const stand = target.bedId;
         const placed = sql
@@ -427,6 +460,31 @@ export class WardRoom extends DurableObject<Env> {
         save({ ...record, lastAction: { ...record.lastAction, gift: nowMs } });
         // 놓은 사람도 서버가 정한 칸을 받아야 하니 모두에게 보내요.
         this.broadcast({ kind: "gift", id: record.id, gift: { stand, slot, item: message.item } });
+        if (emptyBed) await this.leaveOnBed(stand, record, "gift", message.item, nowMs);
+        return;
+      }
+      case "leave-for": {
+        const action = message.kind;
+        if (!actionReady(record, action, nowMs)) return deny(action, "too-fast");
+        const now = new Date(nowMs);
+        const item = message.item ?? null;
+        if (item !== null && !giftAllowedNow(item, now)) return deny("gift", "out-of-season", item);
+        const day = koreanDay(now);
+        const sender = await hashGuest(record.guestId);
+        const directory = this.directory();
+        if (item === FIVE_LEAF_ITEM && !(await directory.useDailyGift(sender, FIVE_LEAF_ITEM, day))) {
+          return deny("gift", "gift-limit", FIVE_LEAF_ITEM);
+        }
+        const result = await directory.leaveFor(
+          sender,
+          message.address,
+          { nickname: record.nickname, animal: record.animal, kind: message.kind, item, at: nowMs },
+          nowMs,
+          day,
+        );
+        save({ ...record, lastAction: { ...record.lastAction, [action]: nowMs } });
+        if (result === "saved") this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
+        else deny(action, result === "once-a-day" ? "once-a-day" : "no-target");
         return;
       }
       case "lamp": {
@@ -449,6 +507,54 @@ export class WardRoom extends DurableObject<Env> {
     }
   }
 
+  private directory() {
+    return this.env.DIRECTORY.getByName("directory");
+  }
+
+  /** 아무도 누워 있지 않은 침대예요. 잠시 끊긴 사람의 침대도 누워 있는 것으로 봐요. */
+  private bedIsEmpty(bed: number): boolean {
+    return !this.everyone().some((guest) => guest.bed === bed);
+  }
+
+  /** 빈 침대에 평안을 남겨요. 침대마다 최근 5개만 두고 나머지는 지워요. */
+  private async leaveOnBed(bed: number, record: GuestRecord, kind: LeftKind, item: number | null, nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const sender = await hashGuest(record.guestId);
+    const existing = sql.exec<{ id: number; at: number }>("SELECT id, at FROM left_blessing WHERE bed = ?", bed).toArray();
+    const kept = addLatest(existing, { id: -1, at: nowMs }, LEFT_PER_BED, nowMs);
+    for (const row of existing) {
+      if (!kept.some((entry) => entry.id === row.id)) sql.exec("DELETE FROM left_blessing WHERE id = ?", row.id);
+    }
+    sql.exec(
+      "INSERT INTO left_blessing (bed, nickname, animal, kind, item, at, sender) VALUES (?, ?, ?, ?, ?, ?, ?)",
+      bed,
+      record.nickname,
+      record.animal,
+      kind,
+      item,
+      nowMs,
+      sender,
+    );
+  }
+
+  /** 침대를 받은 사람에게 그 침대에 남겨진 평안을 전하고 지워요. */
+  private async deliverLeft(ws: WebSocket, bed: number, record: GuestRecord, nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const rows = sql
+      .exec<{ nickname: string; animal: string; kind: string; item: number | null; at: number; sender: string }>(
+        "SELECT nickname, animal, kind, item, at, sender FROM left_blessing WHERE bed = ?",
+        bed,
+      )
+      .toArray();
+    if (rows.length === 0) return;
+    sql.exec("DELETE FROM left_blessing WHERE bed = ?", bed);
+    const stored: StoredBlessing[] = rows.map((row) => ({ ...row, kind: row.kind === "gift" ? "gift" : "bless" }));
+    const cards = takeForTaker(stored, await hashGuest(record.guestId), nowMs).filter(isCard);
+    if (cards.length > 0) {
+      this.send(ws, { v: PROTOCOL_VERSION, type: "left-blessings", bedId: bed, cards });
+    }
+  }
+
   private lampCounts(): number[] {
     const counts = ROOMS.map(() => 0);
     for (const row of this.ctx.storage.sql.exec<{ room: number; count: number }>("SELECT room, count FROM lamps")) {
@@ -464,10 +570,19 @@ export class WardRoom extends DurableObject<Env> {
     sql.exec("DELETE FROM gifts WHERE day != ?", day);
     sql.exec("DELETE FROM lamps WHERE day != ?", day);
     sql.exec("DELETE FROM gift_counts WHERE day != ?", day);
+    sql.exec("DELETE FROM left_blessing WHERE at < ?", now.getTime() - KEEP_MS);
   }
 }
 
 async function hashGuest(guestId: string): Promise<string> {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`onward:${guestId}`));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+const ANIMALS = new Set(["rabbit", "bear", "penguin", "otter", "deer"]);
+type SendableCard = BlessingCard & { animal: "rabbit" | "bear" | "penguin" | "otter" | "deer" };
+
+/** 저장소에서 읽은 카드가 화면에 보내도 되는 모양인지 확인해요. */
+function isCard(card: BlessingCard): card is SendableCard {
+  return ANIMALS.has(card.animal);
 }

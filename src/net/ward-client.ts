@@ -45,6 +45,8 @@ export interface WardClientHandlers {
   onCorrected(x: number, z: number): void;
   onNicknameRejected(problem: NicknameProblem): void;
   onDenied(denied: Denied): void;
+  onLeftBlessings(message: Extract<ServerMessage, { type: "left-blessings" }>): void;
+  onLeftSaved(): void;
   onStatus(status: ConnectionStatus, instance: number): void;
 }
 
@@ -141,6 +143,12 @@ export function createWardClient(
         return;
       case "action-denied":
         handlers.onDenied(message);
+        return;
+      case "left-blessings":
+        handlers.onLeftBlessings(message);
+        return;
+      case "left-saved":
+        handlers.onLeftSaved();
         return;
     }
   };

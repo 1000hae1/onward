@@ -49,6 +49,7 @@ const record = (id: string, over: Partial<GuestRecord> = {}): GuestRecord => ({
   x: PLAYER_START.x,
   z: PLAYER_START.z,
   bed: null,
+  address: "A".repeat(22),
   lyingSince: null,
   lastAction: {},
   ...over,
@@ -307,4 +308,12 @@ test("다시 같은 침대를 받으면 누운 시각이 그대로라 고양이 
   const a = record("aaaaaaaa", { bed: 3, lyingSince: 100 });
   assert.equal(claimBed([a], a, 3, 9999).record.lyingSince, 100);
   assert.equal(claimBed([a], a, 4, 9999).record.lyingSince, 9999);
+});
+
+test("다른 사람에게 보내는 정보에는 평안 주소가 있고 guestId는 없어요", () => {
+  const guest = record("aaaaaaaa", { guestId: "guest-secret-0001", address: "Q".repeat(22) });
+  const shown = toPublic(guest);
+  assert.equal(shown.address, "Q".repeat(22));
+  assert.equal(JSON.stringify(shown).includes("guest-secret-0001"), false);
+  assert.deepEqual(Object.keys(shown).sort(), ["address", "animal", "bed", "id", "nickname", "outfit", "withCat", "x", "z"]);
 });
