@@ -1,5 +1,7 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
+  // 맨 위는 production(onward)이에요. 미리보기는 아래 env.preview(onward-preview)예요.
+  // 이름이 다른 별도 Worker라서 Durable Object 데이터와 비밀값이 완전히 따로예요. docs/operations.md를 참고하세요.
   "name": "onward",
   "main": "./worker/index.ts",
   "compatibility_date": "2026-11-05",
@@ -7,6 +9,16 @@
     // /api/*, /ws, /admin/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요(/privacy 포함).
     "run_worker_first": ["/api/*", "/ws", "/admin", "/admin/*"],
     "not_found_handling": "single-page-application"
+  },
+  // Workers 로그예요. 자동 요청 로그(invocation_logs)는 꺼요. 요청 URL에 문병 토큰이 들어갈 수 있어서예요.
+  // 직접 남기는 로그는 worker/log.ts를 거쳐 길 이름·상태·오류 종류만 남아요. guestId·IP·닉네임은 남기지 않아요.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "redact_query_string": true,
+    "logs": { "enabled": true, "invocation_logs": false },
+    // 추적(traces)에는 요청 URL 전체가 담겨요. 문병 토큰이 남지 않게 꺼 둬요.
+    "traces": { "enabled": false }
   },
   "durable_objects": {
     "bindings": [
@@ -19,5 +31,29 @@
     // 무료 플랜에서 쓰려면 반드시 new_sqlite_classes 로 만들어야 해요.
     { "tag": "v1", "new_sqlite_classes": ["WardRoom"] },
     { "tag": "v2", "new_sqlite_classes": ["Directory"] }
-  ]
+  ],
+  "env": {
+    // 미리보기예요. CLOUDFLARE_ENV=preview로 빌드하면 이 설정으로 배포돼요(npm run deploy:preview).
+    // durable_objects와 migrations는 환경마다 다시 적어야 해요.
+    "preview": {
+      "name": "onward-preview",
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "redact_query_string": true,
+        "logs": { "enabled": true, "invocation_logs": false },
+        "traces": { "enabled": false }
+      },
+      "durable_objects": {
+        "bindings": [
+          { "name": "WARD_ROOM", "class_name": "WardRoom" },
+          { "name": "DIRECTORY", "class_name": "Directory" }
+        ]
+      },
+      "migrations": [
+        { "tag": "v1", "new_sqlite_classes": ["WardRoom"] },
+        { "tag": "v2", "new_sqlite_classes": ["Directory"] }
+      ]
+    }
+  }
 }

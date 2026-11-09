@@ -1,4 +1,8 @@
+import { stashVisitPath } from "./net/visit-path";
 import { createWebglFallback } from "./ui/webgl-fallback";
+
+// 가장 먼저 주소창의 문병 토큰을 이 탭으로 옮기고 지워요. 방문 통계에도 토큰이 담긴 주소가 가지 않아요.
+stashVisitPath();
 import { applyLargeText, loadViewPrefs } from "./ui/view-prefs";
 
 const loading = document.querySelector<HTMLElement>("#loading");

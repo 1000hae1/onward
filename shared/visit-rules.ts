@@ -116,11 +116,7 @@ export function visitorDelivery(visitBed: number, ownerPresent: boolean, targetB
   return !ownerPresent && targetBed === visitBed ? "owner-inbox" : "room";
 }
 
-/** 주소창의 /visit/{토큰}을 읽어요. 맞지 않으면 null이에요. */
-export function readVisitPath(pathname: string): string | null {
-  const match = /^\/visit\/([A-Za-z0-9_-]{22})\/?$/.exec(pathname);
-  return match ? match[1] : null;
-}
+export { readVisitPath } from "./visit-path.ts";
 
 /** 입장 화면의 제목이에요. */
 export function visitTitle(ownerNickname: string): string {

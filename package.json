@@ -7,11 +7,13 @@
     "dev": "vite",
     "build": "npm run typecheck && vite build",
     "preview": "npm run build && vite preview",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "npm run test && npm run build && wrangler deploy",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "cf-typegen": "wrangler types",
-    "e2e": "playwright test"
+    "e2e": "playwright test",
+    "build:preview": "npm run typecheck && CLOUDFLARE_ENV=preview vite build --mode preview",
+    "deploy:preview": "npm run test && npm run build:preview && wrangler deploy"
   },
   "dependencies": {
     "three": "^0.187.0",

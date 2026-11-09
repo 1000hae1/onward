@@ -113,6 +113,7 @@
 
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
+| 날짜별 지표 보기 | 하루 입장 수, 서로 다른 사람 수, 다시 온 비율, 평균 머문 시간, 평안 빌기 수, 문병 링크로 들어온 수를 날짜별로 받아요. 숫자만 있어요. | 완성 | `GET /admin/metrics?days=30` | `shared/metrics-rules.ts`, `worker/directory.ts`(metrics_daily), `worker/admin.ts` |
 | 신고 목록 보기 | 최근 신고를 해시·닉네임·사유·병실·처리 여부와 함께 받아요. | 완성 | `GET /admin/reports?limit=50` | `worker/admin.ts`, `worker/directory.ts`(listReports) |
 | 입장 막기 | 막힌 분은 "지금은 들어올 수 없어요"만 보고, 지금 병실에 있으면 바로 나가요. 30일 뒤 풀려요. | 완성 | `POST /admin/block` (guestHash나 ipHash) | `worker/directory.ts`(adminBlock, tellRooms), `worker/ward-room.ts`(moderate) |
 | 닉네임 되돌리기 | 그분 닉네임이 자동 닉네임으로 바뀌고, 같은 닉네임으로는 다시 바꿀 수 없어요. | 완성 | `POST /admin/reset-nickname` | `worker/directory.ts`, `shared/safety-rules.ts`(enforceBannedNickname) |
@@ -205,7 +206,7 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | --- | --- |
 | `GET /api/health` | SQLite가 살아 있는지 |
 | `GET /api/visit/{토큰}` | 문병 링크 미리보기(주인 닉네임·동물·병동). `no-store`, `noindex`, `no-referrer` |
-| `GET /admin/reports`, `POST /admin/block`·`reset-nickname`·`revoke-visit-link`·`clear-flag` | 운영자 API |
+| `GET /admin/metrics`, `GET /admin/reports`, `POST /admin/block`·`reset-nickname`·`revoke-visit-link`·`clear-flag` | 운영자 API |
 | `/privacy` | 개인정보 처리방침(정적 페이지) |
 | `/credits` | 만든 사람과 출처(정적 페이지) |
 | `GET /api/stats` | 공개 접속자 수 `{v, online, wards, updatedAt}`. 숫자만 있고 60초 캐시, GET에만 CORS `*` |
