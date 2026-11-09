@@ -65,6 +65,7 @@ import { addPeace } from "../shared/planter.ts";
 import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
 import { shouldGreet } from "../shared/return-rules.ts";
 import { hugAvailable } from "../shared/ward-rules.ts";
+import { headcount, shouldReport } from "../shared/presence-rules.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
@@ -150,6 +151,9 @@ export class WardRoom extends DurableObject<Env> {
     // 답을 기다리는 안아 주기예요. 타이머 없이, 답이 오면 시각을 견주고 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS hug_pending (
       id TEXT PRIMARY KEY, from_id TEXT NOT NULL, from_key TEXT NOT NULL, to_id TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // directory에 마지막으로 알린 인원이에요. 숫자만 둬요. 바뀌었을 때만 다시 알리려고 둬요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS presence_sent (
+      patients INTEGER NOT NULL, visitors INTEGER NOT NULL, at INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -239,7 +243,10 @@ export class WardRoom extends DurableObject<Env> {
     }
     const next = earlierAlarm(nextAlarm, due);
     if (next !== null) await this.ctx.storage.setAlarm(next);
-    if (expired.length > 0) this.refreshCatVisits(before);
+    if (expired.length > 0) {
+      this.refreshCatVisits(before);
+      await this.syncPresence(now);
+    }
   }
 
   private retentionDue(): number | null {
@@ -309,7 +316,10 @@ export class WardRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), guest.key);
       this.broadcast({ kind: "update", guest: toPublic(next) });
     }
-    if (left) this.refreshCatVisits(before);
+    if (left) {
+      this.refreshCatVisits(before);
+      await this.syncPresence(Date.now());
+    }
     return affected;
   }
 
@@ -462,6 +472,7 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "leave", id: attachment.record.id });
       if (attachment.record.key) await this.leftWard(attachment.record.key, attachment.record);
       this.refreshCatVisits(before);
+      await this.syncPresence(Date.now());
       return;
     }
     // 바로 내보내지 않고 30초 동안 자리를 맡아 둬요. 다른 사람에게는 그대로 보여요.
@@ -476,6 +487,28 @@ export class WardRoom extends DurableObject<Env> {
     // alarm은 이보다 이른 것이 없을 때만 맞춰요.
     const wanted = alarmToSet(await this.ctx.storage.getAlarm(), away.until);
     if (wanted !== null) await this.ctx.storage.setAlarm(wanted);
+    // 맡아 둔 자리도 인원에 넣어서 보통은 숫자가 그대로예요. 오래된 보고를 새로 고칠 때만 알려요.
+    await this.syncPresence(now);
+  }
+
+  /**
+   * 들고 날 때 불러요. 이 병실의 지금 인원(잠시 끊긴 사람 포함)을 directory에 알려요.
+   * 지난번에 알린 값과 같으면 directory를 깨우지 않아요. 주기적으로 부르지 않아요.
+   */
+  private async syncPresence(nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const last = sql.exec<{ patients: number; visitors: number; at: number }>("SELECT patients, visitors, at FROM presence_sent").toArray()[0] ?? null;
+    const current = headcount(this.everyone());
+    if (!shouldReport(last, current, nowMs)) return;
+    const { ward, instance } = this.place();
+    try {
+      await this.directory().reportPresence(`ward-${ward}-${instance}`, current, nowMs);
+    } catch {
+      // 알리지 못해도 병실은 그대로 돌아가요. 다음 이벤트 때 현재값으로 다시 맞춰요.
+      return;
+    }
+    sql.exec("DELETE FROM presence_sent");
+    sql.exec("INSERT INTO presence_sent (patients, visitors, at) VALUES (?, ?, ?)", current.patients, current.visitors, nowMs);
   }
 
   private async hello(
@@ -668,6 +701,7 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "join", guest: toPublic(record) }, ws);
     }
     this.refreshCatVisits(before);
+    await this.syncPresence(now);
     this.countVisitor(key, now);
     await this.openWindowIfMorning(roomAt(record.x, record.z)?.index ?? null, now);
     await this.keepTidy();

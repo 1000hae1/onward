@@ -32,6 +32,8 @@ import {
 import type { Moderation, ReportResult, RetentionRule } from "../shared/safety-rules.ts";
 import { koreanDay } from "../shared/ward-rules.ts";
 import { countVisitDay, VISIT_DAYS_KEEP_MS } from "../shared/return-rules.ts";
+import { presenceChange, statsTimestamp, tally } from "../shared/presence-rules.ts";
+import type { Headcount } from "../shared/presence-rules.ts";
 
 /** 병실 서버가 신고를 넘길 때 담는 것이에요. 해시와 공개 번호만 있어요. */
 export interface ReportInput {
@@ -205,6 +207,36 @@ export class Directory extends DurableObject<Env> {
       guest_hash TEXT PRIMARY KEY, days INTEGER NOT NULL, last_day TEXT NOT NULL, last_at INTEGER NOT NULL)`);
     // 퇴원한 사람이에요. 다시 들어오면 "다시 들러 주셨네요"로 맞고 지워요. 다른 판단에는 쓰지 않아요.
     sql.exec(`CREATE TABLE IF NOT EXISTS discharged (guest_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)`);
+    // 병실마다 지금 있는 사람 수예요. 숫자와 병실 이름만 둬요. 아무도 없으면 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS room_presence (
+      room TEXT PRIMARY KEY, patients INTEGER NOT NULL, visitors INTEGER NOT NULL, at INTEGER NOT NULL)`);
+  }
+
+  /* ───────────── 접속자 수 ───────────── */
+
+  /** 병실이 들고 날 때 지금 인원을 알려 줘요. 차이값이 아니라 현재값이라 덮어써요. */
+  async reportPresence(room: string, count: Headcount, nowMs: number): Promise<void> {
+    const change = presenceChange(room, count, nowMs);
+    const sql = this.ctx.storage.sql;
+    if (change.kind === "delete") sql.exec("DELETE FROM room_presence WHERE room = ?", change.room);
+    if (change.kind === "upsert") {
+      sql.exec(
+        "INSERT OR REPLACE INTO room_presence (room, patients, visitors, at) VALUES (?, ?, ?, ?)",
+        change.row.room,
+        change.row.patients,
+        change.row.visitors,
+        change.row.at,
+      );
+    }
+  }
+
+  /** 공개 접속자 수예요. 숫자만 돌려줘요. 오래 소식이 없는 병실은 여기서 지워요. */
+  async presenceStats(nowMs: number): Promise<{ online: number; wards: number; updatedAt: string }> {
+    const sql = this.ctx.storage.sql;
+    const rows = sql.exec<{ room: string; patients: number; visitors: number; at: number }>("SELECT room, patients, visitors, at FROM room_presence").toArray();
+    const result = tally(rows, nowMs);
+    for (const room of result.stale) sql.exec("DELETE FROM room_presence WHERE room = ?", room);
+    return { online: result.online, wards: result.wards, updatedAt: statsTimestamp(nowMs) };
   }
 
   /* ───────────── 보관 기간 ───────────── */

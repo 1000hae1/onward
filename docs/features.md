@@ -199,6 +199,8 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `GET /api/visit/{토큰}` | 문병 링크 미리보기(주인 닉네임·동물·병동). `no-store`, `noindex`, `no-referrer` |
 | `GET /admin/reports`, `POST /admin/block`·`reset-nickname`·`revoke-visit-link`·`clear-flag` | 운영자 API |
 | `/privacy` | 개인정보 처리방침(정적 페이지) |
+| `/credits` | 만든 사람과 출처(정적 페이지) |
+| `GET /api/stats` | 공개 접속자 수 `{v, online, wards, updatedAt}`. 숫자만 있고 60초 캐시, GET에만 CORS `*` |
 
 ### 서버에 저장하는 데이터
 

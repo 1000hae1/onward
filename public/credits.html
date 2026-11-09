@@ -1,0 +1,150 @@
+<!doctype html>
+<html lang="ko">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover" />
+    <meta name="referrer" content="no-referrer" />
+    <meta name="theme-color" content="#1b2433" />
+    <title>만든 사람과 출처 · 온기병동</title>
+    <style>
+      :root {
+        color-scheme: light dark;
+        --bg: #fbf6ea;
+        --text: #2c2a28;
+        --muted: #6b645a;
+        --line: #e6dccb;
+        --accent: #8a5a2b;
+        font-family: "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", system-ui, sans-serif;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #1b2433;
+          --text: #e9e4d8;
+          --muted: #b3ab9d;
+          --line: #34405a;
+          --accent: #ffe2b8;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--text);
+        line-height: 1.75;
+      }
+      main {
+        max-width: 40rem;
+        margin: 0 auto;
+        padding: 2.5rem 1rem 4rem;
+      }
+      h1 {
+        font-size: 1.5rem;
+        margin: 0 0 0.25rem;
+      }
+      h2 {
+        font-size: 1.0625rem;
+        margin: 2.25rem 0 0.5rem;
+        padding-top: 1.25rem;
+        border-top: 1px solid var(--line);
+      }
+      p,
+      li {
+        font-size: 0.9375rem;
+      }
+      ul {
+        padding-left: 1.25rem;
+      }
+      .muted {
+        color: var(--muted);
+        font-size: 0.875rem;
+      }
+      table {
+        width: 100%;
+        border-collapse: collapse;
+        font-size: 0.875rem;
+      }
+      th,
+      td {
+        text-align: left;
+        vertical-align: top;
+        padding: 0.5rem 0.4rem;
+        border-bottom: 1px solid var(--line);
+      }
+      code {
+        font-size: 0.8125rem;
+        word-break: break-all;
+      }
+      a {
+        color: var(--accent);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>만든 사람과 출처</h1>
+      <p class="muted">온기병동 · 2026년 11월 9일 기준</p>
+
+      <h2>만든 사람</h2>
+      <p>[만든 사람]</p>
+
+      <h2>소리와 그림</h2>
+      <p>
+        온기병동의 소리와 그림은 바깥에서 가져온 파일 없이 모두 코드로 그때그때 만들어요.
+        수면 모드의 바람결 소리는 잡음을 부드럽게 걸러 만들고, 동물과 병동, 문패와 간판은 기본 도형과 그림판으로 그려요.
+      </p>
+      <table>
+        <thead>
+          <tr><th>무엇</th><th>출처</th><th>라이선스</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>수면 모드 소리</td><td>직접 만듦(Web Audio)</td><td>온기병동</td></tr>
+          <tr><td>눈, 김, 그림자 번짐</td><td>직접 만듦(Canvas)</td><td>온기병동</td></tr>
+          <tr><td>문패, 간판, 안내판</td><td>직접 만듦(Canvas)</td><td>온기병동</td></tr>
+          <tr><td>동물, 고양이, 병동 모양</td><td>직접 만듦(Three.js 도형)</td><td>온기병동</td></tr>
+        </tbody>
+      </table>
+
+      <h2>글꼴</h2>
+      <p>
+        글꼴 파일을 따로 내려받지 않아요. 보시는 기기에 이미 있는 글꼴(Apple SD Gothic Neo, Noto Sans KR, 맑은 고딕 등)로 보여 드려요.
+      </p>
+
+      <h2>함께 쓰는 프로그램</h2>
+      <table>
+        <thead>
+          <tr><th>이름</th><th>라이선스</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><a href="https://github.com/mrdoob/three.js" rel="noopener noreferrer">three.js</a></td>
+            <td>MIT · Copyright © 2010-2026 three.js authors</td>
+          </tr>
+          <tr>
+            <td><a href="https://github.com/colinhacks/zod" rel="noopener noreferrer">Zod</a></td>
+            <td>MIT · Copyright (c) 2025 Colin McDonnell</td>
+          </tr>
+        </tbody>
+      </table>
+
+      <h2>MIT 라이선스 전문</h2>
+      <p class="muted">
+        Permission is hereby granted, free of charge, to any person obtaining a copy of this software and associated
+        documentation files (the "Software"), to deal in the Software without restriction, including without limitation
+        the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell copies of the Software, and to
+        permit persons to whom the Software is furnished to do so, subject to the following conditions:
+      </p>
+      <p class="muted">
+        The above copyright notice and this permission notice shall be included in all copies or substantial portions of
+        the Software.
+      </p>
+      <p class="muted">
+        THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO
+        THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+        AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF
+        CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS
+        IN THE SOFTWARE.
+      </p>
+
+      <p class="muted"><a href="/">병동으로 돌아가기</a></p>
+    </main>
+  </body>
+</html>

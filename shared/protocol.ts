@@ -18,6 +18,18 @@ export const healthResponseSchema = z.object({
 });
 export type HealthResponse = z.infer<typeof healthResponseSchema>;
 
+/**
+ * 공개 접속자 수예요. 다른 사이트도 읽어요.
+ * 숫자와 시각만 있어요. 닉네임, 동물, guestId, 공개 번호는 이 형식에 넣을 자리가 없어요.
+ */
+export const statsResponseSchema = z.strictObject({
+  v: z.literal(PROTOCOL_VERSION),
+  online: z.number().int().min(0),
+  wards: z.number().int().min(0),
+  updatedAt: z.iso.datetime(),
+});
+export type StatsResponse = z.infer<typeof statsResponseSchema>;
+
 const v = z.literal(PROTOCOL_VERSION);
 const coordinate = z.number().finite().min(-1000).max(1000);
 const bedId = z.number().int().min(0).max(BED_COUNT - 1);

@@ -87,6 +87,7 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
         createText("p", "마음이 많이 힘들 때는 109(자살예방상담전화, 24시간)에 전화해 주세요."),
         link("109에 전화하기", "tel:109", false),
         link("개인정보 처리방침", "/privacy", true),
+        link("만든 사람과 출처", "/credits", true),
       );
       return help;
     })(),
