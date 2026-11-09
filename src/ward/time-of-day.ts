@@ -21,16 +21,34 @@ export function slotForHour(hour: number): TimeSlot {
   return "night";
 }
 
-/** 테스트용 ?time=day|evening|night 값을 읽어요. 그 밖의 값은 없는 것으로 봐요. */
-export function parseTimeOverride(search: string): TimeSlot | null {
-  const value = new URLSearchParams(search).get("time");
-  return TIME_SLOTS.find((slot) => slot === value) ?? null;
-}
+/** 테스트용으로 고를 수 있는 시간대예요. morning은 낮 조명에 아침 창문이 열린 모습이에요. */
+export type TimeOverride = TimeSlot | "morning";
+const TIME_OVERRIDES: readonly TimeOverride[] = ["morning", ...TIME_SLOTS];
 
 /**
- * 지금 보여줄 시간대를 정해요.
- * 지금은 브라우저 시계를 쓰고, 서버 시간을 붙일 때는 now만 서버 값으로 넘기면 돼요.
+ * 테스트용 ?time=morning|day|evening|night 값을 읽어요. 그 밖의 값은 없는 것으로 봐요.
+ * 화면 연출만 바꿔요. 서버가 판단하는 아침 한마디·선물 계절에는 영향을 주지 않아요.
  */
+export function parseTimeOverride(search: string): TimeOverride | null {
+  const value = new URLSearchParams(search).get("time");
+  return TIME_OVERRIDES.find((slot) => slot === value) ?? null;
+}
+
+export type Season = "winter" | "spring" | "summer" | "autumn";
+const SEASONS: readonly Season[] = ["winter", "spring", "summer", "autumn"];
+
+/**
+ * 테스트용 ?season=winter|spring|summer|autumn 값을 읽어요. 그 밖의 값은 없는 것으로 봐요.
+ * 눈과 김 같은 화면 연출만 바꿔요. 겨울 선물은 언제나 서버의 한국 날짜로 정해요.
+ */
+export function parseSeasonOverride(search: string): Season | null {
+  const value = new URLSearchParams(search).get("season");
+  return SEASONS.find((season) => season === value) ?? null;
+}
+
+/** 지금 보여줄 시간대를 정해요. now는 서버 시계예요. ?time=morning은 낮 조명이에요. */
 export function currentSlot(now: Date, search: string): TimeSlot {
-  return parseTimeOverride(search) ?? slotForHour(kstHour(now));
+  const override = parseTimeOverride(search);
+  if (override === "morning") return "day";
+  return override ?? slotForHour(kstHour(now));
 }

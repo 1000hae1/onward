@@ -3,6 +3,7 @@ import { test } from "vitest";
 import {
   currentSlot,
   kstHour,
+  parseSeasonOverride,
   parseTimeOverride,
   slotForHour,
 } from "../src/ward/time-of-day.ts";
@@ -50,4 +51,20 @@ test("잘못된 ?time 값은 무시하고 실제 한국 시간을 따라요", ()
   assert.equal(parseTimeOverride("?time=noon"), null);
   // 한국 시각 12시
   assert.equal(currentSlot(new Date("2026-11-05T03:00:00Z"), "?time=noon"), "day");
+});
+
+test("?time=morning은 낮 조명으로 보여줘요", () => {
+  assert.equal(parseTimeOverride("?time=morning"), "morning");
+  // 한국 시각 23시라도 화면은 낮이에요.
+  assert.equal(currentSlot(new Date("2026-11-05T14:00:00Z"), "?time=morning"), "day");
+});
+
+test("?season은 정해진 값만 받아요", () => {
+  assert.equal(parseSeasonOverride("?season=winter"), "winter");
+  assert.equal(parseSeasonOverride("?season=spring"), "spring");
+  assert.equal(parseSeasonOverride("?season=summer"), "summer");
+  assert.equal(parseSeasonOverride("?season=autumn"), "autumn");
+  assert.equal(parseSeasonOverride(""), null);
+  assert.equal(parseSeasonOverride("?season=WINTER"), null);
+  assert.equal(parseSeasonOverride("?season=rainy"), null);
 });

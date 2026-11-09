@@ -132,6 +132,16 @@ body {
   overflow-y: auto;
 }
 
+/* 넓은 가로 화면(PC)에서는 입장 패널을 왼쪽에 세워서 가운데의 아바타를 가리지 않아요. scene.ts와 같은 조건이에요. */
+@media (min-width: 900px) and (orientation: landscape) {
+  #entry {
+    left: 1.5rem;
+    top: 50%;
+    bottom: auto;
+    transform: translateY(-50%);
+  }
+}
+
 .ward-panel {
   display: grid;
   gap: 0.5rem;
@@ -561,4 +571,19 @@ input:focus-visible {
   width: 1.25rem;
   height: 1.25rem;
   accent-color: #f2c38b;
+}
+
+/* ?debug=1 일 때만 보이는 연결 정보예요. 누르는 데 방해가 되지 않게 해요. */
+#debug-panel {
+  position: fixed;
+  left: max(6px, env(safe-area-inset-left));
+  bottom: max(6px, env(safe-area-inset-bottom));
+  z-index: 100;
+  padding: 4px 6px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #d8f5d0;
+  font: 10px/1.35 ui-monospace, SFMono-Regular, Menlo, monospace;
+  white-space: pre;
+  pointer-events: none;
 }

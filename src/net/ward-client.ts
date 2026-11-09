@@ -70,6 +70,8 @@ export interface WardClientHandlers {
   /** 퇴원을 받아 줬어요. until까지 배웅을 모아요(서버 시각). */
   onDischargeStarted(until: number): void;
   onFarewellCount(count: number): void;
+  /** 받은 메시지의 종류예요. ?debug=1 표시에만 써요. event는 "event:join"처럼 알려 줘요. */
+  onMessageType?(kind: string): void;
 }
 
 export interface WardClient {
@@ -278,7 +280,9 @@ export function createWardClient(
       }
       const message = parseMessage(serverMessageSchema, event.data);
       // 맞지 않는 메시지는 무시해요.
-      if (message) handle(message);
+      if (!message) return;
+      handlers.onMessageType?.(message.type === "event" ? `event:${message.event.kind}` : message.type);
+      handle(message);
     });
     opened.addEventListener("close", (event) => {
       if (socket !== opened) return;

@@ -1,10 +1,10 @@
-/** 주소의 ?ward=3&instance=1 을 읽어요. 없거나 맞지 않으면 3병동 1번이에요. */
+/** 주소의 ?ward=1&instance=1 을 읽어요. 없거나 맞지 않으면 1병동 1번이에요. */
 export interface WardParams {
   ward: number;
   instance: number;
 }
 
-const DEFAULT_WARD = 3;
+const DEFAULT_WARD = 1;
 const DEFAULT_INSTANCE = 1;
 const MAX_WARD = 99;
 export const MAX_INSTANCE = 20;
@@ -24,7 +24,7 @@ export function readWardParams(search: string): WardParams {
 }
 
 export function wardLabel(ward: number, count: number | null, capacity: number): string {
-  return count === null ? `onWard ${ward}병동` : `onWard ${ward}병동 · ${count}/${capacity}`;
+  return count === null ? `온기병동 ${ward}병동` : `온기병동 ${ward}병동 · ${count}/${capacity}`;
 }
 
 /** 예전에 이 브라우저가 스스로 만들던 값이에요. 이제는 쓰지 않아서 보이면 지워요. */
@@ -58,4 +58,9 @@ export function readClockShiftMs(search: string): number {
   const value = new URLSearchParams(search).get("clockShift");
   if (value === null || !/^-?\d{1,5}$/.test(value)) return 0;
   return Number(value) * 60_000;
+}
+
+/** 테스트용 ?debug=1 이에요. 켜면 화면 구석에 연결 정보를 작게 보여 줘요. 서버에는 아무것도 알리지 않아요. */
+export function readDebugFlag(search: string): boolean {
+  return new URLSearchParams(search).get("debug") === "1";
 }

@@ -33,7 +33,8 @@ import { buildLandscape } from "./ward/landscape";
 import { buildWard } from "./ward/room";
 import { buildSky } from "./ward/sky";
 import { createSoftCircleTexture } from "./ward/soft-texture";
-import { currentSlot } from "./ward/time-of-day";
+import { currentSlot, parseSeasonOverride, parseTimeOverride } from "./ward/time-of-day";
+import { createDebugPanel } from "./ui/debug-panel";
 import {
   countNight,
   lightsOutText,
@@ -49,7 +50,7 @@ import type { NightRecord } from "../shared/daily";
 import type { WardStats } from "../shared/protocol";
 import { createNotice } from "./ui/notice";
 import { createSleepMode } from "./ui/sleep-mode";
-import { readClockShiftMs } from "./net/ward-params";
+import { readClockShiftMs, readDebugFlag } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
 import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
@@ -82,6 +83,13 @@ const LANDSCAPE_VIEW_SHIFT = 0.08;
 const PICKER_VIEW_SHIFT = -0.09;
 const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
+/**
+ * 넓은 가로 화면에서는 입장 패널이 왼쪽에 서요(style.css와 같은 조건). 아바타는 남은 오른쪽의
+ * 가운데에 오도록 옆으로 비켜요. 패널 오른쪽 끝(px)의 절반만큼 옮기면 남은 공간의 가운데예요.
+ */
+const SIDE_ENTRY_QUERY = "(min-width: 900px) and (orientation: landscape)";
+const SIDE_ENTRY_FALLBACK_PX = 440;
+const SIDE_ENTRY_VIEW_SHIFT = -0.04;
 
 /** 다른 사람이 걷는 빠르기예요. 안아 주러 다가가는 시간을 어림할 때 써요. */
 const HUG_WALK_SPEED = 1.8;
@@ -141,6 +149,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
     snowCount: phone ? 220 : 600,
     steamPerRoom: phone ? 3 : 5,
   });
+  // 테스트용 ?season=이 겨울이 아니면 눈과 김을 숨겨요. 값이 없으면 지금처럼 늘 보여요.
+  const seasonOverride = parseSeasonOverride(window.location.search);
+  if (seasonOverride !== null) winter.setVisible(seasonOverride === "winter");
   const lighting = createLighting(scene, {
     ceiling: room.ceiling,
     ceilingPanel: room.ceilingPanel,
@@ -168,6 +179,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
   const planters = createPlanters(scene);
   const morningWindows = createMorningWindows(scene);
+  /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
+  const morningPreview = parseTimeOverride(window.location.search) === "morning";
+  const openMorningPreview = (): void => {
+    if (morningPreview) ROOMS.forEach((_, roomIndex) => morningWindows.open(roomIndex, true));
+  };
+  openMorningPreview();
+  /** ?debug=1일 때만 보이는 작은 연결 정보예요. */
+  const debug = readDebugFlag(window.location.search) ? createDebugPanel() : null;
   const glows = createWarmGlows(scene, softCircle);
   /** 서버가 정한 병동 고양이 방문이에요. 병실 번호마다 하나예요. */
   const serverVisits = new Map<number, CatVisitPlan>();
@@ -205,21 +224,36 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   let pickerShift: number | null = ENTRY_VIEW_SHIFT;
   let viewShift: number | null = null;
+  /** 화면 너비에 대한 옆 비킴 비율이에요. 양수면 아바타가 오른쪽으로 가요. */
+  let sideShift: number | null = null;
+  const sideEntry = window.matchMedia(SIDE_ENTRY_QUERY);
+  const entryPanel = document.querySelector<HTMLElement>("#entry");
 
-  /** 지금 화면에 맞는 시선 높이로 옮겨요. 값이 그대로면 아무것도 하지 않아요. */
+  /** 넓은 화면에서 입장 패널이 열려 있으면 패널 오른쪽 끝의 절반만큼 비켜요. */
+  const sideGoal = (width: number): number => {
+    if (pickerShift !== ENTRY_VIEW_SHIFT || !sideEntry.matches) return 0;
+    const right = entryPanel && !entryPanel.hidden ? entryPanel.getBoundingClientRect().right : 0;
+    return (right > 0 ? right : SIDE_ENTRY_FALLBACK_PX) / 2 / width;
+  };
+
+  const ease = (from: number | null, goal: number, dt: number): number => {
+    const eased =
+      from === null || reduceMotion.matches ? goal : from + (goal - from) * (1 - Math.exp(-dt * VIEW_SHIFT_RATE));
+    return Math.abs(eased - goal) < 0.001 ? goal : eased;
+  };
+
+  /** 지금 화면에 맞는 시선 자리로 옮겨요. 값이 그대로면 아무것도 하지 않아요. */
   const applyViewShift = (dt: number): void => {
     const width = window.innerWidth;
     const height = window.innerHeight;
     const rest = width < height ? PORTRAIT_VIEW_SHIFT : LANDSCAPE_VIEW_SHIFT;
-    const goal = pickerShift ?? rest;
-    if (viewShift === goal) return;
-    const eased =
-      viewShift === null || reduceMotion.matches
-        ? goal
-        : viewShift + (goal - viewShift) * (1 - Math.exp(-dt * VIEW_SHIFT_RATE));
-    viewShift = Math.abs(eased - goal) < 0.001 ? goal : eased;
+    const side = sideGoal(width);
+    const goal = pickerShift === ENTRY_VIEW_SHIFT && sideEntry.matches ? SIDE_ENTRY_VIEW_SHIFT : (pickerShift ?? rest);
+    if (viewShift === goal && sideShift === side) return;
+    viewShift = ease(viewShift, goal, dt);
+    sideShift = ease(sideShift, side, dt);
     // setViewOffset이 투영 행렬까지 갱신해요. 탭 위치 계산도 같은 행렬을 쓰니 그대로 맞아요.
-    camera.setViewOffset(width, height, 0, -height * viewShift, width, height);
+    camera.setViewOffset(width, height, -width * sideShift, -height * viewShift, width, height);
   };
 
   const stillMotion = (): boolean => reduceMotion.matches;
@@ -360,6 +394,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const client = createWardClient(params, {
     onSnapshot(snapshot) {
       myId = snapshot.you;
+      debug?.setPublicId(snapshot.you);
+      debug?.setPlace(client.ward, client.instance);
       visitingNow = snapshot.visit !== null;
       if (snapshot.visit && !snapshot.restored) {
         // 주인 침대 곁에서 바로 시작해요. 서버가 정한 자리예요.
@@ -386,6 +422,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
       planters.setTotals(snapshot.planters);
       morningWindows.closeAll(true);
       for (const roomIndex of snapshot.morningRooms) morningWindows.open(roomIndex, true);
+      openMorningPreview();
       // 자주 온 분이면 병동 고양이가 문 앞으로 나와 반겨요. 이 화면에서만 보여요.
       if (snapshot.greet) cats.welcome({ x: player.walkX, z: player.walkZ });
       if (snapshot.welcomeBack) notice?.show(WELCOME_BACK_TEXT, 5);
@@ -531,7 +568,12 @@ export function startScene(canvas: HTMLCanvasElement): void {
     onFarewellCount(count) {
       farewellsReceived = count;
     },
-    onStatus(status) {
+    onMessageType(kind) {
+      debug?.setLastMessage(kind);
+    },
+    onStatus(status, instance) {
+      debug?.setStatus(status);
+      debug?.setPlace(client.ward, instance);
       if (status === "online" || status === "connecting") {
         if (status === "online") gate?.hide();
         return;
@@ -779,6 +821,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     camera.fov = portrait ? PORTRAIT_FOV : LANDSCAPE_FOV;
     // 화면 크기가 바뀌면 시선 높이를 곧바로 다시 맞춰요.
     viewShift = null;
+    sideShift = null;
     applyViewShift(0);
   };
   window.addEventListener("resize", resize);
@@ -815,7 +858,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
       client.pause();
     }
     // 아침(09:00)이 지나면 열린 창문을 조용히 닫아요.
-    if (!isMorningWindow(serverNow())) morningWindows.closeAll(reduceMotion.matches);
+    if (!morningPreview && !isMorningWindow(serverNow())) morningWindows.closeAll(reduceMotion.matches);
     // 1분 동안 받은 배웅을 모아 카드로 보여 주고 입장 화면으로 돌아가요.
     if (dischargeUntil !== null && serverNow() >= dischargeUntil) {
       dischargeUntil = Infinity;

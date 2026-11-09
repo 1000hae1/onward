@@ -151,14 +151,15 @@ test("지오메트리마다 꼭짓점 색이 있어 재질 하나로 그릴 수 
   }
 });
 
-test("환자복은 연하늘색 바탕에 줄무늬가 있고, 배 무늬가 함께 보여요", () => {
+test("환자복은 줄무늬 없는 하늘색이고, 브이넥 사이로 배 무늬가 보여요", () => {
   const spec = speciesById("rabbit");
   const patient = colorsOf(getAvatarKit(spec, "patient").body);
   const visitor = colorsOf(getAvatarKit(spec, "visitor").body);
-  for (const hex of ["#cfe5f2", "#a3c9e2"]) {
+  for (const hex of ["#a9d8f2", "#86c2e6"]) {
     assert.ok(patient.has(key(hex)), hex);
     assert.ok(!visitor.has(key(hex)), hex);
   }
+  assert.ok(!patient.has(key("#a3c9e2")), "예전 줄무늬 색이 남아 있어요");
   assert.ok(patient.has(key(spec.belly)));
 });
 

@@ -71,6 +71,44 @@ export function eggBand(thetas: readonly number[], shells: number | readonly num
   return paint(lathe, hex);
 }
 
+/**
+ * 둘레를 따라 가장자리 높이가 달라지는 띠예요. 브이넥처럼 앞만 깊게 파인 옷깃을 만들 때 써요.
+ * rows(φ)는 그 φ에서 아래부터 위로 올라가는 θ 목록이고, 길이는 shells와 같아야 해요.
+ */
+export function eggSheet(
+  rows: (phi: number) => readonly number[],
+  shells: readonly number[],
+  hex: string,
+  radial = EGG_RADIAL,
+): BufferGeometry {
+  const positions: number[] = [];
+  const indices: number[] = [];
+  const point = new Vector3();
+  for (let j = 0; j <= radial; j++) {
+    // 이음매가 등 뒤에 오도록 -π에서 시작해요. 정면(φ=0)에 꼭짓점이 하나 놓여 V 끝이 뾰족해요.
+    const phi = -Math.PI + (j / radial) * Math.PI * 2;
+    const thetas = rows(phi);
+    thetas.forEach((theta, index) => {
+      eggPoint(Math.max(1e-4, theta), phi, shells[index], point);
+      positions.push(point.x, point.y, point.z);
+    });
+  }
+  const count = shells.length;
+  const at = (j: number, i: number): number => j * count + i;
+  for (let j = 0; j < radial; j++) {
+    for (let i = 0; i < count - 1; i++) {
+      // φ 방향 × θ 방향이 바깥을 보도록 감아요.
+      indices.push(at(j, i), at(j + 1, i), at(j, i + 1));
+      indices.push(at(j + 1, i), at(j + 1, i + 1), at(j, i + 1));
+    }
+  }
+  const geometry = new BufferGeometry();
+  geometry.setAttribute("position", new Float32BufferAttribute(positions, 3));
+  geometry.setIndex(indices);
+  geometry.computeVertexNormals();
+  return paint(geometry, hex);
+}
+
 export interface PatchSpec {
   at: SurfaceSpot;
   /** θ 방향과 φ 방향의 반지름이에요. */

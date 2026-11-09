@@ -6,6 +6,7 @@ import {
   eggBand,
   eggPatch,
   eggRadius,
+  eggSheet,
   eggThetaAt,
   eggY,
   mirroredPatches,
@@ -51,13 +52,16 @@ export const HAND_REACH = ARM_REACH;
 const CLOTHES_SHELL = 1.045;
 /** 옷이 덮는 꼭대기예요. 몸 높이의 아래 2/3쯤이에요. */
 const CLOTHES_TOP = 1.82;
-/** 옷깃이 끝나고 털이 시작되는 자리예요. 옷깃이 이음매를 덮어요. */
-const FUR_START = 1.76;
-const FUR_THETAS = [FUR_START, 2.1, 2.45, 2.75, 2.98, Math.PI];
+/** 털이 시작되는 자리예요. 브이넥 안쪽으로 보이도록 V 끝보다 조금 아래에서 시작해요. */
+const FUR_START = 1.5;
+const FUR_THETAS = [FUR_START, 1.76, 2.1, 2.45, 2.75, 2.98, Math.PI];
 
-const PAJAMA = "#cfe5f2";
-const PAJAMA_STRIPE = "#a3c9e2";
-const PAJAMA_COLLAR = "#90b9d8";
+const PAJAMA = "#a9d8f2";
+const PAJAMA_COLLAR = "#86c2e6";
+/** 브이넥이 가장 깊이 파인 정면의 θ예요. */
+const V_NECK_TIP = 1.56;
+/** 정면에서 V가 벌어지는 φ 폭이에요. 이 밖은 둥근 목둘레예요. */
+const V_NECK_HALF_WIDTH = 0.75;
 const BUTTON_COLOR = "#fbfaf6";
 const KNIT = "#d39a86";
 const KNIT_TRIM = "#bf8571";
@@ -70,15 +74,22 @@ interface Band {
   shells?: readonly number[];
 }
 
-/** 연하늘색 바탕에 조금 진한 하늘색 가로줄이에요. 위에 둥근 옷깃이 있어요. */
-const PAJAMA_BANDS: readonly Band[] = [
-  { thetas: [0, 0.5, 1.0], color: PAJAMA },
-  { thetas: [1.0, 1.11], color: PAJAMA_STRIPE },
-  { thetas: [1.11, 1.43], color: PAJAMA },
-  { thetas: [1.43, 1.54], color: PAJAMA_STRIPE },
-  { thetas: [1.54, CLOTHES_TOP], color: PAJAMA },
-  { thetas: [CLOTHES_TOP, 1.88, 1.95], color: PAJAMA_COLLAR, shells: [CLOTHES_SHELL, 1.065, 1.004] },
-];
+/** φ 자리의 목둘레 높이예요. 정면에서 V자로 내려가요. */
+function neckline(phi: number): number {
+  const v = Math.max(0, 1 - Math.abs(phi) / V_NECK_HALF_WIDTH);
+  return CLOTHES_TOP - (CLOTHES_TOP - V_NECK_TIP) * v;
+}
+
+/** 줄무늬 없는 하늘색 환자복이에요. 브이넥을 따라 조금 진한 하늘색 옷깃이 둘러요. */
+function buildPajama(): BufferGeometry[] {
+  return [
+    eggSheet((phi) => [0, 0.5, 1.0, 1.4, neckline(phi)], Array(5).fill(CLOTHES_SHELL), PAJAMA),
+    eggSheet((phi) => {
+      const top = neckline(phi);
+      return [top, top + 0.06, top + 0.13];
+    }, [CLOTHES_SHELL, 1.065, 1.004], PAJAMA_COLLAR),
+  ];
+}
 
 /** 니트에 밑단 줄이 하나 있고, 목에 도톰한 목도리를 둘렀어요. */
 const KNIT_BANDS: readonly Band[] = [
@@ -89,17 +100,15 @@ const KNIT_BANDS: readonly Band[] = [
 ];
 
 const PAJAMA_DETAILS: readonly SurfaceBlob[] = [
-  { shape: "ball", color: BUTTON_COLOR, on: [1.29, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
-  { shape: "ball", color: BUTTON_COLOR, on: [1.68, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
+  { shape: "ball", color: BUTTON_COLOR, on: [1.12, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
+  { shape: "ball", color: BUTTON_COLOR, on: [1.38, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
 ];
 
 const SLEEVE_COLOR: Record<Outfit, string> = { patient: PAJAMA, visitor: KNIT };
 
 function buildClothes(outfit: Outfit): BufferGeometry {
-  const bands = outfit === "patient" ? PAJAMA_BANDS : KNIT_BANDS;
-  const parts = bands.map((band) => eggBand(band.thetas, band.shells ?? CLOTHES_SHELL, band.color));
-  if (outfit === "patient") parts.push(...surfaceBlobs(PAJAMA_DETAILS));
-  return merged(parts);
+  if (outfit === "patient") return merged([...buildPajama(), ...surfaceBlobs(PAJAMA_DETAILS)]);
+  return merged(KNIT_BANDS.map((band) => eggBand(band.thetas, band.shells ?? CLOTHES_SHELL, band.color)));
 }
 
 /** 옷 위로 보이는 털과 얼굴이에요. 배 무늬는 아랫부분이 옷에 가려 윗부분만 살짝 보여요. */

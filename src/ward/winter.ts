@@ -2,6 +2,7 @@ import {
   BufferAttribute,
   BufferGeometry,
   CylinderGeometry,
+  Group,
   IcosahedronGeometry,
   MeshLambertMaterial,
   Points,
@@ -37,6 +38,8 @@ export interface WinterHandles {
   steamMaterials: SpriteMaterial[];
   /** dt가 0이면 움직임 없이 그 자리에 머물러요. centerX, centerZ는 눈이 내리는 구역의 중심이에요. */
   update(dt: number, centerX: number, centerZ: number): void;
+  /** 눈·김·겨울 간식을 한꺼번에 보이거나 숨겨요. */
+  setVisible(visible: boolean): void;
 }
 
 const lambert = (color: string, flatShading = false): MeshLambertMaterial =>
@@ -264,17 +267,24 @@ export function buildWinter(
   softCircle: Texture,
   options: WinterOptions,
 ): WinterHandles {
-  buildNightstandTreats(parent);
-  buildHoppang(parent);
-  const snow = buildSnow(parent, softCircle, options.snowCount);
-  const steam = buildSteam(parent, softCircle, options.steamPerRoom);
+  // 겨울 연출을 한 묶음에 담아서 계절에 따라 한 번에 숨길 수 있게 해요.
+  const group = new Group();
+  parent.add(group);
+  buildNightstandTreats(group);
+  buildHoppang(group);
+  const snow = buildSnow(group, softCircle, options.snowCount);
+  const steam = buildSteam(group, softCircle, options.steamPerRoom);
   steam.update(0);
   return {
     snowMaterial: snow.material,
     steamMaterials: steam.materials,
     update(dt, centerX, centerZ) {
+      if (!group.visible) return;
       snow.update(dt, centerX, centerZ);
       steam.update(dt);
+    },
+    setVisible(visible) {
+      group.visible = visible;
     },
   };
 }
