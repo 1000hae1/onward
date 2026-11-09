@@ -5,6 +5,11 @@
   color: #e9e4d8;
 }
 
+/* 설정의 "글자 크게"예요. 글자는 모두 rem이라 이것만으로 함께 커져요. */
+html.large-text {
+  font-size: 120%;
+}
+
 html,
 body {
   height: 100%;
@@ -91,7 +96,7 @@ body {
 
 .sleep-hint {
   margin: 0;
-  color: rgba(246, 239, 226, 0.4);
+  color: rgba(246, 239, 226, 0.6);
   font-size: 0.8125rem;
   text-align: center;
 }
@@ -103,7 +108,8 @@ body {
   transform: translateX(-50%);
   padding: 0.4rem 0.95rem;
   border-radius: 999px;
-  background: rgba(27, 36, 51, 0.62);
+  /* 밝은 낮 장면 위에서도 글자 대비가 4.5:1 이상이에요(tests/contrast.test.ts). */
+  background: rgba(27, 36, 51, 0.8);
   color: #f6efe2;
   font-size: 0.9375rem;
   letter-spacing: 0.02em;
@@ -219,9 +225,12 @@ body {
 }
 
 button:focus-visible,
-input:focus-visible {
-  outline: 2px solid #fff3d6;
+input:focus-visible,
+a:focus-visible,
+[tabindex]:focus-visible {
+  outline: 3px solid #fff3d6;
   outline-offset: 2px;
+  box-shadow: 0 0 0 5px rgba(27, 36, 51, 0.9);
 }
 
 #entry input {
@@ -293,15 +302,18 @@ input:focus-visible {
 #settings .settings-toggle {
   flex: none;
   width: auto;
-  min-height: 2.25rem;
-  padding: 0 0.85rem;
+  min-height: 2.75rem;
+  padding: 0 1rem;
   border-radius: 999px;
-  background: rgba(27, 36, 51, 0.62);
+  background: rgba(27, 36, 51, 0.8);
 }
 
 .settings-sheet {
   width: 100%;
   box-sizing: border-box;
+  /* 글자를 크게 하면 길어져서, 화면을 넘으면 안에서 내려 봐요. */
+  max-height: calc(100dvh - env(safe-area-inset-top) - 5rem);
+  overflow-y: auto;
 }
 
 #remote-labels {
@@ -329,7 +341,7 @@ input:focus-visible {
 .head-name {
   padding: 0.1rem 0.5rem;
   border-radius: 999px;
-  background: rgba(27, 36, 51, 0.55);
+  background: rgba(27, 36, 51, 0.8);
   color: #f6efe2;
   font-size: 0.8125rem;
 }
@@ -529,7 +541,66 @@ input:focus-visible {
 }
 
 .settings-link {
+  display: flex;
+  align-items: center;
+  min-height: 2.75rem;
   color: #ffe2b8;
+}
+
+.settings-note {
+  opacity: 0.85;
+  font-size: 0.8125rem !important;
+}
+
+/* 화면에는 보이지 않고 화면 낭독기만 읽어요. */
+.sr-only {
+  position: fixed;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  padding: 0;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+/* WebGL을 쓸 수 없거나 끊겼을 때의 안내예요. */
+#webgl-fallback {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: grid;
+  align-content: center;
+  justify-items: center;
+  gap: 0.75rem;
+  padding: 0 1.5rem;
+  background: #1b2433;
+  color: #fbf3e4;
+  text-align: center;
+}
+
+#webgl-fallback p {
+  margin: 0;
+  font-size: 1.0625rem;
+  line-height: 1.6;
+}
+
+#webgl-fallback .fallback-hint {
+  font-size: 0.875rem;
+  opacity: 0.8;
+}
+
+#webgl-fallback button {
+  min-height: 2.75rem;
+  padding: 0 1.5rem;
+  border: 0;
+  border-radius: 999px;
+  background: #f6efe2;
+  color: #1b2433;
+  font: inherit;
+  font-size: 1rem;
+  cursor: pointer;
 }
 
 /* 안아 주기 요청, 배웅 안내, 퇴원 카드예요. 아래 버튼 줄 바로 위에 떠요. */

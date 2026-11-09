@@ -37,6 +37,9 @@ import type { NavGrid, Point } from "../ward/movement";
 import { stepAlong } from "../ward/movement";
 import type { Offerings } from "../ward/offerings";
 
+import { simpleAvatarAt } from "../ward/quality";
+import type { Quality } from "../ward/quality";
+
 const WALK_SPEED = 1.8;
 const BODY_TURN_RATE = 10;
 const WALK_BLEND_RATE = 9;
@@ -82,6 +85,8 @@ interface Remote {
   shownX: number;
   shownZ: number;
   visible: boolean;
+  /** 멀어서 몸만 그리는 중이에요. */
+  simple: boolean;
 }
 
 export interface RemoteGuests {
@@ -90,6 +95,8 @@ export interface RemoteGuests {
   reset(guests: readonly Guest[], me: string): void;
   apply(event: WardEvent): void;
   update(dt: number, viewer: Point, camera: Camera, stillMotion: boolean): void;
+  /** 가볍게 보기에서는 먼 동물을 몸만 그려요. */
+  setQuality(quality: Quality): void;
   isBedTaken(bed: number): boolean;
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
@@ -182,6 +189,7 @@ export function createRemoteGuests(
       shownX: start.x,
       shownZ: start.z,
       visible: true,
+      simple: false,
     };
     companion.setEnabled(guest.withCat, { walkX: start.x, walkZ: start.z, lyingBed: null });
     remotes.set(guest.id, remote);
@@ -222,10 +230,14 @@ export function createRemoteGuests(
   };
 
   let myId: string | null = null;
+  let quality: Quality = "normal";
 
   return {
     get count() {
       return remotes.size;
+    },
+    setQuality(next) {
+      quality = next;
     },
     reset(guests, me) {
       myId = me;
@@ -385,11 +397,16 @@ export function createRemoteGuests(
         remote.shownX = x;
         remote.shownZ = z;
 
-        const visible = Math.hypot(x - viewer.x, z - viewer.z) < DRAW_DISTANCE;
-        if (visible !== remote.visible) {
+        const distance = Math.hypot(x - viewer.x, z - viewer.z);
+        const visible = distance < DRAW_DISTANCE;
+        const simple = simpleAvatarAt(quality, distance);
+        if (visible !== remote.visible || simple !== remote.simple) {
           remote.visible = visible;
+          remote.simple = simple;
           remote.avatar.root.visible = visible;
-          remote.companion.setVisible(visible);
+          remote.avatar.setSimple(simple);
+          // 멀리서 몸만 그릴 때는 곁의 고양이도 쉬어요.
+          remote.companion.setVisible(visible && !simple);
         }
         remote.companion.update(
           dt,

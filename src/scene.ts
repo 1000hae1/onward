@@ -68,6 +68,20 @@ import { createWarmGlows } from "./ward/warm-glow";
 import { createMoments } from "./ui/moments";
 import { LIGHT_DELAY_SECONDS } from "./ui/action-bar";
 import { BED_TRANSITION_SECONDS } from "./avatar/pose";
+import {
+  createFpsProbe,
+  judgeQuality,
+  pixelRatioFor,
+  snowFraction,
+  snowSpeed,
+  startQuality,
+} from "./ward/quality";
+import type { DeviceHints, Quality, QualityChoice } from "./ward/quality";
+import { applyLargeText, loadViewPrefs, saveViewPrefs } from "./ui/view-prefs";
+import type { ViewPrefs } from "./ui/view-prefs";
+import { createWebglFallback } from "./ui/webgl-fallback";
+import { blessedMeText, bowText, createAnnouncer, giftForMeText } from "./ui/announcer";
+import { blessingText, giftName } from "../shared/gestures";
 
 const MAX_FRAME_SECONDS = 0.05;
 /** 수면 모드에서는 화면이 거의 검으니 초당 4번만 그려요. */
@@ -127,11 +141,33 @@ function isPhoneLike(): boolean {
   );
 }
 
-/** 병실을 만들고 화면에 그리기 시작해요. */
+/** 브라우저가 알려 주는 기기 정보예요. 모르면 비워 둬요. */
+function deviceHints(): DeviceHints {
+  const memory = (navigator as Navigator & { deviceMemory?: number }).deviceMemory;
+  const cores = navigator.hardwareConcurrency;
+  return {
+    ...(typeof memory === "number" && memory > 0 ? { deviceMemory: memory } : {}),
+    ...(typeof cores === "number" && cores > 0 ? { cores } : {}),
+  };
+}
+
+/** 테스트용 ?quality=light|normal이에요. 이번에만 쓰고 저장하지 않아요. */
+function readQualityOverride(search: string): Quality | null {
+  const value = new URLSearchParams(search).get("quality");
+  return value === "light" || value === "normal" ? value : null;
+}
+
+/** 병실을 만들고 화면에 그리기 시작해요. WebGL을 쓸 수 없으면 오류를 던져요. */
 export function startScene(canvas: HTMLCanvasElement): void {
   const phone = isPhoneLike();
-  const renderer = new WebGLRenderer({ canvas, antialias: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, phone ? 1.75 : 2));
+  let view: ViewPrefs = loadViewPrefs();
+  const hints = deviceHints();
+  const qualityOverride = readQualityOverride(window.location.search);
+  const qualityChoice = (): QualityChoice => qualityOverride ?? view.quality;
+  let quality: Quality = startQuality(qualityChoice(), hints, view.lastAuto);
+  // 안티에일리어싱은 만들 때만 정할 수 있어요. 가볍게면 끄고 시작해요.
+  const renderer = new WebGLRenderer({ canvas, antialias: quality === "normal", powerPreference: "low-power" });
+  renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(PORTRAIT_FOV, 1, 0.12, 520);
@@ -164,6 +200,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     sky,
   });
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
+  winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
   const profile: Profile = loadProfile() ?? defaultProfile(Math.random());
   const player = createPlayerControls(scene, camera, canvas, softCircle, {
     species: profile.species,
@@ -177,6 +214,16 @@ export function startScene(canvas: HTMLCanvasElement): void {
     return head ? { x: head.x, y: head.y, z: head.z } : { x: player.x, y: 1, z: player.z };
   };
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
+  remotes.setQuality(quality);
+  /** 품질을 바꿔요. 안티에일리어싱만 빼고 바로 바뀌어요. */
+  const applyQuality = (next: Quality): void => {
+    quality = next;
+    renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
+    winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
+    remotes.setQuality(quality);
+  };
+  // 움직임 줄이기 설정을 바꾸면 눈의 양도 바로 따라가요.
+  reduceMotion.addEventListener("change", () => winter.setSnowAmount(snowFraction(quality, reduceMotion.matches)));
   const planters = createPlanters(scene);
   const morningWindows = createMorningWindows(scene);
   /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
@@ -187,6 +234,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   openMorningPreview();
   /** ?debug=1일 때만 보이는 작은 연결 정보예요. */
   const debug = readDebugFlag(window.location.search) ? createDebugPanel() : null;
+  debug?.setQuality(quality);
   const glows = createWarmGlows(scene, softCircle);
   /** 서버가 정한 병동 고양이 방문이에요. 병실 번호마다 하나예요. */
   const serverVisits = new Map<number, CatVisitPlan>();
@@ -289,6 +337,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const noticeRoot = element("notice");
   const notice = noticeRoot ? createNotice(noticeRoot) : null;
   const toast = (text: string): void => actionBar?.showToast(text);
+  const announcerRoot = element("announcer");
+  const announcer = announcerRoot ? createAnnouncer(announcerRoot) : null;
   const momentsRoot = element("moments");
   const moments = momentsRoot ? createMoments(momentsRoot) : null;
   /** 퇴원하는 중이면 배웅을 모으는 끝 시각(서버 시각)이에요. */
@@ -450,6 +500,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
     },
     onEvent(event: WardEvent) {
+      announce(event);
       if (event.kind === "gift") {
         const from = remotes.handSpot(event.id) ?? player.handSpot();
         offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion());
@@ -617,6 +668,30 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   serverNow = () => client.serverNow();
   online = () => client.online;
+
+  /** 나에게 온 평안과 선물, 같은 병실의 한마디를 화면 낭독기가 읽게 해요. 화면 모습은 그대로예요. */
+  function announce(event: WardEvent): void {
+    if (!announcer || !myId) return;
+    if (event.kind !== "bless" && event.kind !== "gift" && event.kind !== "bow") return;
+    if (event.id === myId) return;
+    const nickname = remotes.guests().find((guest) => guest.id === event.id)?.nickname;
+    if (!nickname) return;
+    const myBed = player.claimedBed;
+    if (event.kind === "bless") {
+      if (event.targetId === myId || (event.bedId !== null && event.bedId === myBed)) announcer.say(blessedMeText(nickname));
+      return;
+    }
+    if (event.kind === "gift") {
+      const gift = giftName(event.gift.item);
+      if (gift && event.gift.stand === myBed) announcer.say(giftForMeText(nickname, gift));
+      return;
+    }
+    const phrase = blessingText(event.phrase);
+    const where = remotes.position(event.id);
+    const theirRoom = where ? (roomAt(where.x, where.z)?.index ?? null) : null;
+    const myRoom = roomAt(player.walkX, player.walkZ)?.index ?? null;
+    if (phrase && theirRoom !== null && theirRoom === myRoom) announcer.say(bowText(nickname, phrase));
+  }
   setHud(null);
 
   player.setNet({
@@ -656,6 +731,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
       settings = createSettings(settingsRoot, {
         initial: chosen,
         lockOutfit: visitOwner !== null,
+        view,
+        onViewChange: (next) => {
+          const choiceChanged = next.quality !== view.quality;
+          view = { ...next, lastAuto: view.lastAuto };
+          saveViewPrefs(view);
+          applyLargeText(view.largeText);
+          if (choiceChanged && qualityOverride === null) {
+            applyQuality(view.quality === "auto" ? (view.lastAuto ?? "normal") : view.quality);
+            debug?.setQuality(quality);
+          }
+        },
         onChange: (next) => {
           persist(next);
           applyProfile(next);
@@ -871,10 +957,22 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   const headPoint = new Vector3();
   let lastMs: number | null = null;
+  /** 자동이면 처음 5초 동안 프레임 속도를 재요. 수면 모드와 숨겨진 탭은 세지 않아요. */
+  const probe = qualityChoice() === "auto" ? createFpsProbe() : null;
 
-  renderer.setAnimationLoop((timeMs) => {
+  const frame = (timeMs: number): void => {
     const rawDt = lastMs === null ? 0 : (timeMs - lastMs) / 1000;
     lastMs = timeMs;
+    if (probe && !sleep?.sleeping) {
+      const fps = probe.add(rawDt);
+      if (fps !== null && qualityChoice() === "auto") {
+        const judged = judgeQuality(fps, hints, quality);
+        view = { ...view, lastAuto: judged };
+        saveViewPrefs(view);
+        if (judged !== quality) applyQuality(judged);
+        debug?.setQuality(`${quality} · ${Math.round(fps)}fps`);
+      }
+    }
     let dt = Math.min(MAX_FRAME_SECONDS, rawDt);
     if (sleep?.sleeping) {
       sleepWaitMs += rawDt;
@@ -937,14 +1035,46 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
     }
     const motionDt = reduceMotion.matches ? 0 : dt;
-    winter.update(motionDt, player.x, player.z);
+    // 움직임 줄이기면 눈은 멈추지 않고 1/3만 천천히 내려요. 별은 반짝이지 않아요.
+    winter.update(dt * snowSpeed(reduceMotion.matches), player.x, player.z);
     sky.update(motionDt);
     lighting.setFocus(player.x, player.z);
     lighting.update(dt);
     renderer.render(scene, camera);
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
+  };
+
+  // 탭이 보이지 않으면 그리기를 멈춰요. 돌아오면 멈춘 시간을 건너뛰고 이어 그려요.
+  let contextLost = false;
+  const run = (): void => {
+    lastMs = null;
+    renderer.setAnimationLoop(frame);
+  };
+  document.addEventListener("visibilitychange", () => {
+    if (document.hidden) {
+      renderer.setAnimationLoop(null);
+      probe?.restart();
+    } else if (!contextLost) {
+      run();
+    }
   });
+
+  // 그리는 도중 WebGL이 끊기면 안내를 보여 줘요. 브라우저가 되살려 주면 안내를 닫고 이어 그려요.
+  const fallback = createWebglFallback();
+  canvas.addEventListener("webglcontextlost", (event) => {
+    event.preventDefault();
+    contextLost = true;
+    renderer.setAnimationLoop(null);
+    fallback.show();
+  });
+  canvas.addEventListener("webglcontextrestored", () => {
+    contextLost = false;
+    fallback.hide();
+    if (!document.hidden) run();
+  });
+
+  if (!document.hidden) run();
 }
 
 function readStorage(key: string): string | null {

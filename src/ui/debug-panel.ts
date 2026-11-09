@@ -6,6 +6,8 @@ export interface DebugPanel {
   setPlace(ward: number, instance: number): void;
   setStatus(status: string): void;
   setLastMessage(kind: string): void;
+  /** 그리기 품질과 처음 5초에 잰 프레임 속도예요. */
+  setQuality(text: string): void;
 }
 
 export function createDebugPanel(): DebugPanel {
@@ -20,6 +22,7 @@ export function createDebugPanel(): DebugPanel {
     status: "-",
     last: "-",
     count: 0,
+    quality: "-",
   };
 
   const render = (): void => {
@@ -28,6 +31,7 @@ export function createDebugPanel(): DebugPanel {
       `병실 ${state.place}`,
       `연결 ${state.status}`,
       `받음 ${state.last} (${state.count})`,
+      `품질 ${state.quality}`,
       `v${PROTOCOL_VERSION}`,
     ].join("\n");
   };
@@ -44,6 +48,10 @@ export function createDebugPanel(): DebugPanel {
     },
     setStatus(status) {
       state.status = status;
+      render();
+    },
+    setQuality(text) {
+      state.quality = text;
       render();
     },
     setLastMessage(kind) {

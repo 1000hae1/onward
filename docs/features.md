@@ -31,6 +31,9 @@
 | 다른 창에서 들어오면 쉬기 | 같은 사람이 다른 창으로 들어오면 예전 창은 "이 창은 쉬어요"라고 알려요. | 완성 | 같은 브라우저 탭 두 개로 들어가기 | `src/net/ward-client.ts`(REPLACED_CODE), `worker/ward-room.ts` |
 | 혼자 머물기 | 서버에 닿지 않아도 병실은 그대로 열리고, 내 화면에서만 동작해요. | 완성 | `npm run dev` 없이 정적 빌드만 열기 | `src/scene.ts`, `src/ui/action-bar.ts`(online이 false일 때) |
 | 설정 | 들어온 뒤에도 동물·옷·고양이·안아 주기 받기를 바꿀 수 있어요. | 완성 | 오른쪽 위 [설정] | `src/ui/settings.ts`, `shared/ward-rules.ts`(updateProfile) |
+| 가볍게 보기 | 처음 5초의 프레임 속도와 기기 메모리·코어 수로 보통/가볍게를 스스로 골라요. 가볍게면 픽셀 비율 1.5, 안티에일리어싱 끔, 눈 1/3, 9m보다 먼 동물은 몸만 그려요. 설정에서 [자동/켜기/끄기]로 바꿀 수 있어요. | 완성 | [설정] → [가볍게 보기], `?quality=light&debug=1`로 미리 보기 | `src/ward/quality.ts`, `src/ui/view-prefs.ts`, `src/scene.ts` |
+| 탭이 안 보이면 쉬기 | 다른 탭으로 가면 그리기를 멈추고, 돌아오면 이어 그려요. | 완성 | 다른 탭으로 갔다가 돌아오기 | `src/scene.ts`(visibilitychange) |
+| WebGL 안내 | WebGL을 쓸 수 없거나 그리는 도중 끊기면 "이 기기에서는 병실을 보여주기 어려워요"와 [다시 시도]가 떠요. 되살아나면 스스로 닫혀요. | 완성 | 개발자 도구에서 `WEBGL_lose_context`로 끊어 보기 | `src/ui/webgl-fallback.ts`, `src/main.ts` |
 | 상단 병동 이름과 오늘의 집계 | "온기병동 1병동 · 3/30", "오늘 다녀간 동물 5마리 · 모인 평안 12"가 보여요. | 일부만 | 들어가서 화면 위쪽 보기 | `src/scene.ts`(setHud, setStats), `shared/daily.ts`(statsLine) — **빠진 것: 서버는 오늘 켠 불빛 수(`stats.lamps`)도 세서 보내지만 화면에는 나오지 않아요** |
 
 ## 3. 평안을 빌어 주는 동작
@@ -97,6 +100,11 @@
 | 요청 제한 | 너무 빨리 누르면 "조금 천천히 눌러 주세요"가 떠요. 계속 몰아 보내면 연결이 닫혀요. | 완성 | 같은 버튼을 빠르게 여러 번 | `shared/safety-rules.ts`(rateStep), `shared/ward-rules.ts`(actionReady) |
 | 새 버전 안내 | 서버와 화면 버전이 다르면 "새 버전이 나왔어요. 새로고침해 주세요"가 떠요. | 완성 | 배포 직후 열린 창 | `shared/ward-rules.ts`(readVersion), `src/net/ward-client.ts`(outdated) |
 | 힘들 때 안내 | 설정 안에 109 상담전화 안내와 [109에 전화하기]가 있어요. | 완성 | [설정] 아래쪽 | `src/ui/settings.ts`, `public/privacy.html` |
+| 글자 크게 | 설정에서 켜면 모든 글자가 1.2배로 커져요. 입장 화면부터 적용돼요. | 완성 | [설정] → [글자 크게] | `src/ui/view-prefs.ts`, `src/style.css`(html.large-text) |
+| 화면 낭독기 안내 | 나에게 온 평안·선물, 같은 병실의 한마디를 보이지 않는 `aria-live="polite"` 영역에 넣어 읽어 줘요. 같은 글은 1.5초 안에 한 번만이에요. | 완성 | VoiceOver를 켜고 다른 창에서 평안 빌기 | `src/ui/announcer.ts`, `src/scene.ts`(announce) |
+| 버튼 크기와 키보드 | 모든 버튼과 링크가 44px 이상이에요. Tab으로 옮겨 다니며 포커스 테두리가 보이고, Esc로 설정과 메뉴를 닫아요. | 완성 | Tab, Esc 눌러 보기 | `src/style.css`, `src/ui/settings.ts`, `src/ui/action-bar.ts` |
+| 3D 위 글자 대비 | 머리 위 이름, 상단 이름표, 안내, 버튼 배경이 흰 벽·낮 하늘 위에서도 4.5:1 이상이에요. | 완성 | `tests/a11y.test.ts` | `src/style.css`, `src/ui/contrast.ts` |
+| 움직임 줄이기 | `prefers-reduced-motion`이면 눈이 1/3로 줄어 천천히 내리고, 별은 반짝이지 않고, 카메라와 빛 효과가 약해요. | 완성 | 운영체제에서 동작 줄이기 켜기 | `src/ward/quality.ts`(snowFraction, snowSpeed), `src/scene.ts` |
 | 개인정보 처리방침 | 무엇을 얼마나 두는지, 브라우저에 무엇이 있는지, 지우는 방법을 알려 줘요. | 일부만 | [설정] → [개인정보 처리방침] (`/privacy`) | `public/privacy.html` — **빠진 것: 문의처가 `[문의 이메일]` 자리 표시로 남아 있어요** |
 
 ## 9. 운영자
@@ -246,7 +254,7 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `guest_days` | guestId 해시별 다녀간 날 수, 마지막 날 | 마지막으로 다녀간 뒤 180일 |
 | `discharged` | 퇴원한 사람 해시 | 다시 들어오면 지움, 최대 180일 |
 
-**브라우저(localStorage)**: `onward.token`(서명된 토큰), `onward.profile`, `onward.met`(오늘 만난 분), `onward.nights`(함께한 밤), `onward.myVisitLink`. 문병 토큰은 sessionStorage에 잠깐 둬요.
+**브라우저(localStorage)**: `onward.token`(서명된 토큰), `onward.profile`, `onward.met`(오늘 만난 분), `onward.nights`(함께한 밤), `onward.myVisitLink`, `onward.view`(가볍게 보기·글자 크게·잰 품질). 문병 토큰은 sessionStorage에 잠깐 둬요.
 
 ### 무료 한도를 아끼는 장치
 

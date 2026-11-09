@@ -105,6 +105,14 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     player.setBedPicker(null);
   };
 
+  // Esc로 열린 메뉴를 닫아요. 설정이 열려 있으면 설정이 먼저 닫혀요.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || sheet.hidden) return;
+    if (document.querySelector(".settings-sheet:not([hidden])")) return;
+    closeSheet();
+    buttons.querySelector<HTMLButtonElement>("button")?.focus();
+  });
+
   const openSheet = (name: string, title: string, children: HTMLElement[]): void => {
     closeSheet();
     sheetName = name;

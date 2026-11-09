@@ -27,9 +27,10 @@ test("서버가 만든 토큰은 같은 비밀값으로 검증되고 guestId를 
 test("서명이 틀리거나 다른 비밀값이면 새 게스트로 봐요", async () => {
   const { guestId, token } = await issueGuest(SECRET);
   assert.equal(await verifyGuest(OTHER, token), null);
-  // 서명의 한 글자만 바꿔도 받지 않아요.
-  const last = token.at(-1) === "A" ? "B" : "A";
-  assert.equal(await verifyGuest(SECRET, token.slice(0, -1) + last), null);
+  // 서명의 한 글자만 바꿔도 받지 않아요. 마지막 글자는 남는 비트만 바뀔 수 있어서 가운데 글자를 바꿔요.
+  const at = token.length - 6;
+  const swapped = token[at] === "A" ? "B" : "A";
+  assert.equal(await verifyGuest(SECRET, token.slice(0, at) + swapped + token.slice(at + 1)), null);
   // 다른 사람의 guestId에 내 서명을 붙여도 받지 않아요.
   const { token: mine } = await issueGuest(SECRET);
   const forged = `1.${guestId}.${mine.split(".")[2]}`;

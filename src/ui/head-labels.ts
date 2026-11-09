@@ -20,7 +20,6 @@ export function createHeadLabels(root: HTMLElement): HeadLabels {
   const bubble = document.createElement("p");
   bubble.className = "head-bubble";
   bubble.hidden = true;
-  bubble.setAttribute("role", "status");
   const name = document.createElement("p");
   name.className = "head-name";
   root.append(bubble, name);

@@ -1,5 +1,10 @@
+import { createWebglFallback } from "./ui/webgl-fallback";
+import { applyLargeText, loadViewPrefs } from "./ui/view-prefs";
+
 const loading = document.querySelector<HTMLElement>("#loading");
 if (loading) loading.textContent = "병동을 여는 중";
+// 글자 크게는 입장 화면부터 적용해요.
+applyLargeText(loadViewPrefs().largeText);
 
 const canvas = document.querySelector<HTMLCanvasElement>("#scene");
 if (canvas) {
@@ -13,7 +18,8 @@ if (canvas) {
       if (hud) hud.hidden = false;
     })
     .catch((error: unknown) => {
-      // WebGL을 쓸 수 없어도 로딩 문구와 배경색은 그대로 보여요.
+      // WebGL을 쓸 수 없으면 안내와 다시 시도 버튼을 보여 줘요.
       console.warn("3D 화면을 시작하지 못했어요.", error);
+      createWebglFallback().show();
     });
 }
