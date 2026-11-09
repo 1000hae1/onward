@@ -13,6 +13,7 @@ import {
   surfaceBlobs,
 } from "./egg.ts";
 import type { SurfaceBlob } from "./egg.ts";
+import { addRimGlow } from "./rim-glow";
 import { blobs, merged, paint, place } from "./shapes.ts";
 import type { BlobSpec, Outfit, SpeciesSpec } from "./species";
 
@@ -203,11 +204,15 @@ let sharedMaterial: MeshStandardMaterial | null = null;
 
 /** 모든 아바타가 함께 쓰는 재질이에요. 반짝임 없는 점토 같은 질감이고, 색은 꼭짓점에 있어요. */
 export function getAvatarMaterial(): MeshStandardMaterial {
-  sharedMaterial ??= new MeshStandardMaterial({
-    vertexColors: true,
-    roughness: 0.92,
-    metalness: 0,
-    emissive: "#14120f",
-  });
+  if (!sharedMaterial) {
+    sharedMaterial = new MeshStandardMaterial({
+      vertexColors: true,
+      roughness: 0.92,
+      metalness: 0,
+      emissive: "#14120f",
+    });
+    // 저녁과 밤에도 실루엣이 보이도록 은은한 테두리 빛을 더해요.
+    addRimGlow(sharedMaterial);
+  }
   return sharedMaterial;
 }

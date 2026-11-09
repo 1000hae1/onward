@@ -338,12 +338,18 @@ a:focus-visible,
   white-space: nowrap;
 }
 
+/* 밤 배경에서도 이름이 떠 보이도록 반투명 바탕에 밝은 테두리와 글자 그림자를 둬요. */
 .head-name {
-  padding: 0.1rem 0.5rem;
+  padding: 0.1rem 0.55rem;
+  border: 1px solid rgba(255, 236, 205, 0.38);
   border-radius: 999px;
-  background: rgba(27, 36, 51, 0.8);
-  color: #f6efe2;
+  background: rgba(22, 28, 42, 0.7);
+  -webkit-backdrop-filter: blur(4px);
+  backdrop-filter: blur(4px);
+  box-shadow: 0 0 0.6rem rgba(255, 214, 160, 0.18);
+  color: #fbf4e8;
   font-size: 0.8125rem;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
 .head-bubble {
@@ -480,13 +486,115 @@ a:focus-visible,
   position: fixed;
   inset: 0;
   display: grid;
-  place-items: center;
+  place-content: center;
+  justify-items: center;
+  gap: 0.9rem;
   padding: 1.5rem;
+  background: #1b2433;
   font-size: clamp(1.125rem, 4vw, 1.5rem);
   font-weight: 400;
   letter-spacing: 0.08em;
   text-align: center;
   pointer-events: none;
+  transition: opacity 0.4s ease;
+}
+
+#loading[hidden] {
+  display: none;
+}
+
+#loading.loading-leaving {
+  opacity: 0;
+}
+
+.loading-screen p {
+  margin: 0;
+}
+
+.loading-track {
+  width: min(12rem, 60vw);
+  height: 3px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgba(233, 228, 216, 0.16);
+}
+
+.loading-fill {
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  background: #f3cf95;
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform 0.45s ease-out;
+}
+
+.loading-slow {
+  font-size: 0.875rem;
+  letter-spacing: 0.04em;
+  color: rgba(233, 228, 216, 0.75);
+}
+
+/* 통통한 동물이 제자리에서 뒤뚱뒤뚱 걸어요. 몸은 좌우로 기우뚱하고 발은 번갈아 들려요. */
+.loading-critter {
+  overflow: visible;
+}
+
+.loading-shadow {
+  fill: rgba(0, 0, 0, 0.28);
+}
+
+.loading-body {
+  transform-box: view-box;
+  transform-origin: 60px 104px;
+  animation: loading-waddle 0.9s ease-in-out infinite;
+}
+
+.loading-foot {
+  animation: loading-step 0.9s ease-in-out infinite;
+}
+
+.loading-foot-right {
+  animation-delay: -0.45s;
+}
+
+@keyframes loading-waddle {
+  0%,
+  100% {
+    transform: rotate(-7deg) translateY(0);
+  }
+  25% {
+    transform: rotate(0deg) translateY(-3px);
+  }
+  50% {
+    transform: rotate(7deg) translateY(0);
+  }
+  75% {
+    transform: rotate(0deg) translateY(-3px);
+  }
+}
+
+@keyframes loading-step {
+  0%,
+  50%,
+  100% {
+    transform: translateY(0);
+  }
+  25% {
+    transform: translateY(-4px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .loading-body,
+  .loading-foot {
+    animation: none;
+  }
+
+  .loading-fill,
+  #loading {
+    transition: none;
+  }
 }
 
 /* 잠들었을 때와 들어올 수 없을 때 화면 전체를 덮어요. 누르면 다시 이어지는 것은 scene이 맡아요. */

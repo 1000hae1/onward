@@ -1,4 +1,5 @@
 import { CapsuleGeometry, MeshLambertMaterial, SphereGeometry } from "three";
+import { addRimGlow } from "../avatar/rim-glow";
 import type { BufferGeometry } from "three";
 import { blobs, merged, paint, place } from "../avatar/shapes.ts";
 import type { BlobSpec, Vec3 } from "../avatar/species";
@@ -150,6 +151,9 @@ export function catTriangles(kit: CatKit): number {
 let material: MeshLambertMaterial | null = null;
 
 export function getCatMaterial(): MeshLambertMaterial {
-  material ??= new MeshLambertMaterial({ vertexColors: true, emissive: "#14120f" });
+  if (!material) {
+    material = new MeshLambertMaterial({ vertexColors: true, emissive: "#14120f" });
+    addRimGlow(material);
+  }
   return material;
 }

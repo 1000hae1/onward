@@ -176,7 +176,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   const softCircle = createSoftCircleTexture();
   const room = buildWard(scene, softCircle);
-  buildFacilities(scene);
+  const facilities = buildFacilities(scene);
   const hospital = buildHospital(scene);
   const landscape = buildLandscape(scene, {
     forestTrees: phone ? 140 : 320,
@@ -194,6 +194,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     ceiling: room.ceiling,
     ceilingPanel: room.ceilingPanel,
     sleepLamp: room.sleepLamp,
+    lampGlow: room.lampGlow,
+    nurseLamp: facilities.nurseLamp,
     windowGlass: room.windowGlass,
     snowMaterial: winter.snowMaterial,
     steamMaterials: winter.steamMaterials,

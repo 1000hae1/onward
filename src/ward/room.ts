@@ -1,4 +1,6 @@
 import {
+  AdditiveBlending,
+  BufferGeometry,
   CanvasTexture,
   CatmullRomCurve3,
   CircleGeometry,
@@ -8,12 +10,15 @@ import {
   MeshBasicMaterial,
   MeshLambertMaterial,
   PlaneGeometry,
+  Points,
+  PointsMaterial,
+  Float32BufferAttribute,
   SphereGeometry,
   SRGBColorSpace,
   TubeGeometry,
   Vector3,
 } from "three";
-import type { BufferGeometry, Material, Matrix4, Object3D, Texture } from "three";
+import type { Material, Matrix4, Object3D, Texture } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import {
@@ -76,7 +81,14 @@ export interface RoomHandles {
   ceiling: MeshLambertMaterial;
   ceilingPanel: MeshBasicMaterial;
   sleepLamp: MeshBasicMaterial;
+  /** 수면등 둘레의 따뜻한 빛 번짐이에요. 저녁과 밤에만 보여요. */
+  lampGlow: LampGlow;
   windowGlass: MeshBasicMaterial;
+}
+
+export interface LampGlow {
+  /** 0이면 숨기고, 1이면 가장 밝아요. */
+  setStrength(strength: number): void;
 }
 
 type Facing = "+x" | "-x" | "+z" | "-z";
@@ -459,9 +471,90 @@ function buildNightstands(parent: Object3D): MeshBasicMaterial {
     parent,
     new SphereGeometry(0.075, 12, 8),
     lampMaterial,
-    SLEEP_LAMPS.map((lamp) => transform(lamp.x, 1.3, lamp.z)),
+    SLEEP_LAMPS.map((lamp) => transform(lamp.x, SLEEP_LAMP_Y, lamp.z)),
   );
   return lampMaterial;
+}
+
+const SLEEP_LAMP_Y = 1.3;
+const LAMP_GLOW_COLOR = "#ffb46a";
+/** 빛 번짐마다 가장 밝을 때의 불투명도예요. */
+const WALL_GLOW_OPACITY = 0.32;
+const POOL_GLOW_OPACITY = 0.22;
+const HALO_OPACITY = 0.55;
+
+/**
+ * 수면등이 침대 머리맡을 비추는 것처럼 보이게 해요. 침대마다 진짜 조명을 두면 휴대폰에 무거워서,
+ * 벽에 번지는 빛, 바닥과 이불에 고이는 빛, 전구 둘레의 작은 빛무리를 겹쳐 그려요. 그리기는 세 번뿐이에요.
+ */
+function buildLampGlow(parent: Object3D, softCircle: Texture): LampGlow {
+  const glowMaterial = (opacity: number): MeshBasicMaterial =>
+    new MeshBasicMaterial({
+      map: softCircle,
+      color: LAMP_GLOW_COLOR,
+      transparent: true,
+      opacity,
+      depthWrite: false,
+      blending: AdditiveBlending,
+      fog: false,
+    });
+  const wall = glowMaterial(0);
+  const pool = glowMaterial(0);
+
+  const walls: Matrix4[] = [];
+  const pools: Matrix4[] = [];
+  const halos: number[] = [];
+  SLEEP_LAMPS.forEach((lamp, index) => {
+    const room = ROOMS[BEDS[index].roomIndex];
+    // 병실 안쪽 좌표의 x축이에요. 수면등은 이 축 끝의 벽에 붙어 있어요.
+    const axisX = Math.cos(room.rotationY);
+    const axisZ = -Math.sin(room.rotationY);
+    const toCenter = (room.x - lamp.x) * axisX + (room.z - lamp.z) * axisZ;
+    const inX = Math.sign(toCenter) * axisX;
+    const inZ = Math.sign(toCenter) * axisZ;
+    const facing = Math.atan2(inX, inZ);
+    walls.push(transform(lamp.x + inX * 0.03, SLEEP_LAMP_Y - 0.15, lamp.z + inZ * 0.03, facing, 2.2, 1.9, 1));
+    pools.push(transform(lamp.x + inX * 0.9, 0.02, lamp.z + inZ * 0.9, 0, 2.6, 1, 2.6));
+    halos.push(lamp.x + inX * 0.06, SLEEP_LAMP_Y, lamp.z + inZ * 0.06);
+  });
+
+  const wallMesh = addInstances(parent, new PlaneGeometry(1, 1), wall, walls);
+  const poolGeometry = new PlaneGeometry(1, 1);
+  poolGeometry.rotateX(-Math.PI / 2);
+  const poolMesh = addInstances(parent, poolGeometry, pool, pools);
+  wallMesh.renderOrder = 3;
+  poolMesh.renderOrder = 3;
+
+  const haloGeometry = new BufferGeometry();
+  haloGeometry.setAttribute("position", new Float32BufferAttribute(halos, 3));
+  const halo = new PointsMaterial({
+    map: softCircle,
+    color: LAMP_GLOW_COLOR,
+    size: 0.7,
+    sizeAttenuation: true,
+    transparent: true,
+    opacity: 0,
+    depthWrite: false,
+    blending: AdditiveBlending,
+    fog: false,
+  });
+  const haloPoints = new Points(haloGeometry, halo);
+  haloPoints.renderOrder = 3;
+  parent.add(haloPoints);
+
+  const parts = [
+    { material: wall, max: WALL_GLOW_OPACITY },
+    { material: pool, max: POOL_GLOW_OPACITY },
+    { material: halo, max: HALO_OPACITY },
+  ];
+  const setStrength = (strength: number): void => {
+    for (const part of parts) {
+      part.material.opacity = part.max * strength;
+      part.material.visible = strength > 0.001;
+    }
+  };
+  setStrength(0);
+  return { setStrength };
 }
 
 function buildTables(parent: Object3D): void {
@@ -654,10 +747,11 @@ export function buildWard(parent: Object3D, softCircle: Texture): RoomHandles {
   buildCorridorRails(parent);
   buildBeds(parent);
   const sleepLamp = buildNightstands(parent);
+  const lampGlow = buildLampGlow(parent, softCircle);
   buildTables(parent);
   buildFridges(parent);
   buildIvStands(parent);
   buildCurtains(parent);
   buildContactShadows(parent, softCircle);
-  return { ceiling, ceilingPanel, sleepLamp, windowGlass };
+  return { ceiling, ceilingPanel, sleepLamp, lampGlow, windowGlass };
 }

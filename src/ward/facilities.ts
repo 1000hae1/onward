@@ -62,7 +62,7 @@ function addSign(parent: Object3D, text: string, x: number, y: number, z: number
 }
 
 /** 로비 오른쪽의 간호사실이에요. 낮은 카운터 너머로 병아리 간호사들이 보여요. */
-function buildNurseStation(parent: Object3D): void {
+function buildNurseStation(parent: Object3D): MeshBasicMaterial {
   const station = NURSE_STATION;
   const centerX = NURSE_STATION_CENTER_X;
   const width = station.maxX - station.minX;
@@ -125,10 +125,17 @@ function buildNurseStation(parent: Object3D): void {
   const signY = 2.75;
   const signZ = station.maxZ - 0.3;
   addSign(parent, "간호사실", centerX, signY, signZ, 3);
+
+  // 카운터 위 천장의 긴 조명판이에요. 밤에도 은은하게 켜져 있어요. 색은 조명(lighting.ts)이 바꿔요.
+  const lampMaterial = new MeshBasicMaterial({ color: "#fff3d6" });
+  const lampGeometry = new PlaneGeometry(width - 1.2, 0.5);
+  lampGeometry.rotateX(Math.PI / 2);
+  addInstances(parent, lampGeometry, lampMaterial, [transform(centerX, WALL_HEIGHT - 0.012, centerZ)]);
   addInstances(parent, new CylinderGeometry(0.012, 0.012, WALL_HEIGHT - signY, 6), lambert("#c9cdd0"), [
     transform(centerX - 1.2, (signY + WALL_HEIGHT) / 2, signZ),
     transform(centerX + 1.2, (signY + WALL_HEIGHT) / 2, signZ),
   ]);
+  return lampMaterial;
 }
 
 /** 간호사 모자를 쓴 병아리들이에요. 카운터 너머로 머리와 어깨가 보여요. */
@@ -259,9 +266,15 @@ function buildLobby(parent: Object3D): void {
   addSign(parent, "병실 101–106호", 0, (HEADER_Y + WALL_HEIGHT) / 2, LOBBY.minZ + 0.01, 2.2);
 }
 
+export interface FacilityHandles {
+  /** 간호사실 천장 조명판이에요. */
+  nurseLamp: MeshBasicMaterial;
+}
+
 /** 간호사실과 로비예요. */
-export function buildFacilities(parent: Object3D): void {
-  buildNurseStation(parent);
+export function buildFacilities(parent: Object3D): FacilityHandles {
+  const nurseLamp = buildNurseStation(parent);
   buildChickNurses(parent);
   buildLobby(parent);
+  return { nurseLamp };
 }
