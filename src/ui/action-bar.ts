@@ -11,6 +11,8 @@ import type { PlayerControls } from "../ward/controls";
 import type { Offerings } from "../ward/offerings";
 import type { HeadLabels } from "./head-labels";
 import { createButton, createText } from "./widgets";
+import { SOLO_ONLY_TEXT } from "../../shared/offering-rules";
+import type { HugMenuState } from "../../shared/hug-rules";
 
 /** 손을 모은 뒤 빛이 떠나기까지 기다리는 시간이에요. */
 export const LIGHT_DELAY_SECONDS = gestureDuration("pray") * 0.55;
@@ -48,8 +50,11 @@ export interface VisitLinkStatus {
 export interface PersonChoice {
   address: string;
   nickname: string;
-  present: { id: string; head: { x: number; y: number; z: number } } | null;
+  present: { id: string; head: { x: number; y: number; z: number }; bed: number | null } | null;
 }
+
+/** 자리에 없는 분께 남기는 메뉴의 이름이에요. */
+export const LEAVE_FOR_LABEL = "자리에 없는 분께 남기기";
 
 export interface ActionBarOptions {
   root: HTMLElement;
@@ -71,8 +76,8 @@ export interface ActionBar {
   update(dt: number): void;
   showToast(text: string): void;
   showVisitLink(status: VisitLinkStatus): void;
-  /** 다른 동물을 눌렀을 때 나오는 메뉴예요. hugOk가 false면 안아 주기를 보여 주지 않아요. */
-  openPerson(person: { id: string; nickname: string; hugOk: boolean }): void;
+  /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
+  openPerson(person: { id: string; nickname: string; hug: HugMenuState }): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
 }
@@ -142,7 +147,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     const list = people();
     const children: HTMLElement[] =
       list.length === 0
-        ? [createText("p", "오늘 만난 분이 아직 없어요.")]
+        ? [createText("p", "오늘 만난 분이 아직 없어요. 같은 병동에서 만난 분이 여기에 남아요.")]
         : [
             (() => {
               const box = document.createElement("div");
@@ -171,6 +176,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   ): void => {
     if (!sink.online() || visiting()) {
       pickBed(name, bedTitle, onBed);
+      if (!sink.online()) showToast(SOLO_ONLY_TEXT);
       return;
     }
     openSheet(name, "어디로 보낼까요?", [
@@ -179,7 +185,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         row.className = "ward-row";
         row.append(
           createButton("침대 고르기", () => pickBed(name, bedTitle, onBed)),
-          createButton("오늘 만난 분께", () => pickPerson(name, personTitle, onPerson)),
+          createButton(LEAVE_FOR_LABEL, () => pickPerson(name, personTitle, onPerson)),
         );
         return row;
       })(),
@@ -300,19 +306,20 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   };
 
   /** 다른 동물 메뉴예요. 닉네임은 textContent로만 넣어요. */
-  const openPerson = (person: { id: string; nickname: string; hugOk: boolean }): void => {
+  const openPerson = (person: { id: string; nickname: string; hug: HugMenuState }): void => {
     const name = `person-${person.id}`;
     const row = document.createElement("div");
     row.className = "action-choices";
-    if (person.hugOk && sink.online()) {
-      row.append(
-        createButton("안아 주기", () => {
-          closeSheet();
-          sink.hug(person.id);
-          showToast(`${person.nickname}님께 물어볼게요.`);
-        }),
-      );
-    }
+    const hugButton = createButton("안아 주기", () => {
+      closeSheet();
+      sink.hug(person.id);
+      showToast(`${person.nickname}님께 물어볼게요.`);
+    });
+    // 할 수 없을 때도 버튼은 보여 주고, 왜 안 되는지 바로 아래에 적어요.
+    hugButton.disabled = !person.hug.enabled;
+    row.append(hugButton);
+    const hugNote = person.hug.enabled ? null : createText("p", person.hug.reason);
+    if (hugNote) hugNote.className = "action-note";
     row.append(
       createButton("신고하기", () => {
         if (!sink.online()) {
@@ -327,7 +334,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         ]);
       }),
     );
-    openSheet(name, `${person.nickname}님`, [row]);
+    openSheet(name, `${person.nickname}님`, hugNote ? [row, hugNote] : [row]);
   };
 
   const bedButton = createButton(
@@ -411,7 +418,11 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
                   if (sink.online()) sink.gift(bed, gift);
                   else offerings.sendGift(player.handSpot(), bed, gift, stillMotion());
                 },
-                (person) => sink.leaveFor(person.address, "gift", gift),
+                (person) => {
+                  // 함께 있는 분이 누워 있으면 그 침대 머리맡에 놓고, 아니면 다음에 들어오실 때 전해요.
+                  if (person.present?.bed != null) sink.gift(person.present.bed, gift);
+                  else sink.leaveFor(person.address, "gift", gift);
+                },
               );
             },
             (gift) => giftAllowedNow(gift, now),
@@ -427,6 +438,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     return createButton("창가에 불빛", () => {
       closeSheet();
       if (sink.online()) {
+        // 서버가 받아 주면 빛이 창틀로 날아가고 안내가 떠요. 받지 않으면 이유가 떠요.
         sink.lamp();
         return;
       }
@@ -435,6 +447,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         showToast("병실에 들어가면 놓을 수 있어요.");
       } else if (!offerings.addLamp(room)) {
         showToast("창가가 불빛으로 가득해요.");
+      } else {
+        showToast(SOLO_ONLY_TEXT);
       }
     });
   }

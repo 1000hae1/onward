@@ -23,8 +23,14 @@ export function readWardParams(search: string): WardParams {
   };
 }
 
-export function wardLabel(ward: number, count: number | null, capacity: number): string {
-  return count === null ? `온기병동 ${ward}병동` : `온기병동 ${ward}병동 · ${count}/${capacity}`;
+/**
+ * 상단의 병동 이름이에요. 두 기기가 같은 병실인지 견줘 볼 수 있게 병실 번호(instance)도 보여 줘요.
+ * 서버에 닿지 않아 혼자 머무는 중이면 그렇다고 알려요.
+ */
+export function wardLabel(ward: number, instance: number, count: number | null, capacity: number, solo = false): string {
+  const name = `온기병동 ${ward}병동 ${instance}호`;
+  if (count !== null) return `${name} · ${count}/${capacity}`;
+  return solo ? `${name} · 혼자 머무는 중` : name;
 }
 
 /** 예전에 이 브라우저가 스스로 만들던 값이에요. 이제는 쓰지 않아서 보이면 지워요. */
@@ -39,6 +45,28 @@ export function loadGuestToken(): string | null {
     window.localStorage.removeItem(LEGACY_GUEST_KEY);
     const saved = window.localStorage.getItem(TOKEN_KEY);
     return saved && TOKEN_PATTERN.test(saved) ? saved : null;
+  } catch {
+    return null;
+  }
+}
+
+/** 이 브라우저가 다음 방문까지 기억할 수 있는지예요. 사생활 보호 모드나 일부 앱 안 브라우저는 못 해요. */
+export function storageWorks(storage: Pick<Storage, "setItem" | "getItem" | "removeItem"> | null = safeLocalStorage()): boolean {
+  if (!storage) return false;
+  const key = "onward.check";
+  try {
+    storage.setItem(key, "1");
+    const ok = storage.getItem(key) === "1";
+    storage.removeItem(key);
+    return ok;
+  } catch {
+    return false;
+  }
+}
+
+function safeLocalStorage(): Storage | null {
+  try {
+    return window.localStorage;
   } catch {
     return null;
   }

@@ -30,29 +30,29 @@
 | 잠깐 끊겨도 자리 지키기 | 30초 안에 다시 이어지면 침대와 자리를 그대로 돌려받고, 다른 사람에게는 나간 것으로 보이지 않아요. | 완성 | 개발자 도구에서 네트워크를 잠깐 끊었다가 잇기 | `shared/ward-rules.ts`(toAway, expireAway, GRACE_MS), `worker/ward-room.ts`(away 표, alarm) |
 | 다른 창에서 들어오면 쉬기 | 같은 사람이 다른 창으로 들어오면 예전 창은 "이 창은 쉬어요"라고 알려요. | 완성 | 같은 브라우저 탭 두 개로 들어가기 | `src/net/ward-client.ts`(REPLACED_CODE), `worker/ward-room.ts` |
 | 혼자 머물기 | 서버에 닿지 않아도 병실은 그대로 열리고, 내 화면에서만 동작해요. | 완성 | `npm run dev` 없이 정적 빌드만 열기 | `src/scene.ts`, `src/ui/action-bar.ts`(online이 false일 때) |
-| 설정 | 들어온 뒤에도 동물·옷·고양이·안아 주기 받기를 바꿀 수 있어요. | 완성 | 오른쪽 위 [설정] | `src/ui/settings.ts`, `shared/ward-rules.ts`(updateProfile) |
+| 설정 | 들어온 뒤에는 고양이·안아 주기 받기·보기만 바꿔요. 동물과 닉네임은 입장 화면에서만 골라요. | 완성 | 오른쪽 위 [설정] | `src/ui/settings.ts`, `shared/ward-rules.ts`(updateProfile) |
 | 가볍게 보기 | 처음 5초의 프레임 속도와 기기 메모리·코어 수로 보통/가볍게를 스스로 골라요. 가볍게면 픽셀 비율 1.5, 안티에일리어싱 끔, 눈 1/3, 9m보다 먼 동물은 몸만 그려요. 설정에서 [자동/켜기/끄기]로 바꿀 수 있어요. | 완성 | [설정] → [가볍게 보기], `?quality=light&debug=1`로 미리 보기 | `src/ward/quality.ts`, `src/ui/view-prefs.ts`, `src/scene.ts` |
 | 탭이 안 보이면 쉬기 | 다른 탭으로 가면 그리기를 멈추고, 돌아오면 이어 그려요. | 완성 | 다른 탭으로 갔다가 돌아오기 | `src/scene.ts`(visibilitychange) |
 | WebGL 안내 | WebGL을 쓸 수 없거나 그리는 도중 끊기면 "이 기기에서는 병실을 보여주기 어려워요"와 [다시 시도]가 떠요. 되살아나면 스스로 닫혀요. | 완성 | 개발자 도구에서 `WEBGL_lose_context`로 끊어 보기 | `src/ui/webgl-fallback.ts`, `src/main.ts` |
-| 상단 병동 이름과 오늘의 집계 | "온기병동 1병동 · 3/30", "오늘 다녀간 동물 5마리 · 모인 평안 12"가 보여요. | 일부만 | 들어가서 화면 위쪽 보기 | `src/scene.ts`(setHud, setStats), `shared/daily.ts`(statsLine) — **빠진 것: 서버는 오늘 켠 불빛 수(`stats.lamps`)도 세서 보내지만 화면에는 나오지 않아요** |
+| 상단 병동 이름과 오늘의 집계 | "온기병동 1병동 1호 · 3/30"(서버에 닿지 않으면 "온기병동 1병동 1호 · 혼자 머무는 중"), "오늘 다녀간 동물 5마리 · 모인 평안 12"가 보여요. | 일부만 | 들어가서 화면 위쪽 보기 | `src/scene.ts`(setHud, setStats), `shared/daily.ts`(statsLine) — **빠진 것: 서버는 오늘 켠 불빛 수(`stats.lamps`)도 세서 보내지만 화면에는 나오지 않아요** |
 
 ## 3. 평안을 빌어 주는 동작
 
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
 | 평안 빌기(침대) | 손을 모으면 빛이 고른 침대 머리맡으로 날아가요. 모두에게 보여요. | 완성 | [평안 빌기] → [침대 고르기] → 침대 누르기 | `src/ui/action-bar.ts`, `src/ward/offerings.ts`, `worker/ward-room.ts`(bless) |
-| 평안 빌기(오늘 만난 분께) | 오늘 같은 병실에서 만난 분을 목록에서 골라요. 함께 있으면 그분 머리 위로 빛이 가요. | 완성 | [평안 빌기] → [오늘 만난 분께] → 이름 | `src/net/met-list.ts`, `src/ui/action-bar.ts`(pickPerson) |
+| 평안 빌기(자리에 없는 분께 남기기) | 오늘 같은 병동에서 만난 분을 목록에서 골라요. 함께 있으면 "(함께 있어요)"로 보이고 그분 머리 위로 빛이 가요. | 완성 | [평안 빌기] → [자리에 없는 분께 남기기] → 이름 | `src/net/met-list.ts`, `src/ui/action-bar.ts`(pickPerson) |
 | 목례와 한마디 | 고개를 숙이고 "평안하시길" 같은 말풍선이 떠요. 아침에는 "좋은 아침이에요"도 있어요. | 완성 | [목례와 한마디] → 한마디 고르기 | `shared/gestures.ts`, `shared/morning.ts`(phraseAllowed), `src/ui/head-labels.ts` |
 | 머리맡 선물 | 네잎클로버·오잎클로버·귤·홍시·호빵을 침대 옆 협탁에 놓아요. 하루가 지나면 치워져요. | 완성 | [머리맡 선물] → 선물 → 침대 | `src/ward/offerings.ts`, `shared/ward-rules.ts`(giftSlot, GIFTS_PER_DAY), `shared/left-blessings.ts`(오잎클로버 하루 1번) |
-| 창가에 불빛 | 지금 있는 병실 창가에 작은 불빛이 하나 늘어요. 창가마다 12개까지예요. | 완성 | 병실 안에서 [창가에 불빛] | `shared/ward-rules.ts`(lampRoom), `shared/offering-rules.ts`, `src/ward/offerings.ts` |
-| 안아 주기 | 2m 안의 동물을 눌러 안아 주기를 청하면, 상대가 받을 때 다가가 안아요. 누워 있으면 침대 곁에서 안아요. | 완성 | 다른 동물 누르기 → [안아 주기] / 받는 쪽은 [안길게요]·[다음에요] | `shared/hug-rules.ts`, `src/ui/moments.ts`, `src/ward/warm-glow.ts`, `worker/ward-room.ts`(hug-request, hug-answer) |
+| 창가에 불빛 | 지금 있는 병실 창가에 작은 불빛이 하나 늘고 모두에게 보여요. 놓은 사람에게는 빛이 창틀로 날아가고 "창가에 불빛을 놓았어요. 오늘 이 병실에 n개예요."가 떠요. 창가마다 12개까지예요. | 완성 | 병실 안이나 침대에 누워 [창가에 불빛] | `shared/ward-rules.ts`(lampRoom), `shared/offering-rules.ts`, `src/ward/offerings.ts` |
+| 안아 주기 | 2m 안의 동물을 눌러 안아 주기를 청하면, 상대가 받을 때 다가가 안아요. 누워 있으면 침대 곁에서 안아요. 메뉴에는 [안아 주기]가 늘 있고, 멀거나·상대가 쉬는 중이거나·10분이 안 됐으면 버튼이 꺼지고 이유가 보여요. | 완성 | 다른 동물 누르기 → [안아 주기] / 받는 쪽은 [안길게요]·[다음에요] | `shared/hug-rules.ts`, `src/ui/moments.ts`, `src/ward/warm-glow.ts`, `worker/ward-room.ts`(hug-request, hug-answer) |
 
 ## 4. 혼자 있을 때
 
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
 | 빈 침대에 평안 남기기 | 빈 침대에 보낸 평안과 선물은 다음에 그 침대에 눕는 분께 카드로 전해져요(침대마다 5개, 7일). | 완성 | 빈 침대에 평안 빌기 → 다른 계정으로 그 침대에 눕기 | `shared/left-blessings.ts`, `src/ui/blessing-cards.ts`, `worker/ward-room.ts`(leaveOnBed, deliverLeft) |
-| 자리에 없는 분께 남기기 | 오늘 만난 분이 나갔어도 평안이나 선물을 남기면 "남겨두었어요"라고 알려 줘요. 같은 분께는 하루 한 번이에요. | 완성 | [평안 빌기] → [오늘 만난 분께] → 지금 없는 분 | `worker/directory.ts`(leaveFor, deposit), `shared/left-blessings.ts` |
+| 자리에 없는 분께 남기기 | 오늘 만난 분이 나갔어도 평안이나 선물을 남기면 "남겨두었어요"라고 알려 줘요. 같은 분께는 하루 한 번이에요. 그분이 다시 들어오면 "내가 없는 동안 도착한 평안"으로 보이고, 화면이 받았다고 알린 뒤에야 지워져요. | 완성 | [평안 빌기]/[머리맡 선물] → [자리에 없는 분께 남기기] → 지금 없는 분 | `worker/directory.ts`(leaveFor, deposit), `shared/left-blessings.ts` |
 | 없는 동안 온 평안 받기 | 다시 들어오면 그사이 도착한 평안 카드(최근 10개)가 먼저 보여요. | 완성 | 위처럼 남긴 뒤 받는 쪽으로 다시 들어가기 | `worker/directory.ts`(enter), `src/ui/blessing-cards.ts`(showInbox) |
 | 수면 모드 | 누운 채 잠들면 화면이 어두워지고 바람 소리가 아주 작게 들려요. 잠든 동안 화면이 꺼지지 않고 안아 주기 요청도 오지 않아요. | 완성 | 침대에 누운 뒤 [잠들기] / [깨어나기] | `src/ui/sleep-mode.ts`, `worker/ward-room.ts`(sleep) |
 | 병동 고양이가 찾아오기 | 오래 누워 있으면 병동 고양이가 침대로 찾아와요. 같은 병실 사람들 화면에서 같은 곳에 있어요. | 완성 | 침대에 2분쯤 누워 있기 | `src/cat/cats.ts`, `src/cat/cat-path.ts`, `shared/ward-rules.ts`(catVisits, changedVisits) |
@@ -98,7 +98,7 @@
 | 신고하기 | 다른 동물을 눌러 사유(닉네임 / 반복 행동 / 기타)를 고르면 "운영자가 살펴볼게요"라고 알려 줘요. 하루 5번까지예요. | 완성 | 다른 동물 누르기 → [신고하기] → 사유 | `src/ui/action-bar.ts`(openPerson), `shared/safety-rules.ts`(decideReport), `worker/directory.ts`(report) |
 | 닉네임 가리기 | 서로 다른 세 분이 신고하면 다른 사람 화면에서 그분 닉네임이 "조용한 토끼"처럼 보여요. | 완성 | 세 계정으로 같은 분 신고 | `shared/safety-rules.ts`(publicNickname), `worker/ward-room.ts`(hide) |
 | 요청 제한 | 너무 빨리 누르면 "조금 천천히 눌러 주세요"가 떠요. 계속 몰아 보내면 연결이 닫혀요. | 완성 | 같은 버튼을 빠르게 여러 번 | `shared/safety-rules.ts`(rateStep), `shared/ward-rules.ts`(actionReady) |
-| 새 버전 안내 | 서버와 화면 버전이 다르면 "새 버전이 나왔어요. 새로고침해 주세요"가 떠요. | 완성 | 배포 직후 열린 창 | `shared/ward-rules.ts`(readVersion), `src/net/ward-client.ts`(outdated) |
+| 새 버전 안내 | 열 때 `/api/health`의 버전을 먼저 견주고, 다르면 "새 버전이 나왔어요. 새로고침해 주세요"와 [새로고침]이 떠요. `index.html`은 매번 새로 확인하고 빌드 파일은 오래 보관해요(`public/_headers`). | 완성 | 배포 직후 열린 창 | `shared/ward-rules.ts`(readVersion), `src/net/ward-client.ts`(outdated), `src/scene.ts`(showOutdated), `public/_headers` |
 | 힘들 때 안내 | 설정 안에 109 상담전화 안내와 [109에 전화하기]가 있어요. | 완성 | [설정] 아래쪽 | `src/ui/settings.ts`, `public/privacy.html` |
 | 글자 크게 | 설정에서 켜면 모든 글자가 1.2배로 커져요. 입장 화면부터 적용돼요. | 완성 | [설정] → [글자 크게] | `src/ui/view-prefs.ts`, `src/style.css`(html.large-text) |
 | 화면 낭독기 안내 | 나에게 온 평안·선물, 같은 병실의 한마디를 보이지 않는 `aria-live="polite"` 영역에 넣어 읽어 줘요. 같은 글은 1.5초 안에 한 번만이에요. | 완성 | VoiceOver를 켜고 다른 창에서 평안 빌기 | `src/ui/announcer.ts`, `src/scene.ts`(announce) |
@@ -151,13 +151,13 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
   - **WardRoom**: `ward-{병동}-{인스턴스}`마다 하나. 건물 1채, 병실 6개, 침대 36개, 정원 30명.
   - **Directory**: 이름이 `directory` 하나뿐인 공용 객체. 병동을 넘나드는 평안 주소, 받은 평안, 문병 링크, 신고, 차단, 다녀간 날 수를 맡아요.
 - 화면과 서버가 같은 `shared/` 코드를 써요(프로토콜 스키마, 닉네임 규칙, 방 규칙).
-- 프로토콜 버전 `v = 4`, 메시지 최대 1KB. 모든 메시지를 zod로 검사하고, 맞지 않으면 말없이 버려요.
+- 프로토콜 버전 `v = 5`, 화면이 보내는 메시지 최대 1KB, 서버가 보내는 메시지는 화면이 64KB까지 읽어요. 모든 메시지를 zod로 검사하고, 맞지 않으면 말없이 버려요.
 
 ### 클라이언트 → 서버 메시지 (WebSocket `/ws?ward=&instance=`)
 
 | 이름 | 한 줄 설명 |
 | --- | --- |
-| `hello` | 들어오기, 또는 들어온 뒤 모습 바꾸기. 서명된 토큰·동물·옷·닉네임·고양이·문병 토큰·안아 주기 받지 않기 |
+| `hello` | 들어오기, 또는 들어온 뒤 고양이·안아 주기 받기 바꾸기. 8초 안에 답이 없으면 화면이 다시 이어요. 서명된 토큰·동물·옷·닉네임·고양이·문병 토큰·안아 주기 받지 않기 |
 | `walk-to` | 이 좌표로 걸어가요. 서버가 걸을 수 있는 곳으로 바로잡아요 |
 | `lie-down` | 이 침대에 눕고 싶어요 |
 | `get-up` | 침대에서 일어나요 |
@@ -166,6 +166,7 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `gift` | 머리맡 선물(번호 0~4)을 사람이나 침대에 |
 | `lamp` | 지금 병실 창가에 불빛 켜기 |
 | `leave-for` | 자리에 없는 사람의 평안 주소로 평안이나 선물 남기기 |
+| `inbox-ack` | 내가 없는 동안 도착한 평안을 받았어요(그 시각까지 서버가 지워요) |
 | `visit-link` | 내 문병 링크 `create` / `off` / `info` |
 | `report` | 신고(사유 번호 0~2) |
 | `sleep` | 수면 모드 켜기/끄기 |
@@ -197,6 +198,7 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `discharge-started` / `farewell-count` | 퇴원 시작(배웅 끝 시각) / 지금까지 배웅 수(본인에게만) |
 | `action-denied` | 서버가 받지 않은 동작과 이유 번호 |
 | `version-mismatch` | 버전이 달라요. 새로고침이 필요해요 |
+| `entry-failed` | 서버가 들어오는 일을 처리하지 못했어요. 화면은 잠시 뒤 다시 이어요 |
 
 `event` 종류: `join`, `update`, `leave`, `walk`, `lie`, `get-up`, `bless`, `bow`, `gift`, `lamp`, `stats`, `cat-visit`, `hug`, `window-open`, `planter`, `discharge`.
 
@@ -239,7 +241,7 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | 테이블 | 저장하는 항목 | 보관 기간 |
 | --- | --- | --- |
 | `address_book` | 평안 주소 해시 → 주인 해시 | 7일 |
-| `inbox` | 자리에 없는 사람에게 남긴 평안 | 7일, 받는 사람마다 10개, 들어오면 바로 지움 |
+| `inbox` | 자리에 없는 사람에게 남긴 평안 | 7일, 받는 사람마다 10개, 화면이 받았다고 알리면(`inbox-ack`) 지움 |
 | `inbox_daily` | 오늘 남긴 짝(같은 분께 하루 한 번) | 그날 하루 |
 | `gift_daily` | 하루 한 번 선물(오잎클로버) 쓴 날 | 그날 하루 |
 | `visit_link` | 토큰 해시, 주인 해시, 주소 해시, 주인 닉네임·동물, 병동 위치, 꺼짐 여부, 문병 횟수 | 켜진 링크는 끌 때까지, 꺼진 링크는 만든 날부터 7일 |

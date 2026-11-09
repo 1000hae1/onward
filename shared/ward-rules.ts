@@ -333,8 +333,8 @@ export function nextInstance(instance: number, max: number): number {
 }
 
 /** 메시지의 v만 느슨하게 읽어요. 버전이 다른지 알아볼 때 써요. JSON이 아니거나 v가 없으면 null이에요. */
-export function readVersion(raw: unknown): number | null {
-  if (typeof raw !== "string" || raw.length > 4096) return null;
+export function readVersion(raw: unknown, maxChars = 4096): number | null {
+  if (typeof raw !== "string" || raw.length > maxChars) return null;
   try {
     const value: unknown = JSON.parse(raw);
     if (typeof value === "object" && value !== null && typeof (value as { v?: unknown }).v === "number") {

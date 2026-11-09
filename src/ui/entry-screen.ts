@@ -4,6 +4,7 @@ import type { Outfit, SpeciesId } from "../avatar/species";
 import { avatarPortrait } from "../avatar/portraits";
 import type { Profile } from "./profile";
 import { createButton, createChoiceRow, createPictureChoiceRow, createText } from "./widgets";
+import { entryHeading } from "./entry-text";
 
 export interface EntryOptions {
   initial: Profile;
@@ -16,6 +17,8 @@ export interface EntryOptions {
   title?: string;
   /** 문병 링크로 왔으면 옷은 고르지 않고 평상복이에요. */
   lockOutfit?: Outfit;
+  /** 이 기기에 저장된 모습과 게스트 토큰이 있으면 "돌아왔네요"로 맞아요. */
+  returning?: boolean;
 }
 
 /** 병동에 들어가기 전에 모습과 닉네임, 고양이와 함께 갈지 고르는 화면이에요. */
@@ -72,12 +75,20 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     (withCat) => update({ ...profile, withCat }),
   );
 
-  const enter = createButton(lock ? "문병 갈게요" : "병동에 들어갈게요", () => undefined);
+  const heading = entryHeading({
+    returning: options.returning === true,
+    nickname: options.initial.nickname,
+    visitTitle: options.title,
+  });
+  const enter = createButton(heading.enter, () => undefined);
   enter.type = "submit";
   enter.className = "entry-enter";
 
+  const headingNote = heading.note ? createText("p", heading.note) : null;
+  if (headingNote) headingNote.className = "entry-note";
   form.append(
-    createText("h1", options.title ?? "어떤 모습으로 머물까요?"),
+    createText("h1", heading.title),
+    ...(headingNote ? [headingNote] : []),
     speciesRow.element,
     outfitRow.element,
     nameLabel,

@@ -78,6 +78,8 @@ const REPLACED_CODE = 4000;
 const FULL_CODE = 4001;
 /** 들어올 수 없어요(차단, 새 게스트를 너무 많이 만듦). 화면은 다시 잇지 않아요. */
 const DENIED_CODE = 4003;
+/** 들어오는 일을 처리하지 못했어요. 화면은 다시 이어요. */
+const ENTRY_FAILED_CODE = 1011;
 /** 메시지를 너무 빨리 계속 보냈어요. */
 const TOO_MANY_CODE = 4008;
 /** Worker가 IP 해시를 담아 보내는 내부 헤더예요. Worker가 항상 덮어써서 화면이 바꿀 수 없어요. */
@@ -221,7 +223,20 @@ export class WardRoom extends DurableObject<Env> {
     if (!attachment) return;
 
     if (message.type === "hello") {
-      await this.hello(ws, attachment, message);
+      try {
+        await this.hello(ws, attachment, message);
+      } catch (error) {
+        // 들어오는 중에 잘못되면 화면이 "연결 중"에 멈추지 않게 알리고 닫아요. 화면은 잠시 뒤 다시 이어요.
+        logError("ward:hello", error);
+        if (!attachment.joined) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "entry-failed" });
+          try {
+            ws.close(ENTRY_FAILED_CODE, "entry-failed");
+          } catch {
+            // 이미 닫혔으면 그대로예요.
+          }
+        }
+      }
       return;
     }
     if (!attachment.joined) return;
@@ -1107,6 +1122,12 @@ export class WardRoom extends DurableObject<Env> {
           }
         }
         this.refreshCatVisits(before);
+        return;
+      }
+      case "inbox-ack": {
+        // 화면이 받은 데까지만 지워요. 받지 못했으면 다음 입장 때 다시 전해요.
+        const key = record.key ?? (await hashGuest(record.guestId));
+        await this.directory().ackInbox(key, message.upTo);
         return;
       }
       case "lamp": {

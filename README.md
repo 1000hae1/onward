@@ -41,7 +41,7 @@ npx wrangler secret put ADMIN_KEY --name onward
 
 화면은 없고 API만 있어요. `Authorization: Bearer <ADMIN_KEY>` 헤더로 들어와요.
 키를 1시간에 10번 틀리면 그 IP 해시에서는 1시간 동안 `429`예요.
-모든 POST 본문에는 프로토콜 버전 `v`(지금은 `4`)와 `reason`(1~200자, audit_log에만 남아요)을 담아요.
+모든 POST 본문에는 프로토콜 버전 `v`(지금은 `5`)와 `reason`(1~200자, audit_log에만 남아요)을 담아요.
 운영자 작업은 모두 `audit_log`에 남고, 이 기록을 고치거나 지우는 API는 없어요(1년 뒤 자동 삭제).
 
 ```sh
@@ -73,11 +73,11 @@ curl -s "$ONWARD/admin/reports?limit=50" -H "Authorization: Bearer $ADMIN_KEY"
 ```sh
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
 
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
+  -d '{"v":5,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
 ```
 
 막힌 사람에게는 "지금은 들어올 수 없어요"만 보여요. 지금 병실에 있으면 바로 내보내요. 차단은 30일 뒤에 풀려요.
@@ -87,7 +87,7 @@ curl -s -X POST "$ONWARD/admin/block" \
 ```sh
 curl -s -X POST "$ONWARD/admin/reset-nickname" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
 ```
 
 가림도 함께 풀려요. 같은 닉네임으로 다시 바꾸면 서버가 또 자동 닉네임으로 바꿔요. 신고된 적이 있는 사람에게만 할 수 있어요.
@@ -97,7 +97,7 @@ curl -s -X POST "$ONWARD/admin/reset-nickname" \
 ```sh
 curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
 ```
 
 ### 가림 풀기 (살펴보니 문제가 없을 때)
@@ -105,18 +105,18 @@ curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
 ```sh
 curl -s -X POST "$ONWARD/admin/clear-flag" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
 ```
 
 ### 답의 모양
 
 | 상태 | 본문 |
 | --- | --- |
-| 200 | `{"v":4,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
-| 400 | `{"v":4,"error":"bad_request"}` |
-| 401 | `{"v":4,"error":"unauthorized"}` |
-| 404 | `{"v":4,"ok":false,"error":"unknown_guest"}` 또는 `{"v":4,"error":"not_found"}` |
-| 429 | `{"v":4,"error":"too_many"}` |
+| 200 | `{"v":5,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
+| 400 | `{"v":5,"error":"bad_request"}` |
+| 401 | `{"v":5,"error":"unauthorized"}` |
+| 404 | `{"v":5,"ok":false,"error":"unknown_guest"}` 또는 `{"v":5,"error":"not_found"}` |
+| 429 | `{"v":5,"error":"too_many"}` |
 
 ## 안전장치 요약
 

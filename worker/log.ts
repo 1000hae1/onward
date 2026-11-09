@@ -14,6 +14,7 @@ export type LogRoute =
   | "admin"
   | "not-found"
   | "ward:message"
+  | "ward:hello"
   | "ward:alarm"
   | "directory:alarm";
 

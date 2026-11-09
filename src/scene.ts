@@ -1,8 +1,8 @@
 import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
 import { nicknameMessage } from "../shared/nickname";
-import { WARD_CAPACITY } from "../shared/protocol";
+import { PROTOCOL_VERSION, WARD_CAPACITY } from "../shared/protocol";
 import type { WardEvent } from "../shared/protocol";
-import { CAT_VISIT_AFTER_MS } from "../shared/ward-rules";
+import { CAT_VISIT_AFTER_MS, readVersion } from "../shared/ward-rules";
 import { BEDS } from "../shared/ward-layout";
 import type { CatVisitPlan } from "./cat/cat-path";
 import { createCats } from "./cat/cats";
@@ -10,11 +10,14 @@ import { createRemoteGuests } from "./net/remote-guests";
 import { loadMetList, rememberPerson, saveMetList } from "./net/met-list";
 import type { MetList } from "./net/met-list";
 import { createBlessingCards } from "./ui/blessing-cards";
-import { FIVE_LEAF_ITEM } from "../shared/left-blessings";
+import { FIVE_LEAF_ITEM, inboxAckUpTo } from "../shared/left-blessings";
 import { koreanDay } from "../shared/ward-rules";
 import type { BlessingCardMessage, Guest } from "../shared/protocol";
 import { createWardClient } from "./net/ward-client";
-import { readWardParams, wardLabel } from "./net/ward-params";
+import { loadGuestToken, readWardParams, storageWorks, wardLabel } from "./net/ward-params";
+import { NO_STORAGE_TEXT } from "./ui/entry-text";
+import { createButton } from "./ui/widgets";
+import { lampPlacedText, lampSlotPosition } from "../shared/offering-rules";
 import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
 import type { ActionBar } from "./ui/action-bar";
@@ -55,13 +58,13 @@ import { buildWinter } from "./ward/winter";
 import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
-import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugOfferText, hugSpot } from "../shared/hug-rules";
+import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugMenuState, hugOfferText, hugSpot } from "../shared/hug-rules";
 import type { HugDenied } from "../shared/hug-rules";
 import { isMorningWindow } from "../shared/morning";
 import { planterText } from "../shared/planter";
 import { dischargeNoticeText, farewellCardText } from "../shared/discharge-rules";
 import { WELCOME_BACK_TEXT } from "../shared/return-rules";
-import { bedHeadSpot, doorSpots, roomAt, ROOMS } from "../shared/ward-layout";
+import { bedHeadSpot, doorSpots, roomAt, ROOMS, windowLampSpot } from "../shared/ward-layout";
 import { createPlanters } from "./ward/planter-view";
 import { createMorningWindows } from "./ward/morning-window";
 import { createWarmGlows } from "./ward/warm-glow";
@@ -93,8 +96,7 @@ const LANDSCAPE_FOV = 54;
 /** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
 const PORTRAIT_VIEW_SHIFT = 0.14;
 const LANDSCAPE_VIEW_SHIFT = 0.08;
-/** 고르는 패널이 펼쳐지면 아바타가 가리지 않게 화면 위쪽으로 올려요. 입장 화면은 패널이 더 커요. */
-const PICKER_VIEW_SHIFT = -0.09;
+/** 입장 화면이 펼쳐지면 아바타가 가리지 않게 화면 위쪽으로 올려요. */
 const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
 /**
@@ -201,7 +203,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   });
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
-  const profile: Profile = loadProfile() ?? defaultProfile(Math.random());
+  const savedProfile = loadProfile();
+  const profile: Profile = savedProfile ?? defaultProfile(Math.random());
   const player = createPlayerControls(scene, camera, canvas, softCircle, {
     species: profile.species,
     outfit: profile.outfit,
@@ -266,7 +269,19 @@ export function startScene(canvas: HTMLCanvasElement): void {
     // 다른 동물을 누르면 메뉴가 나와요. 서버에 닿아 있을 때만이에요.
     const guest = client.online ? remotes.tap(origin, reach) : null;
     if (!guest || !actionBar) return false;
-    actionBar.openPerson({ id: guest.id, nickname: guest.nickname, hugOk: guest.hugOk && dischargeUntil === null });
+    const where = remotes.position(guest.id) ?? { x: guest.x, z: guest.z };
+    actionBar.openPerson({
+      id: guest.id,
+      nickname: guest.nickname,
+      hug: hugMenuState({
+        online: client.online,
+        leaving: dischargeUntil !== null,
+        me: { x: player.walkX, z: player.walkZ },
+        target: { x: where.x, z: where.z, hugOk: guest.hugOk },
+        lastSentAt: hugSentAt.get(guest.id) ?? null,
+        nowMs: Date.now(),
+      }),
+    });
     return true;
   });
 
@@ -323,9 +338,12 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let visitingNow = false;
   const hudMain = element("hud-main");
   const hudStats = element("hud-stats");
-  const setHud = (count: number | null): void => {
-    if (hudMain) hudMain.textContent = wardLabel(client.ward, count, WARD_CAPACITY);
+  /** count가 null이면 인원을 감춰요. solo면 서버에 닿지 않아 혼자 머무는 중이라고 알려요. */
+  const setHud = (count: number | null, solo = false): void => {
+    if (hudMain) hudMain.textContent = wardLabel(client.ward, client.instance, count, WARD_CAPACITY, solo);
   };
+  /** 안아 주기를 이 화면에서 마지막으로 보낸 시각이에요. 같은 분께 10분에 한 번이에요. */
+  const hugSentAt = new Map<string, number>();
   /** 오늘의 집계예요. 한국 날짜가 바뀌면 화면에서도 0부터 다시 세요. */
   let statsDay: string | null = null;
   const setStats = (stats: WardStats | null): void => {
@@ -435,11 +453,26 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const gateRoot = element("gate");
   const gate = gateRoot ? createGate(gateRoot) : null;
   const banner = element("connection-banner");
-  const setBanner = (text: string | null): void => {
+  const setBanner = (text: string | null, action?: { label: string; run: () => void }): void => {
     if (!banner) return;
     banner.textContent = text ?? "";
+    if (text !== null && action) banner.append(createButton(action.label, action.run));
     banner.hidden = text === null;
   };
+  /** 화면이 예전 번들이에요. 새로고침하면 새 버전을 받아요(index.html은 매번 다시 확인해요). */
+  const showOutdated = (): void => {
+    setBanner("새 버전이 나왔어요. 새로고침해 주세요.", { label: "새로고침", run: () => window.location.reload() });
+  };
+  // 들어가기 전에 서버 버전을 먼저 견줘요. 예전 번들을 캐시로 쓰고 있으면 바로 알려요.
+  void fetch("/api/health", { cache: "no-store" })
+    .then((response) => response.text())
+    .then((text) => {
+      const version = readVersion(text);
+      if (version !== null && version !== PROTOCOL_VERSION) showOutdated();
+    })
+    .catch(() => {
+      // 서버에 닿지 않으면 연결할 때 다시 알려요.
+    });
 
   const client = createWardClient(params, {
     onSnapshot(snapshot) {
@@ -463,6 +496,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
       remember(snapshot.guests, snapshot.you);
       // 내가 없는 동안 도착한 평안이 있으면 들어오자마자 보여 줘요.
       blessingCards?.showInbox(snapshot.inbox, client.serverNow());
+      // 받았다고 알려야 서버가 지워요. 그 전에 끊기면 다음에 들어올 때 다시 받아요.
+      const ackUpTo = inboxAckUpTo(snapshot.inbox);
+      if (ackUpTo !== null) client.send({ type: "inbox-ack", upTo: ackUpTo });
       offerings.loadGifts(snapshot.gifts);
       offerings.setLamps(snapshot.lamps);
       serverVisits.clear();
@@ -508,6 +544,13 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
       if (event.kind === "lamp") {
         offerings.setLampCount(event.room, event.count);
+        if (event.id === myId) {
+          // 내가 놓은 불빛이에요. 손에서 창틀로 빛이 날아가고 안내가 떠요. 창틀이 화면 밖이어도 알 수 있어요.
+          if (player.lyingBed === null) player.playGesture("pray");
+          const spot = windowLampSpot(ROOMS[event.room], lampSlotPosition(Math.max(0, event.count - 1)));
+          window.setTimeout(() => offerings.sendLight(player.handSpot(), spot, stillMotion()), LIGHT_DELAY_SECONDS * 1000);
+          toast(lampPlacedText(event.count));
+        }
         return;
       }
       if (event.kind === "stats") {
@@ -548,7 +591,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
       }
       remotes.apply(event);
       if (event.kind === "join" || event.kind === "update") remember([event.guest], myId);
-      if (event.kind === "join" || event.kind === "leave") setHud(remotes.count + 1);
+      // update로 새로 그린 사람도 있을 수 있어서 함께 세요.
+      if (event.kind === "join" || event.kind === "leave" || event.kind === "update") setHud(remotes.count + 1);
     },
     onCorrected(x, z) {
       player.correctDestination(x, z);
@@ -650,11 +694,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
         setBanner("연결이 잠시 끊겼어요. 다시 이어지는 중이에요.");
         return;
       }
-      setHud(null);
+      setHud(null, status !== "outdated");
       setStats(null);
       remotes.reset([], "");
       if (status === "outdated") {
-        setBanner("새 버전이 나왔어요. 새로고침해 주세요.");
+        showOutdated();
       } else if (status === "replaced") {
         toast("다른 창에서 병동에 들어와서 이 창은 쉬어요.");
       } else if (status === "full") {
@@ -730,7 +774,6 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (settingsRoot) {
       settings = createSettings(settingsRoot, {
         initial: chosen,
-        lockOutfit: visitOwner !== null,
         view,
         onViewChange: (next) => {
           const choiceChanged = next.quality !== view.quality;
@@ -747,10 +790,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
           applyProfile(next);
           client.hello(next);
         },
-        onOpenChange: (open) => {
-          pickerShift = open ? PICKER_VIEW_SHIFT : null;
-          player.setFacingCamera(open);
-        },
+        // 설정에는 모습 고르기가 없어서 카메라를 옮기지 않아요.
+        onOpenChange: () => undefined,
       });
     }
     const barRoot = element("action-bar");
@@ -769,7 +810,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
             ? metList.people.map((person) => {
                 const id = remotes.idForAddress(person.address);
                 const head = id ? remotes.headSpot(id) : null;
-                return { address: person.address, nickname: person.nickname, present: id && head ? { id, head } : null };
+                return {
+                  address: person.address,
+                  nickname: person.nickname,
+                  present: id && head ? { id, head, bed: remotes.bedOf(id) } : null,
+                };
               })
             : [],
         sink: {
@@ -783,7 +828,10 @@ export function startScene(canvas: HTMLCanvasElement): void {
           lamp: () => client.send({ type: "lamp" }),
           visitLink: (action) => client.send({ type: "visit-link", action }),
           report: (targetId, reason) => client.send({ type: "report", targetId, reason }),
-          hug: (targetId) => client.send({ type: "hug-request", targetId }),
+          hug: (targetId) => {
+            hugSentAt.set(targetId, Date.now());
+            client.send({ type: "hug-request", targetId });
+          },
           discharge: (closeLink) => client.send({ type: "discharge", closeLink }),
         },
         morning: () => isMorningWindow(serverNow()),
@@ -815,7 +863,16 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (entryRoot) {
       player.setFacingCamera(true);
       player.setInputEnabled(false);
-      createEntryScreen(entryRoot, { initial: profile, onPreview: applyProfile, onEnter: enterWard, message, ...visitEntry() });
+      createEntryScreen(entryRoot, {
+        initial: profile,
+        onPreview: applyProfile,
+        onEnter: enterWard,
+        message,
+        // 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 같은 분이 돌아온 거예요.
+        returning: savedProfile !== null && loadGuestToken() !== null,
+        ...visitEntry(),
+      });
+      if (!storageWorks()) notice?.show(NO_STORAGE_TEXT, 8);
     } else {
       enterWard(profile);
     }

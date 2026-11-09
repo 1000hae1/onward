@@ -2,9 +2,11 @@ import { z } from "zod";
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 4;
-/** 이보다 긴 메시지는 읽지 않고 버려요. */
+export const PROTOCOL_VERSION = 5;
+/** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
+/** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
+export const MAX_SERVER_MESSAGE_CHARS = 65_536;
 /** 연결 유지용 글자예요. 서버가 객체를 깨우지 않고 자동으로 답해요. */
 export const PING = "ping";
 export const PONG = "pong";
@@ -92,6 +94,8 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("hug-answer"), requestId, accept: z.boolean() }),
   /** 오늘 퇴원해요. closeLink면 문병 링크도 함께 꺼요. */
   z.object({ v, type: z.literal("discharge"), closeLink: z.boolean() }),
+  /** 내가 없는 동안 도착한 평안을 받았어요. upTo 시각까지 남겨진 것을 서버가 지워요. */
+  z.object({ v, type: z.literal("inbox-ack"), upTo: z.number().finite() }),
 ]);
 export type ClientMessage = z.infer<typeof clientMessageSchema>;
 export type HelloMessage = Extract<ClientMessage, { type: "hello" }>;
@@ -256,6 +260,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ v, type: z.literal("guest-token"), token: z.string().max(128) }),
   /** 들어올 수 없어요. blocked는 운영자가 막았을 때, limited는 새 게스트를 너무 많이 만들었을 때예요. */
   z.object({ v, type: z.literal("entry-denied"), reason: z.enum(["blocked", "limited"]) }),
+  /** 서버가 들어오는 일을 처리하지 못했어요. 화면은 잠시 뒤 다시 이어요. */
+  z.object({ v, type: z.literal("entry-failed") }),
   /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
   z.object({ v, type: z.literal("nickname-reset"), nickname: z.string().max(64) }),
   z.object({ v, type: z.literal("report-result"), result: z.enum(["saved", "limit", "already", "no-target"]) }),
@@ -281,9 +287,12 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
 ]);
 export type ServerMessage = z.infer<typeof serverMessageSchema>;
 
-/** 받은 글자를 메시지로 읽어요. 형식이 맞지 않으면 null이에요. */
-export function parseMessage<T>(schema: z.ZodType<T>, raw: unknown): T | null {
-  if (typeof raw !== "string" || raw.length > MAX_MESSAGE_BYTES * 4) return null;
+/**
+ * 받은 글자를 메시지로 읽어요. 형식이 맞지 않으면 null이에요.
+ * maxChars는 기본이 화면이 보내는 메시지의 한도예요. 화면이 서버 메시지를 읽을 때는 MAX_SERVER_MESSAGE_CHARS를 넣어요.
+ */
+export function parseMessage<T>(schema: z.ZodType<T>, raw: unknown, maxChars = MAX_MESSAGE_BYTES * 4): T | null {
+  if (typeof raw !== "string" || raw.length > maxChars) return null;
   let value: unknown;
   try {
     value = JSON.parse(raw);

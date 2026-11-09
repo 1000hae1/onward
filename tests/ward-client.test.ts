@@ -16,9 +16,15 @@ test("처음에는 언제나 1번 병실부터 시도해요", () => {
   assert.deepEqual(readWardParams("?ward=0&instance=99"), { ward: 1, instance: 1 });
 });
 
-test("상단에는 병동 이름과 접속자 수가 보여요", () => {
-  assert.equal(wardLabel(1, 5, 30), "온기병동 1병동 · 5/30");
-  assert.equal(wardLabel(1, null, 30), "온기병동 1병동");
+test("상단에는 병동 이름과 병실 번호, 접속자 수가 보여요", () => {
+  assert.equal(wardLabel(1, 1, 5, 30), "온기병동 1병동 1호 · 5/30");
+  assert.equal(wardLabel(2, 3, null, 30), "온기병동 2병동 3호");
+});
+
+test("서버에 닿지 않으면 상단에 혼자 머무는 중이라고 보여요", () => {
+  assert.equal(wardLabel(1, 1, null, 30, true), "온기병동 1병동 1호 · 혼자 머무는 중");
+  // 인원을 알면 혼자가 아니에요.
+  assert.equal(wardLabel(1, 1, 2, 30, true), "온기병동 1병동 1호 · 2/30");
 });
 
 test("디버그 표시는 ?debug=1일 때만 켜져요", () => {

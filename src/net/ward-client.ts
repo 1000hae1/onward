@@ -1,4 +1,5 @@
 import {
+  MAX_SERVER_MESSAGE_CHARS,
   parseMessage,
   PING,
   PONG,
@@ -18,6 +19,24 @@ const PING_SECONDS = 30;
 export function retryDelaySeconds(attempt: number): number {
   return Math.min(30, 2 ** attempt);
 }
+/** hello를 보낸 뒤 이만큼 답이 없으면 연결을 닫고 다시 이어요. "연결 중"에 멈춰 있지 않게요. */
+export const HELLO_ANSWER_MS = 8000;
+/** 직접 닫았어요. hello에 답이 없었어요. */
+const NO_ANSWER_CODE = 4100;
+
+/** hello에 대한 서버의 답인지예요. 이 가운데 하나가 오면 기다리기를 그만둬요. */
+export function answersHello(type: ServerMessage["type"]): boolean {
+  return (
+    type === "snapshot" ||
+    type === "nickname-rejected" ||
+    type === "visit-denied" ||
+    type === "room-full" ||
+    type === "entry-denied" ||
+    type === "entry-failed" ||
+    type === "version-mismatch"
+  );
+}
+
 /** 정원이 차면 다음 인스턴스로 넘어가는 횟수예요. */
 const MAX_OVERFLOW = 5;
 const BED_ANSWER_MS = 5000;
@@ -118,6 +137,12 @@ export function createWardClient(
   let paused = false;
   let ping: ReturnType<typeof setInterval> | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
+  /** hello의 답을 기다리는 타이머예요. */
+  let answerTimer: ReturnType<typeof setTimeout> | null = null;
+  const stopWaiting = (): void => {
+    if (answerTimer) clearTimeout(answerTimer);
+    answerTimer = null;
+  };
   /** 서버 시각에서 이 기기 시각을 뺀 값이에요. */
   let clockOffset = 0;
   const bedAnswers = new Map<number, (granted: boolean) => void>();
@@ -138,12 +163,30 @@ export function createWardClient(
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
 
+  /** 들어가려고 hello를 보내요. 아직 들어가지 않았으면 답을 기다리고, 없으면 다시 이어요. */
+  const sendHello = (current: Profile): void => {
+    const opened = socket;
+    rawSend(helloMessage(current));
+    if (online || !opened) return;
+    stopWaiting();
+    answerTimer = setTimeout(() => {
+      answerTimer = null;
+      if (socket !== opened || online) return;
+      try {
+        opened.close(NO_ANSWER_CODE, "no-answer");
+      } catch {
+        // 이미 닫혔으면 그대로예요.
+      }
+    }, HELLO_ANSWER_MS);
+  };
+
   const settleBeds = (granted: boolean): void => {
     for (const answer of bedAnswers.values()) answer(granted);
     bedAnswers.clear();
   };
 
   const handle = (message: ServerMessage): void => {
+    if (answersHello(message.type)) stopWaiting();
     switch (message.type) {
       case "snapshot": {
         const reconnected = everOnline;
@@ -212,6 +255,9 @@ export function createWardClient(
         online = false;
         handlers.onStatus(message.reason, instance);
         return;
+      case "entry-failed":
+        // 서버가 닫으면 close에서 다시 이어요.
+        return;
       case "nickname-reset":
         handlers.onNicknameReset(message.nickname);
         return;
@@ -266,19 +312,19 @@ export function createWardClient(
     }
     socket = opened;
     opened.addEventListener("open", () => {
-      if (profile) rawSend(helloMessage(profile));
+      if (profile) sendHello(profile);
       ping = setInterval(() => {
         if (opened.readyState === WebSocket.OPEN) opened.send(PING);
       }, PING_SECONDS * 1000);
     });
     opened.addEventListener("message", (event) => {
       if (event.data === PONG) return;
-      const version = readVersion(event.data);
+      const version = readVersion(event.data, MAX_SERVER_MESSAGE_CHARS);
       if (version !== null && version !== PROTOCOL_VERSION) {
         outdated();
         return;
       }
-      const message = parseMessage(serverMessageSchema, event.data);
+      const message = parseMessage(serverMessageSchema, event.data, MAX_SERVER_MESSAGE_CHARS);
       // 맞지 않는 메시지는 무시해요.
       if (!message) return;
       handlers.onMessageType?.(message.type === "event" ? `event:${message.event.kind}` : message.type);
@@ -288,6 +334,7 @@ export function createWardClient(
       if (socket !== opened) return;
       socket = null;
       online = false;
+      stopWaiting();
       if (ping) clearInterval(ping);
       ping = null;
       settleBeds(false);
@@ -371,7 +418,7 @@ export function createWardClient(
     hello(next) {
       profile = next;
       if (socket?.readyState === WebSocket.OPEN) {
-        rawSend(helloMessage(next));
+        sendHello(next);
       } else if (!socket && !retryTimer) {
         connect();
       }

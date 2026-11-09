@@ -55,6 +55,19 @@ export function takeForTaker(list: readonly StoredBlessing[], takerHash: string,
     .map(toCard);
 }
 
+/**
+ * 받은 평안 카드 가운데 가장 늦은 시각이에요. 화면은 이 값으로 받았다고 알리고, 서버는 그때까지 남겨진 것만 지워요.
+ * 카드가 없으면 알릴 것이 없어서 null이에요.
+ */
+export function inboxAckUpTo(cards: readonly { at: number }[]): number | null {
+  return cards.length === 0 ? null : Math.max(...cards.map((card) => card.at));
+}
+
+/** 받았다고 알린 뒤에도 남는 평안이에요. 그사이 새로 도착한 것은 다음에 전해요. */
+export function inboxAfterAck<T extends { at: number }>(list: readonly T[], upTo: number): T[] {
+  return list.filter((entry) => entry.at > upTo);
+}
+
 /** 같은 사람에게는 한국 시간으로 하루 한 번만 남길 수 있어요. */
 export function dailyKey(senderHash: string, ownerHash: string, koreanDay: string): string {
   return `${koreanDay}:${senderHash}>${ownerHash}`;

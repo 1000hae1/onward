@@ -571,7 +571,7 @@ export class Directory extends DurableObject<Env> {
         owner,
       )
       .toArray();
-    if (rows.length > 0) sql.exec("DELETE FROM inbox WHERE owner = ?", owner);
+    // 여기서는 지우지 않아요. 화면이 받았다고 알리면(ackInbox) 그때 지워요. 연결이 끊겨도 잃어버리지 않게요.
     const inbox = rows.map((row) =>
       toCard({ ...row, kind: row.kind === "gift" ? "gift" : "bless" } satisfies StoredBlessing),
     );
@@ -582,6 +582,11 @@ export class Directory extends DurableObject<Env> {
     const welcomeBack = sql.exec("DELETE FROM discharged WHERE guest_hash = ?", owner).rowsWritten > 0;
     await this.keepTidy();
     return { address, inbox, linked, visitDays, welcomeBack };
+  }
+
+  /** 화면이 받았다고 알린 평안을 지워요. upTo 시각까지 남겨진 것만이에요. 그사이 새로 온 것은 남아요. */
+  async ackInbox(owner: string, upTo: number): Promise<void> {
+    this.ctx.storage.sql.exec("DELETE FROM inbox WHERE owner = ? AND at <= ?", owner, upTo);
   }
 
   /** 오늘 다녀간 것을 세요. 같은 한국 날짜에는 한 번만이에요. 지금까지의 날 수와 오늘 처음인지, 예전에 온 적 있는지예요. */
