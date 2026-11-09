@@ -1,0 +1,5 @@
+# 이 파일을 .dev.vars 로 복사하고 값을 채워 주세요. .dev.vars 는 git에 올라가지 않아요.
+# 값은 32자 이상의 무작위 문자열이어야 해요. 예: openssl rand -base64 48
+TOKEN_SECRET=
+IP_SALT=
+ADMIN_KEY=

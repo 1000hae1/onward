@@ -6,6 +6,7 @@ export const BLESSINGS = [
   "좋은 밤 되시길",
   "행복하시길",
   "건강하시길",
+  "좋은 아침이에요",
 ] as const;
 
 export const GIFTS = ["네잎클로버", "오잎클로버", "귤", "홍시", "호빵"] as const;

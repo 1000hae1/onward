@@ -14,7 +14,8 @@ import { FIVE_LEAF_ITEM } from "../shared/left-blessings";
 import { koreanDay } from "../shared/ward-rules";
 import type { BlessingCardMessage, Guest } from "../shared/protocol";
 import { createWardClient } from "./net/ward-client";
-import { loadGuestId, readWardParams, wardLabel } from "./net/ward-params";
+import { readWardParams, wardLabel } from "./net/ward-params";
+import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
 import type { ActionBar } from "./ui/action-bar";
 import { createEntryScreen } from "./ui/entry-screen";
@@ -22,6 +23,7 @@ import { createHeadLabels } from "./ui/head-labels";
 import { defaultProfile, loadProfile, saveProfile } from "./ui/profile";
 import type { Profile } from "./ui/profile";
 import { createSettings } from "./ui/settings";
+import type { Settings } from "./ui/settings";
 import { createOfferings } from "./ward/offerings";
 import { createPlayerControls } from "./ward/controls";
 import { createLighting } from "./ward/lighting";
@@ -51,6 +53,20 @@ import { readClockShiftMs } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
 import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
+import type { DeniedReason } from "../shared/protocol";
+import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugOfferText, hugSpot } from "../shared/hug-rules";
+import type { HugDenied } from "../shared/hug-rules";
+import { isMorningWindow } from "../shared/morning";
+import { planterText } from "../shared/planter";
+import { dischargeNoticeText, farewellCardText } from "../shared/discharge-rules";
+import { WELCOME_BACK_TEXT } from "../shared/return-rules";
+import { bedHeadSpot, doorSpots, roomAt, ROOMS } from "../shared/ward-layout";
+import { createPlanters } from "./ward/planter-view";
+import { createMorningWindows } from "./ward/morning-window";
+import { createWarmGlows } from "./ward/warm-glow";
+import { createMoments } from "./ui/moments";
+import { LIGHT_DELAY_SECONDS } from "./ui/action-bar";
+import { BED_TRANSITION_SECONDS } from "./avatar/pose";
 
 const MAX_FRAME_SECONDS = 0.05;
 /** 수면 모드에서는 화면이 거의 검으니 초당 4번만 그려요. */
@@ -67,8 +83,16 @@ const PICKER_VIEW_SHIFT = -0.09;
 const ENTRY_VIEW_SHIFT = -0.2;
 const VIEW_SHIFT_RATE = 6;
 
+/** 다른 사람이 걷는 빠르기예요. 안아 주러 다가가는 시간을 어림할 때 써요. */
+const HUG_WALK_SPEED = 1.8;
+const HUG_GLOW_HEIGHT = 0.85;
+
 /** 서버가 동작을 받지 않았을 때의 안내예요. */
-const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in-room" | "no-target" | "too-fast" | "once-a-day" | "no-bed", string> = {
+const DENIED_TEXT: Record<DeniedReason, string> = {
+  "too-far": HUG_DENIED_TEXT["too-far"],
+  "too-soon": HUG_DENIED_TEXT["too-soon"],
+  unavailable: HUG_DENIED_TEXT.unavailable,
+  "not-morning": "좋은 아침 인사는 아침 6시 30분부터 9시까지 건넬 수 있어요.",
   "no-bed": "침대에 누운 뒤 만들 수 있어요.",
   "once-a-day": "그분께는 오늘 이미 남겼어요. 내일 또 남겨 주세요.",
   "out-of-season": "귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요.",
@@ -77,6 +101,14 @@ const DENIED_TEXT: Record<"out-of-season" | "gift-limit" | "lamp-full" | "not-in
   "not-in-room": "병실에 들어가면 놓을 수 있어요.",
   "no-target": "그곳에는 보낼 수 없어요.",
   "too-fast": "조금 천천히 눌러 주세요.",
+};
+
+/** 신고에 대한 서버의 답이에요. */
+const REPORT_TEXT: Record<"saved" | "limit" | "already" | "no-target", string> = {
+  saved: "신고를 받았어요. 운영자가 살펴볼게요.",
+  limit: "오늘은 신고를 더 할 수 없어요. 내일 다시 해 주세요.",
+  already: "이미 신고하신 분이에요. 운영자가 살펴볼게요.",
+  "no-target": "지금은 신고할 수 없어요.",
 };
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
@@ -134,6 +166,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
     return head ? { x: head.x, y: head.y, z: head.z } : { x: player.x, y: 1, z: player.z };
   };
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
+  const planters = createPlanters(scene);
+  const morningWindows = createMorningWindows(scene);
+  const glows = createWarmGlows(scene, softCircle);
   /** 서버가 정한 병동 고양이 방문이에요. 병실 번호마다 하나예요. */
   const serverVisits = new Map<number, CatVisitPlan>();
   /** 서버에 닿지 않을 때 내 침대로 오는 방문이에요. 이 화면에서만 계산해요. */
@@ -153,7 +188,20 @@ export function startScene(canvas: HTMLCanvasElement): void {
     },
     false,
   );
-  player.setTapFilter((origin, reach) => cats.tap(origin, reach));
+  player.setTapFilter((origin, reach) => {
+    if (cats.tap(origin, reach)) return true;
+    // 창가 화분을 누르면 이 병실에 모인 평안을 알려 줘요. 그 병실 안에 있을 때만이에요.
+    const planterRoom = planters.tap(origin, reach);
+    if (planterRoom !== null && roomAt(player.walkX, player.walkZ)?.index === planterRoom) {
+      toast(planterText(planters.total(planterRoom)));
+      return true;
+    }
+    // 다른 동물을 누르면 메뉴가 나와요. 서버에 닿아 있을 때만이에요.
+    const guest = client.online ? remotes.tap(origin, reach) : null;
+    if (!guest || !actionBar) return false;
+    actionBar.openPerson({ id: guest.id, nickname: guest.nickname, hugOk: guest.hugOk && dischargeUntil === null });
+    return true;
+  });
 
   let pickerShift: number | null = ENTRY_VIEW_SHIFT;
   let viewShift: number | null = null;
@@ -180,6 +228,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const labelsRoot = element("head-labels");
   const labels = labelsRoot ? createHeadLabels(labelsRoot) : null;
   let actionBar: ActionBar | null = null;
+  let settings: Settings | null = null;
   let current = profile;
   let entered = false;
 
@@ -206,6 +255,79 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const noticeRoot = element("notice");
   const notice = noticeRoot ? createNotice(noticeRoot) : null;
   const toast = (text: string): void => actionBar?.showToast(text);
+  const momentsRoot = element("moments");
+  const moments = momentsRoot ? createMoments(momentsRoot) : null;
+  /** 퇴원하는 중이면 배웅을 모으는 끝 시각(서버 시각)이에요. */
+  let dischargeUntil: number | null = null;
+  let farewellsReceived = 0;
+  /** 다가오는 사람을 마주 안을 때까지 남은 시간과 바라볼 곳이에요. */
+  let hugBack: { left: number; face: { x: number; z: number } } | null = null;
+
+  /** 두 동물이 안아요. 안아 주는 사람은 서버가 정한 자리로 다가가고, 안기는 사람은 다가오길 기다렸다가 마주 안아요. */
+  const playHug = (event: Extract<WardEvent, { kind: "hug" }>): void => {
+    const positionOf = (id: string): { x: number; z: number } | null =>
+      id === myId ? { x: player.walkX, z: player.walkZ } : remotes.position(id);
+    const a = positionOf(event.a);
+    const b = positionOf(event.b);
+    if (!a || !b) return;
+    const spot = hugSpot(a, { ...b, bed: event.bed });
+    const low = event.bed !== null;
+    const face = low ? BEDS[event.bed as number] : b;
+    const travel = Math.hypot(spot.x - a.x, spot.z - a.z) / HUG_WALK_SPEED;
+    if (event.a === myId) {
+      player.whenUp(() =>
+        player.walkToSpot(spot.x, spot.z, () => {
+          player.faceToward(face.x, face.z);
+          player.playGesture(low ? "hug-low" : "hug");
+        }),
+      );
+    } else {
+      remotes.hugTo(event.a, spot, face, low);
+    }
+    if (!low) {
+      if (event.b === myId) hugBack = { left: travel, face: spot };
+      else remotes.hugBack(event.b, spot, travel);
+    }
+    const glowAt = low
+      ? bedHeadSpot(BEDS[event.bed as number])
+      : { x: (spot.x + b.x) / 2, y: HUG_GLOW_HEIGHT, z: (spot.z + b.z) / 2 };
+    glows.show(glowAt, travel + BED_TRANSITION_SECONDS * 0.5);
+  };
+
+  /** 퇴원하는 분께 평안을 보내요. 평안 빌기와 같은 동작이고, 서버가 배웅으로 세요. */
+  const sendFarewell = (id: string): void => {
+    player.whenUp(() => {
+      const head = remotes.headSpot(id);
+      if (head) player.faceToward(head.x, head.z);
+      player.playGesture("pray");
+      client.send({ type: "bless", targetId: id });
+      window.setTimeout(() => {
+        const to = remotes.headSpot(id) ?? head;
+        if (to) offerings.sendLight(player.handSpot(), to, stillMotion());
+      }, LIGHT_DELAY_SECONDS * 1000);
+    });
+  };
+
+  /** 퇴원을 받아 줬어요. 평상복으로 갈아입고 문 쪽으로 천천히 걸어 나가요. */
+  const beginDischarge = (until: number): void => {
+    dischargeUntil = until;
+    farewellsReceived = 0;
+    sleep?.wake();
+    actionBar?.setHidden(true);
+    const settingsRoot = element("settings");
+    if (settingsRoot) settingsRoot.hidden = true;
+    const bed = player.claimedBed;
+    const room = roomAt(player.walkX, player.walkZ) ?? (bed !== null ? ROOMS[BEDS[bed].roomIndex] : null);
+    // 저장하지 않고 이번에만 평상복이에요. 다음에 들어올 때는 원래 옷이에요.
+    player.setChoice({ species: current.species, outfit: "visitor" });
+    player.setInputEnabled(false);
+    notice?.show("오늘 퇴원해요. 평안히 다녀가세요.", 5);
+    if (!room) return;
+    const door = doorSpots(room);
+    player.whenUp(() =>
+      player.walkToSpot(door.inside.x, door.inside.z, () => player.walkToSpot(door.outside.x, door.outside.z, () => {}, true), true),
+    );
+  };
   let warnedOffline = false;
 
   const cardsRoot = element("left-cards");
@@ -226,6 +348,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   /** 침대를 받으면 서버가 남겨진 평안을 바로 보내 줘요. 걸어가서 다 누웠을 때 보여 줘요. */
   let pendingLeft: { bedId: number; cards: BlessingCardMessage[] } | null = null;
 
+  const gateRoot = element("gate");
+  const gate = gateRoot ? createGate(gateRoot) : null;
   const banner = element("connection-banner");
   const setBanner = (text: string | null): void => {
     if (!banner) return;
@@ -233,7 +357,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     banner.hidden = text === null;
   };
 
-  const client = createWardClient(params, loadGuestId(), {
+  const client = createWardClient(params, {
     onSnapshot(snapshot) {
       myId = snapshot.you;
       visitingNow = snapshot.visit !== null;
@@ -259,6 +383,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
       for (const visit of snapshot.catVisits) serverVisits.set(visit.room, { bed: visit.bed, at: visit.at, until: null });
       setHud(remotes.count + 1);
       setStats(snapshot.stats);
+      planters.setTotals(snapshot.planters);
+      morningWindows.closeAll(true);
+      for (const roomIndex of snapshot.morningRooms) morningWindows.open(roomIndex, true);
+      // 자주 온 분이면 병동 고양이가 문 앞으로 나와 반겨요. 이 화면에서만 보여요.
+      if (snapshot.greet) cats.welcome({ x: player.walkX, z: player.walkZ });
+      if (snapshot.welcomeBack) notice?.show(WELCOME_BACK_TEXT, 5);
+      // 다시 이어졌으면 지금 잠들어 있는지를 서버에 다시 알려요. 같으면 서버는 아무것도 하지 않아요.
+      client.send({ type: "sleep", sleeping: sleep?.sleeping ?? false });
       setBanner(null);
       warnedOffline = false;
       // 서버 시계를 받았으니 다음 시간대 바뀜도 다시 계산해요.
@@ -294,6 +426,26 @@ export function startScene(canvas: HTMLCanvasElement): void {
         setStats(event.stats);
         return;
       }
+      if (event.kind === "planter") {
+        planters.setTotal(event.room, event.total);
+        return;
+      }
+      if (event.kind === "window-open") {
+        morningWindows.open(event.room, reduceMotion.matches);
+        return;
+      }
+      if (event.kind === "hug") {
+        playHug(event);
+        return;
+      }
+      if (event.kind === "discharge") {
+        const guest = remotes.guests().find((candidate) => candidate.id === event.id);
+        if (guest && dischargeUntil === null) {
+          moments?.farewell(event.id, dischargeNoticeText(guest.nickname), () => sendFarewell(event.id));
+        }
+        return;
+      }
+      if (event.kind === "leave") moments?.dismissFarewell(event.id);
       if (event.kind === "cat-visit") {
         const before = serverVisits.get(event.room);
         if (event.visit) {
@@ -317,6 +469,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
       reopenEntry(nicknameMessage(problem));
     },
     onDenied(denied) {
+      if (denied.action === "discharge") {
+        toast("침대에 누운 뒤 퇴원할 수 있어요.");
+        return;
+      }
+      if (denied.action === "hug" && denied.reason in HUG_DENIED_TEXT) {
+        toast(HUG_DENIED_TEXT[denied.reason as HugDenied]);
+        return;
+      }
       if (denied.reason === "gift-limit" && denied.item === FIVE_LEAF_ITEM) {
         toast("오잎클로버는 내일 다시 놓을 수 있어요.");
         return;
@@ -346,13 +506,50 @@ export function startScene(canvas: HTMLCanvasElement): void {
     onVisitorArrived(nickname) {
       notice?.show(visitorArrivedText(nickname));
     },
+    onNicknameReset(nickname) {
+      // 운영자가 되돌린 닉네임이에요. 이 기기에도 자동 닉네임으로 저장해요.
+      const next = { ...current, nickname, nicknameAuto: true };
+      persist(next);
+      applyProfile(next);
+      settings?.setProfile(next);
+      toast(`닉네임이 '${nickname}'(으)로 바뀌었어요.`);
+    },
+    onReportResult(result) {
+      toast(REPORT_TEXT[result]);
+    },
+    onHugOffer(requestId, fromId) {
+      const from = remotes.guests().find((guest) => guest.id === fromId);
+      if (!from || dischargeUntil !== null) return;
+      moments?.hugOffer(hugOfferText(from.nickname), (accept) => client.send({ type: "hug-answer", requestId, accept }));
+    },
+    onHugDeclined() {
+      toast(HUG_DECLINED_TEXT);
+    },
+    onDischargeStarted(until) {
+      beginDischarge(until);
+    },
+    onFarewellCount(count) {
+      farewellsReceived = count;
+    },
     onStatus(status) {
-      if (status === "online" || status === "connecting") return;
+      if (status === "online" || status === "connecting") {
+        if (status === "online") gate?.hide();
+        return;
+      }
       if (status === "paused") {
         setHud(null);
         setStats(null);
         remotes.reset([], "");
-        setBanner("오래 쉬셔서 연결을 잠시 닫았어요. 화면을 누르면 다시 이어져요.");
+        setBanner(null);
+        gate?.show("잠들었어요. 화면을 누르면 다시 병실로 돌아가요");
+        return;
+      }
+      if (status === "blocked" || status === "limited") {
+        setHud(null);
+        setStats(null);
+        remotes.reset([], "");
+        setBanner(null);
+        gate?.show("지금은 들어올 수 없어요", status === "limited" ? "잠시 뒤에 다시 와 주세요." : undefined);
         return;
       }
       if (status === "reconnecting") {
@@ -414,7 +611,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
     const settingsRoot = element("settings");
     if (settingsRoot) {
-      createSettings(settingsRoot, {
+      settings = createSettings(settingsRoot, {
         initial: chosen,
         lockOutfit: visitOwner !== null,
         onChange: (next) => {
@@ -457,7 +654,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
           lamp: () => client.send({ type: "lamp" }),
           visitLink: (action) => client.send({ type: "visit-link", action }),
+          report: (targetId, reason) => client.send({ type: "report", targetId, reason }),
+          hug: (targetId) => client.send({ type: "hug-request", targetId }),
+          discharge: (closeLink) => client.send({ type: "discharge", closeLink }),
         },
+        morning: () => isMorningWindow(serverNow()),
       });
     }
   };
@@ -560,6 +761,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
             player.setCameraLocked(sleeping);
             player.setInputEnabled(!sleeping);
             lastInputMs = Date.now();
+            // 잠든 동안에는 안아 주기 요청이 오지 않게 서버에 알려요.
+            client.send({ type: "sleep", sleeping });
           },
         })
       : null;
@@ -608,8 +811,18 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (statsDay && statsDay !== koreanDay(new Date(serverNow()))) {
       setStats({ visitors: 0, blessings: 0, lamps: 0 });
     }
-    if (entered && client.online && shouldPause(lastInputMs, Date.now(), sleep?.sleeping ?? false)) {
+    if (entered && client.online && dischargeUntil === null && shouldPause(lastInputMs, Date.now(), sleep?.sleeping ?? false)) {
       client.pause();
+    }
+    // 아침(09:00)이 지나면 열린 창문을 조용히 닫아요.
+    if (!isMorningWindow(serverNow())) morningWindows.closeAll(reduceMotion.matches);
+    // 1분 동안 받은 배웅을 모아 카드로 보여 주고 입장 화면으로 돌아가요.
+    if (dischargeUntil !== null && serverNow() >= dischargeUntil) {
+      dischargeUntil = Infinity;
+      moments?.farewellCard(farewellCardText(farewellsReceived), () => {
+        client.leave();
+        window.location.reload();
+      });
     }
   }
 
@@ -652,6 +865,20 @@ export function startScene(canvas: HTMLCanvasElement): void {
     }
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
+    planters.update(dt, reduceMotion.matches);
+    morningWindows.update(dt, reduceMotion.matches);
+    glows.update(dt, reduceMotion.matches);
+    moments?.update(dt);
+    if (hugBack) {
+      hugBack.left -= dt;
+      if (hugBack.left <= 0) {
+        if (player.lyingBed === null) {
+          player.faceToward(hugBack.face.x, hugBack.face.z);
+          player.playGesture("hug");
+        }
+        hugBack = null;
+      }
+    }
     actionBar?.update(dt);
     blessingCards?.update(dt);
     notice?.update(dt);

@@ -46,19 +46,24 @@ export function place(
   return geometry;
 }
 
-function blobGeometry(blob: BlobSpec, at: Vec3, tilt: Vec3): BufferGeometry {
+/** 자리를 잡기 전, 원점에 놓인 부품 모양이에요. 크기와 납작함만 들어가 있어요. */
+export function blobShape(blob: Pick<BlobSpec, "shape" | "color" | "size" | "small">): BufferGeometry {
   const { shape, size, small } = blob;
   if (shape === "ball") {
     const sphere = small ? new SphereGeometry(1, 5, 3) : new SphereGeometry(1, 8, 5);
-    return place(paint(sphere, blob.color), at, tilt, size);
+    return paint(sphere, blob.color).scale(size[0], size[1], size[2]);
   }
   if (shape === "pill") {
     const pill = small
       ? new CapsuleGeometry(size[0], size[1], 1, 4)
       : new CapsuleGeometry(size[0], size[1], 1, 6);
-    return place(paint(pill, blob.color), at, tilt, [1, 1, size[2]]);
+    return paint(pill, blob.color).scale(1, 1, size[2]);
   }
-  return place(paint(new ConeGeometry(size[0], size[1], small ? 5 : 6), blob.color), at, tilt);
+  return paint(new ConeGeometry(size[0], size[1], small ? 5 : 6), blob.color);
+}
+
+function blobGeometry(blob: BlobSpec, at: Vec3, tilt: Vec3): BufferGeometry {
+  return place(blobShape(blob), at, tilt);
 }
 
 export function blobs(list: readonly BlobSpec[], offset: Vec3 = [0, 0, 0]): BufferGeometry[] {
@@ -76,7 +81,10 @@ export function blobs(list: readonly BlobSpec[], offset: Vec3 = [0, 0, 0]): Buff
 
 /** 부품을 하나로 합쳐요. 같은 꼭짓점은 다시 묶어서 휴대폰이 계산할 양을 줄여요. */
 export function merged(parts: BufferGeometry[]): BufferGeometry {
-  const geometry = mergeGeometries(parts);
+  // 이미 합친 조각(색인 있음)과 새 조각(색인 없음)을 함께 넘겨도 되도록 맞춰요.
+  const flat = parts.map((part) => (part.index ? part.toNonIndexed() : part));
+  const geometry = mergeGeometries(flat);
+  for (const part of flat) part.dispose();
   for (const part of parts) part.dispose();
   return mergeVertices(geometry);
 }

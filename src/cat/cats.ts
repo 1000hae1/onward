@@ -3,6 +3,7 @@ import { pickBox, turnToward } from "../ward/camera-view";
 import {
   BEDS,
   catSpots,
+  doorSpots,
   OBSTACLES,
   roomAt,
   roomRect,
@@ -10,10 +11,10 @@ import {
   WALL_BOXES,
 } from "../../shared/ward-layout";
 import type { WallBox, WardRoom } from "../../shared/ward-layout";
-import { createNavGrid } from "../ward/movement";
+import { createNavGrid, stepAlong } from "../ward/movement";
 import type { NavGrid } from "../ward/movement";
 import { CAT_NOSE_REACH } from "./cat-kit";
-import { catFrameAt, CAT_GREET_SECONDS, shouldGreet } from "./cat-path";
+import { catFrameAt, CAT_GREET_SECONDS, CAT_WALK_SPEED, shouldGreet } from "./cat-path";
 import type { CatPoint, CatRoom, CatVisitPlan } from "./cat-path";
 import { createCatPose } from "./cat-pose";
 import { createCatView } from "./cat-view";
@@ -28,6 +29,13 @@ const CAT_TAP_HALF = 0.22;
 const CAT_TAP_HEIGHT = 0.46;
 /** 한 번에 이보다 멀리 옮겨지면 걸은 것이 아니라 자리를 맞춘 거예요. */
 const SNAP_DISTANCE = 1;
+/** 반기러 나올 때는 조금 서둘러 걸어요. */
+const WELCOME_SPEED = CAT_WALK_SPEED * 1.6;
+/** 문 앞에 앉아 반기는 시간이에요. 그동안 천천히 두 번 눈을 깜빡여요. */
+const WELCOME_SECONDS = 5;
+const SECOND_BLINK_AT = 2.6;
+/** 반기러 오는 길이 너무 길면 문 앞에서 기다리던 것처럼 바로 그 자리에 둬요. */
+const WELCOME_MAX_SECONDS = 9;
 
 export interface CatOwner {
   /** 내가 걸어 다니는 자리예요. 누워 있어도 침대 곁 자리예요. */
@@ -52,6 +60,8 @@ export interface CatsHandle {
   /** 누른 시선에 고양이가 있으면 반응하고 true를 돌려줘요. */
   tap(origin: Vector3, reach: Vector3): boolean;
   setCompanion(enabled: boolean): void;
+  /** 자주 온 사람을 반겨요. 그 사람과 가까운 문의 병동 고양이가 문 앞으로 나와 천천히 눈을 깜빡여요. 이 화면에서만 보여요. */
+  welcome(near: { x: number; z: number }): void;
 }
 
 /** 병실마다 사는 고양이와, 입장 때 고른 경우 함께 다니는 고양이예요. */
@@ -110,6 +120,67 @@ export function createCats(
     return { room, plan, view, moves: newMoves(0, 0, 0), y: 0, active: false, placed: false, sitting: false };
   });
   type WardCat = (typeof wardCats)[number];
+
+  /** 반기러 나온 고양이예요. 끝나면 서버 시계로 정해진 자리로 걸어 돌아가요. */
+  let welcoming: {
+    cat: WardCat;
+    phase: "go" | "greet" | "back";
+    path: { x: number; z: number }[];
+    left: number;
+    blinked: boolean;
+  } | null = null;
+
+  const updateWelcome = (dt: number, stillMotion: boolean): void => {
+    if (!welcoming) return;
+    const { cat } = welcoming;
+    const moves = cat.moves;
+    cat.active = true;
+    cat.view.root.visible = true;
+    cat.y = Math.max(0, cat.y - dt * 2);
+    if (welcoming.phase === "greet") {
+      welcoming.left -= dt;
+      moves.yaw = turnToward(moves.yaw, Math.atan2(owner.walkX - moves.x, owner.walkZ - moves.z), 1 - Math.exp(-dt * TURN_RATE));
+      moves.walkWeight = ease(moves.walkWeight, 0, dt);
+      moves.sit = ease(moves.sit, 1, dt);
+      moves.curl = ease(moves.curl, 0, dt);
+      if (!welcoming.blinked && WELCOME_SECONDS - welcoming.left >= SECOND_BLINK_AT) {
+        welcoming.blinked = true;
+        moves.notice = 0;
+      }
+      if (welcoming.left <= 0) {
+        // 돌아갈 자리는 지금 서버 시계로 정해진 자리예요.
+        const frame = catFrameAt(cat.plan, world.serverNow(), world.isTaken, world.visitFor(cat.room.index));
+        const inside = doorSpots(cat.room).inside;
+        const back = navOf(cat.room).findPath(inside, { x: frame.x, z: frame.z });
+        welcoming = { ...welcoming, phase: "back", path: [inside, ...back, { x: frame.x, z: frame.z }] };
+      }
+    } else {
+      const step = stepAlong({ x: moves.x, z: moves.z }, welcoming.path, (stillMotion ? 50 : WELCOME_SPEED) * dt);
+      const dx = step.position.x - moves.x;
+      const dz = step.position.z - moves.z;
+      const walked = Math.hypot(dx, dz);
+      moves.x = step.position.x;
+      moves.z = step.position.z;
+      welcoming.path = step.path;
+      if (walked > 0) {
+        moves.walkPhase += (walked / STRIDE) * Math.PI * 2;
+        moves.yaw = turnToward(moves.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * TURN_RATE));
+      }
+      moves.walkWeight = ease(moves.walkWeight, stillMotion ? 0 : 1, dt);
+      moves.sit = ease(moves.sit, 0, dt);
+      moves.curl = ease(moves.curl, 0, dt);
+      if (step.path.length === 0) {
+        if (welcoming.phase === "go") {
+          welcoming = { ...welcoming, phase: "greet", left: WELCOME_SECONDS };
+          // 고개를 들고 천천히 눈을 깜빡여요.
+          moves.notice = 0;
+        } else {
+          welcoming = null;
+        }
+      }
+    }
+    drawCat(cat.view, moves, cat.y, dt, pose);
+  };
 
   const companion = createCompanion(parent);
   const setCompanion = (enabled: boolean): void => companion.setEnabled(enabled, owner);
@@ -178,9 +249,52 @@ export function createCats(
     setCompanion,
     update(dt, stillMotion) {
       seconds += dt;
-      for (const cat of wardCats) updateWardCat(cat, dt, stillMotion);
+      for (const cat of wardCats) {
+        if (welcoming?.cat === cat) continue;
+        updateWardCat(cat, dt, stillMotion);
+      }
+      updateWelcome(dt, stillMotion);
       updateGreeting(dt);
       if (companion.enabled) companion.update(dt, owner, stillMotion, greetLeft > 0);
+    },
+    welcome(near) {
+      if (welcoming) return;
+      // 그 사람과 가장 가까운 문의 병실 고양이가 나와요.
+      let best: WardCat | null = null;
+      let bestDistance = Infinity;
+      for (const cat of wardCats) {
+        const door = doorSpots(cat.room).outside;
+        const distance = Math.hypot(door.x - near.x, door.z - near.z);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          best = cat;
+        }
+      }
+      if (!best) return;
+      const cat = best;
+      if (!cat.placed) {
+        const frame = catFrameAt(cat.plan, world.serverNow(), world.isTaken, world.visitFor(cat.room.index));
+        cat.moves.x = frame.x;
+        cat.moves.z = frame.z;
+        cat.placed = true;
+      }
+      const spots = doorSpots(cat.room);
+      const toDoor = navOf(cat.room).findPath({ x: cat.moves.x, z: cat.moves.z }, spots.inside);
+      const path = [...toDoor, spots.inside, spots.outside];
+      let length = 0;
+      let from = { x: cat.moves.x, z: cat.moves.z };
+      for (const point of path) {
+        length += Math.hypot(point.x - from.x, point.z - from.z);
+        from = point;
+      }
+      if (length / WELCOME_SPEED > WELCOME_MAX_SECONDS) {
+        // 멀리 있었으면 문 앞에서 기다리던 것처럼 시작해요.
+        cat.moves.x = spots.inside.x;
+        cat.moves.z = spots.inside.z;
+        welcoming = { cat, phase: "go", path: [spots.outside], left: 0, blinked: false };
+        return;
+      }
+      welcoming = { cat, phase: "go", path, left: 0, blinked: false };
     },
     tap(origin, reach) {
       const candidates: { moves: Moves; y: number }[] = [

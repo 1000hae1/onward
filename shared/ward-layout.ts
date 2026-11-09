@@ -159,7 +159,7 @@ export const IV_POLE_HEIGHT = 1.8;
 /** 수액 줄이 폴대에서 침대까지 뻗는 거리예요. */
 export const IV_TUBE_REACH = Math.hypot(0.65, 0.33);
 
-export const PLAYER_RADIUS = 0.22;
+export const PLAYER_RADIUS = 0.26;
 /** 앞마당에서 현관을 바라보며 시작해요. */
 export const PLAYER_START = { x: 0, z: 36 };
 
@@ -169,7 +169,7 @@ const NIGHTSTAND_LOCAL_X = 3.05;
 const NIGHTSTAND_OFFSET_Z = -0.85;
 const SLEEP_LAMP_LOCAL_X = ROOM.maxX - 0.07;
 const BED_APPROACH_LOCAL_X = 1.9;
-const BED_APPROACH_OFFSET_Z = 0.75;
+const BED_APPROACH_OFFSET_Z = 0.8;
 const BED_REST_LOCAL_X = -0.19;
 const BED_TAP_HEIGHT = 1.1;
 
@@ -344,6 +344,20 @@ export function giftSpot(standIndex: number, slot: number): { x: number; y: numb
 const WINDOW_SILL_LOCAL_Z = ROOM.minZ + 0.08;
 const WINDOW_SILL_TOP_Y = WINDOW.minY + 0.03;
 const WINDOW_LAMP_REACH = (WINDOW.maxX - WINDOW.minX) / 2 - 0.15;
+
+/** 창틀 끝 화분 자리예요. 램프 자리보다 바깥쪽이라 겹치지 않아요. */
+const PLANTER_LOCAL_X = WINDOW.maxX - 0.1;
+export function planterSpot(room: WardRoom): { x: number; y: number; z: number } {
+  return { ...roomToWorld(room, PLANTER_LOCAL_X, WINDOW_SILL_LOCAL_Z), y: WINDOW_SILL_TOP_Y };
+}
+
+/** 병실 문 바로 안쪽과 바깥 복도 자리예요. 퇴원할 때 걸어 나가고, 고양이가 반길 때 다가와요. */
+export function doorSpots(room: WardRoom): { inside: { x: number; z: number }; outside: { x: number; z: number } } {
+  return {
+    inside: roomToWorld(room, 0, ROOM.maxZ - 0.45),
+    outside: roomToWorld(room, 0, ROOM.maxZ + WALL_THICKNESS + 0.6),
+  };
+}
 
 /** 창틀 위 램프 자리예요. position은 창 폭을 -1~1로 본 값이에요. */
 export function windowLampSpot(

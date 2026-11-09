@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "vitest";
 import { clientMessageSchema, parseMessage, PROTOCOL_VERSION, serverMessageSchema, WARD_CAPACITY } from "../shared/protocol.ts";
-import type { HelloMessage } from "../shared/protocol.ts";
+import type { VerifiedHello } from "../shared/ward-rules.ts";
 import { BEDS, bedApproach, WALK_AREAS } from "../shared/ward-layout.ts";
 import {
   checkVisit,
@@ -132,7 +132,7 @@ test("주소창의 /visit/{토큰}만 읽어요", () => {
   assert.equal(visitTitle("따뜻한 곰"), "따뜻한 곰님에게 문병 왔어요");
 });
 
-const hello = (over: Partial<HelloMessage> = {}): HelloMessage => ({
+const hello = (over: Partial<VerifiedHello> = {}): VerifiedHello => ({
   v: PROTOCOL_VERSION,
   type: "hello",
   guestId: "guest-visit-0001",
@@ -200,17 +200,44 @@ test("30초 안에 돌아온 문병객은 같은 역할을 이어받아요", () 
   assert.equal(back.record.outfit, "visitor");
 });
 
-test("hello는 visitToken을 선택적으로 받고, 버전은 2예요", () => {
-  assert.equal(PROTOCOL_VERSION, 2);
+test("hello는 visitToken을 선택적으로 받고, 버전은 3이에요", () => {
+  assert.equal(PROTOCOL_VERSION, 4);
   const withToken = JSON.stringify(hello({ visitToken: TOKEN }));
   assert.equal(parseMessage(clientMessageSchema, withToken)?.type, "hello");
   assert.ok(parseMessage(clientMessageSchema, JSON.stringify(hello())));
   assert.equal(parseMessage(clientMessageSchema, JSON.stringify(hello({ visitToken: "bad" }))), null);
   assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ ...hello(), v: 1 })), null);
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 2, type: "visit-link", action: "create" })));
-  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 2, type: "visit-link", action: "on" })), null);
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 4, type: "visit-link", action: "create" })));
+  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 4, type: "visit-link", action: "on" })), null);
   assert.ok(
-    parseMessage(serverMessageSchema, JSON.stringify({ v: 2, type: "visit-link", token: TOKEN, active: true, visits: 0 })),
+    parseMessage(serverMessageSchema, JSON.stringify({ v: 4, type: "visit-link", token: TOKEN, active: true, visits: 0 })),
   );
-  assert.ok(parseMessage(serverMessageSchema, JSON.stringify({ v: 2, type: "visit-denied", reason: "busy" })));
+  assert.ok(parseMessage(serverMessageSchema, JSON.stringify({ v: 4, type: "visit-denied", reason: "busy" })));
+});
+
+test("v4의 새 메시지도 zod로 검사해요", () => {
+  const read = (value: unknown) => parseMessage(clientMessageSchema, JSON.stringify(value));
+  assert.ok(read({ v: 4, type: "hug-request", targetId: "abcd1234" }));
+  assert.ok(read({ v: 4, type: "hug-answer", requestId: "abcdefabcdef", accept: true }));
+  assert.ok(read({ v: 4, type: "discharge", closeLink: false }));
+  assert.ok(read({ v: 4, type: "sleep", sleeping: true }));
+  assert.ok(read({ v: 4, type: "bow", phrase: 5 }));
+  assert.equal(read({ v: 4, type: "hug-request", targetId: "guest-raw-id" }), null);
+  assert.equal(read({ v: 4, type: "hug-answer", requestId: "short", accept: true }), null);
+  assert.equal(read({ v: 4, type: "discharge" }), null);
+  assert.equal(read({ v: 3, type: "hug-request", targetId: "abcd1234" }), null);
+  const server = (value: unknown) => parseMessage(serverMessageSchema, JSON.stringify(value));
+  assert.ok(server({ v: 4, type: "hug-offer", requestId: "abcdefabcdef", fromId: "abcd1234" }));
+  assert.ok(server({ v: 4, type: "farewell-count", count: 4 }));
+  assert.ok(server({ v: 4, type: "event", event: { kind: "planter", room: 2, total: 1234 } }));
+  assert.ok(server({ v: 4, type: "event", event: { kind: "window-open", room: 0 } }));
+  assert.ok(server({ v: 4, type: "event", event: { kind: "hug", a: "abcd1234", b: "efgh5678", bed: null } }));
+  assert.equal(server({ v: 4, type: "event", event: { kind: "planter", room: 2, total: -1 } }), null);
+});
+
+test("문병객도 안아 주기는 보낼 수 있지만 퇴원은 할 수 없어요", () => {
+  assert.ok(visitorMay("hug-request"));
+  assert.ok(visitorMay("hug-answer"));
+  assert.ok(!visitorMay("discharge"));
+  assert.ok(!visitorMay("sleep"));
 });

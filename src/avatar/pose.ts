@@ -1,25 +1,37 @@
 /**
  * 아바타 동작을 숫자로 계산해요. 화면과 상관없는 순수 함수이고, 매 프레임 새 객체를 만들지 않도록
- * 미리 만들어 둔 Pose에 값을 써요. 각도는 라디안이에요.
+ * 미리 만들어 둔 Pose에 값을 써요. 각도는 라디안, 거리는 미터예요.
+ *
+ * 달걀 몸에는 목과 다리가 없어서, 몸 전체가 발바닥을 축으로 기울고 팔 뭉치는 몸 가운데를 축으로
+ * 몸을 따라 앞뒤로 돌아요. 발은 바닥에서 살짝 들리고 앞뒤로 옮겨 가요.
  */
 
-export type Gesture = "pray" | "bow";
+/** hug는 서서 안기, hug-low는 누운 사람을 침대 옆에서 몸을 낮춰 안기예요. */
+export type Gesture = "pray" | "bow" | "hug" | "hug-low";
 
 export interface Pose {
   /** 걸을 때 몸이 위아래로 움직이는 높이예요. */
   bob: number;
-  /** 걸을 때 몸이 좌우로 기우는 각도예요. */
+  /** 몸이 좌우로 기우는 각도예요. +면 왼쪽(-x)으로 기울어요. */
   sway: number;
-  /** 허리에서 앞으로 숙이는 각도예요. */
+  /** 걸을 때 몸이 좌우로 비틀리는 각도예요. */
+  twist: number;
+  /** 발바닥을 축으로 앞으로 숙이는 각도예요. */
   lean: number;
-  headPitch: number;
-  armLeftPitch: number;
-  armRightPitch: number;
-  /** 팔을 몸 가운데로 모으는 각도예요. */
-  armLeftIn: number;
-  armRightIn: number;
-  legLeftPitch: number;
-  legRightPitch: number;
+  /** 숨쉬기예요. +면 위로 늘어나고 옆으로 줄어요. 0.02면 2%예요. */
+  breathe: number;
+  /** 팔 뭉치가 몸을 따라 앞으로 돈 각도예요. 0은 몸 옆이에요. */
+  armLeftSwing: number;
+  armRightSwing: number;
+  /** 팔 뭉치를 들어 올린 높이예요. */
+  armLeftLift: number;
+  armRightLift: number;
+  /** 발을 바닥에서 든 높이예요. */
+  footLeftLift: number;
+  footRightLift: number;
+  /** 발을 앞으로 내민 거리예요. */
+  footLeftStep: number;
+  footRightStep: number;
   /** 서 있는 자리에서 침대 위 자리로 옮겨 간 비율이에요. */
   bedTravel: number;
   /** 침대 높이로 올라간 비율이에요. */
@@ -35,6 +47,8 @@ export interface PoseInput {
   walkPhase: number;
   /** 걷기 동작의 세기예요. 0이면 멈춰 있어요. */
   walkWeight: number;
+  /** 시간에 맞춰 늘어나는 숨 위상이에요. 동작 줄이기를 켜면 0을 넘겨요. */
+  breathPhase: number;
   gesture: Gesture | null;
   gestureElapsed: number;
   /** 0은 선 자세, 1은 다 누운 자세예요. */
@@ -43,28 +57,40 @@ export interface PoseInput {
   carrying: boolean;
 }
 
-const WALK_LEG_SWING = 0.6;
-const WALK_ARM_SWING = 0.45;
+/** 걸음마다 좌우로 기우는 각도예요. 짧은 발로 뒤뚱뒤뚱 걸어요. */
+const WADDLE_SWAY = 0.12;
+const WADDLE_TWIST = 0.07;
+const WADDLE_BOB = 0.016;
+const FOOT_LIFT = 0.03;
+const FOOT_STEP = 0.035;
+const WALK_ARM_SWING = 0.35;
 const CARRY_ARM_SWING_RATIO = 0.2;
-const WALK_BOB = 0.018;
-const WALK_SWAY = 0.035;
 
-export const CARRY_ARM_PITCH = -0.95;
-const CARRY_ARM_IN = 0.18;
+/** 숨 한 번에 걸리는 시간이에요. */
+export const BREATH_SECONDS = 4.2;
+const BREATH_AMOUNT = 0.016;
 
-const PRAY_ARM_PITCH = -1.25;
-/** 양손 끝이 가슴 앞 가운데에서 만나는 각도예요. */
-const PRAY_ARM_IN = 0.64;
-const PRAY_HEAD = 0.18;
-const PRAY_LEAN = 0.05;
+/** 꽃다발을 든 팔이 몸 앞쪽으로 돈 각도예요. */
+export const CARRY_ARM_SWING = 0.95;
+const CARRY_ARM_LIFT = 0.03;
 
-const BOW_LEAN = 0.5;
-const BOW_HEAD = 0.22;
-const BOW_ARM_PITCH = -0.28;
+/** 두 팔 뭉치가 배 앞 가운데에서 맞닿는 각도예요. */
+export const PRAY_ARM_SWING = 1.4;
+const PRAY_ARM_LIFT = 0.045;
+const PRAY_LEAN = 0.06;
 
-const LYING_LEG_PITCH = 0.22;
-const LYING_HEAD_PITCH = 0.1;
-const LYING_ARM_IN = -0.08;
+const BOW_LEAN = 0.36;
+const BOW_ARM_SWING = 1.1;
+
+const LYING_ARM_SWING = 0.15;
+
+/** 두 팔을 앞으로 벌려 상대를 감싸요. */
+const HUG_ARM_SWING = 1.2;
+const HUG_ARM_LIFT = 0.07;
+const HUG_LEAN = 0.12;
+/** 침대 옆에 앉듯 몸을 낮추고 더 숙여요. */
+const HUG_LOW_LEAN = 0.34;
+const HUG_LOW_SINK = -0.12;
 
 interface GestureTiming {
   fadeIn: number;
@@ -75,25 +101,31 @@ interface GestureTiming {
 const GESTURE_TIMING: Record<Gesture, GestureTiming> = {
   pray: { fadeIn: 0.4, hold: 1.8, fadeOut: 0.45 },
   bow: { fadeIn: 0.45, hold: 0.35, fadeOut: 0.6 },
+  // 꼭 안는 3초예요.
+  hug: { fadeIn: 0.5, hold: 3, fadeOut: 0.6 },
+  "hug-low": { fadeIn: 0.6, hold: 3, fadeOut: 0.6 },
 };
 
 /** 눕거나 일어나는 데 걸리는 시간이에요. */
 export const BED_TRANSITION_SECONDS = 1.1;
-/** 걸음 한 주기에 걷는 거리예요. */
-export const STRIDE_LENGTH = 0.9;
+/** 걸음 한 주기에 걷는 거리예요. 발이 짧아서 보폭이 좁아요. */
+export const STRIDE_LENGTH = 0.55;
 
 export function createPose(): Pose {
   return {
     bob: 0,
     sway: 0,
+    twist: 0,
     lean: 0,
-    headPitch: 0,
-    armLeftPitch: 0,
-    armRightPitch: 0,
-    armLeftIn: 0,
-    armRightIn: 0,
-    legLeftPitch: 0,
-    legRightPitch: 0,
+    breathe: 0,
+    armLeftSwing: 0,
+    armRightSwing: 0,
+    armLeftLift: 0,
+    armRightLift: 0,
+    footLeftLift: 0,
+    footRightLift: 0,
+    footLeftStep: 0,
+    footRightStep: 0,
     bedTravel: 0,
     bedLift: 0,
     bedTurn: 0,
@@ -107,6 +139,12 @@ export function smoothstep(from: number, to: number, value: number): number {
 }
 
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
+
+/** 숨 위상을 dt만큼 앞으로 보내요. 동작 줄이기를 켜면 0에 머물러요. */
+export function advanceBreath(phase: number, dt: number, still: boolean): number {
+  if (still) return 0;
+  return (phase + (dt / BREATH_SECONDS) * Math.PI * 2) % (Math.PI * 2);
+}
 
 export function gestureDuration(gesture: Gesture): number {
   const timing = GESTURE_TIMING[gesture];
@@ -124,38 +162,51 @@ export function gestureWeight(gesture: Gesture, elapsed: number): number {
 
 /** 지금 입력에 맞는 자세를 out에 써요. */
 export function composePose(out: Pose, input: PoseInput): Pose {
-  const { walkPhase, walkWeight, gesture, gestureElapsed, bedProgress, carrying } = input;
-  const swing = Math.sin(walkPhase);
-  const armSwing = swing * WALK_ARM_SWING * walkWeight;
+  const { walkPhase, walkWeight, breathPhase, gesture, gestureElapsed, bedProgress, carrying } = input;
+  const side = Math.sin(walkPhase);
+  const stride = Math.cos(walkPhase);
+  const w = walkWeight;
 
-  out.bob = Math.abs(Math.cos(walkPhase)) * WALK_BOB * walkWeight;
-  out.sway = swing * WALK_SWAY * walkWeight;
+  // 몸이 왼쪽으로 기울면 왼발에 무게가 실리고 오른발이 들려요.
+  out.sway = side * WADDLE_SWAY * w;
+  out.twist = stride * WADDLE_TWIST * w;
+  out.bob = Math.abs(side) * WADDLE_BOB * w;
   out.lean = 0;
-  out.headPitch = 0;
-  out.legLeftPitch = swing * WALK_LEG_SWING * walkWeight;
-  out.legRightPitch = -out.legLeftPitch;
-  out.armLeftPitch = -armSwing;
-  out.armLeftIn = 0;
-  out.armRightPitch = carrying ? CARRY_ARM_PITCH + armSwing * CARRY_ARM_SWING_RATIO : armSwing;
-  out.armRightIn = carrying ? CARRY_ARM_IN : 0;
+  out.breathe = Math.sin(breathPhase) * BREATH_AMOUNT * (1 - w);
+  out.footLeftLift = Math.max(0, -side) * FOOT_LIFT * w;
+  out.footRightLift = Math.max(0, side) * FOOT_LIFT * w;
+  out.footLeftStep = stride * FOOT_STEP * w;
+  out.footRightStep = -out.footLeftStep;
+  // 왼발이 나갈 때 왼팔은 뒤로 가요.
+  out.armLeftSwing = -stride * WALK_ARM_SWING * w;
+  out.armLeftLift = 0;
+  out.armRightSwing = carrying ? CARRY_ARM_SWING + stride * WALK_ARM_SWING * CARRY_ARM_SWING_RATIO * w : -out.armLeftSwing;
+  out.armRightLift = carrying ? CARRY_ARM_LIFT : 0;
 
   if (gesture === "pray") {
     const weight = gestureWeight(gesture, gestureElapsed);
     out.lean = mix(out.lean, PRAY_LEAN, weight);
-    out.headPitch = mix(out.headPitch, PRAY_HEAD, weight);
-    out.armLeftPitch = mix(out.armLeftPitch, PRAY_ARM_PITCH, weight);
-    out.armRightPitch = mix(out.armRightPitch, PRAY_ARM_PITCH, weight);
-    out.armLeftIn = mix(out.armLeftIn, PRAY_ARM_IN, weight);
-    out.armRightIn = mix(out.armRightIn, PRAY_ARM_IN, weight);
+    out.armLeftSwing = mix(out.armLeftSwing, PRAY_ARM_SWING, weight);
+    out.armRightSwing = mix(out.armRightSwing, PRAY_ARM_SWING, weight);
+    out.armLeftLift = mix(out.armLeftLift, PRAY_ARM_LIFT, weight);
+    out.armRightLift = mix(out.armRightLift, PRAY_ARM_LIFT, weight);
+  } else if (gesture === "hug" || gesture === "hug-low") {
+    const weight = gestureWeight(gesture, gestureElapsed);
+    const low = gesture === "hug-low";
+    out.lean = mix(out.lean, low ? HUG_LOW_LEAN : HUG_LEAN, weight);
+    out.bob = mix(out.bob, low ? HUG_LOW_SINK : 0, weight);
+    out.armLeftSwing = mix(out.armLeftSwing, HUG_ARM_SWING, weight);
+    out.armRightSwing = mix(out.armRightSwing, HUG_ARM_SWING, weight);
+    out.armLeftLift = mix(out.armLeftLift, HUG_ARM_LIFT, weight);
+    out.armRightLift = mix(out.armRightLift, HUG_ARM_LIFT, weight);
   } else if (gesture === "bow") {
     const weight = gestureWeight(gesture, gestureElapsed);
     out.lean = mix(out.lean, BOW_LEAN, weight);
-    out.headPitch = mix(out.headPitch, BOW_HEAD, weight);
-    out.armLeftPitch = mix(out.armLeftPitch, BOW_ARM_PITCH, weight);
-    if (!carrying) out.armRightPitch = mix(out.armRightPitch, BOW_ARM_PITCH, weight);
+    out.armLeftSwing = mix(out.armLeftSwing, BOW_ARM_SWING, weight);
+    if (!carrying) out.armRightSwing = mix(out.armRightSwing, BOW_ARM_SWING, weight);
   }
 
-  // 침대 곁으로 다가가 돌아앉은 뒤, 올라가면서 몸을 눕혀요. 일어날 때는 이 순서를 거꾸로 밟아요.
+  // 침대 곁으로 다가가 돌아선 뒤, 올라가면서 몸을 눕혀요. 일어날 때는 이 순서를 거꾸로 밟아요.
   out.bedTurn = smoothstep(0, 0.5, bedProgress);
   out.bedTravel = smoothstep(0.1, 0.7, bedProgress);
   out.bedLift = smoothstep(0.1, 0.6, bedProgress);
@@ -164,14 +215,17 @@ export function composePose(out: Pose, input: PoseInput): Pose {
   if (out.bedLie > 0) {
     const lie = out.bedLie;
     out.lean = mix(out.lean, 0, lie);
-    out.headPitch = mix(out.headPitch, LYING_HEAD_PITCH, lie);
-    out.legLeftPitch = mix(out.legLeftPitch, LYING_LEG_PITCH, lie);
-    out.legRightPitch = mix(out.legRightPitch, LYING_LEG_PITCH, lie);
-    out.armLeftPitch = mix(out.armLeftPitch, 0, lie);
-    out.armLeftIn = mix(out.armLeftIn, LYING_ARM_IN, lie);
+    out.sway = mix(out.sway, 0, lie);
+    out.twist = mix(out.twist, 0, lie);
+    out.armLeftSwing = mix(out.armLeftSwing, LYING_ARM_SWING, lie);
+    out.armLeftLift = mix(out.armLeftLift, 0, lie);
     // 꽃다발을 든 문병객은 눕지 않아서, 눕는 자세는 빈손만 생각해요.
-    out.armRightPitch = mix(out.armRightPitch, 0, lie);
-    out.armRightIn = mix(out.armRightIn, LYING_ARM_IN, lie);
+    out.armRightSwing = mix(out.armRightSwing, LYING_ARM_SWING, lie);
+    out.armRightLift = mix(out.armRightLift, 0, lie);
+    out.footLeftLift = mix(out.footLeftLift, 0, lie);
+    out.footRightLift = mix(out.footRightLift, 0, lie);
+    out.footLeftStep = mix(out.footLeftStep, 0, lie);
+    out.footRightStep = mix(out.footRightStep, 0, lie);
   }
   return out;
 }

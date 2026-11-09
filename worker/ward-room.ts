@@ -42,25 +42,71 @@ import {
 } from "../shared/left-blessings.ts";
 import type { BlessingCard, LeftKind, StoredBlessing } from "../shared/left-blessings.ts";
 import { checkNickname } from "../shared/nickname.ts";
+import {
+  animalLabel,
+  deleteExpired,
+  earlierAlarm,
+  earliestExpiry,
+  enforceBannedNickname,
+  newRateState,
+  nextRetentionAlarm,
+  publicNickname,
+  rateStep,
+} from "../shared/safety-rules.ts";
+import type { Moderation, RateState, RetentionRule } from "../shared/safety-rules.ts";
+import { autoNickname } from "../shared/nickname.ts";
+import { hashGuest, IP_HASH_PATTERN, issueGuest, requireSecret, verifyGuest } from "./security.ts";
 import { visitorDelivery, visitorMay, visitorSpot } from "../shared/visit-rules.ts";
-import type { VisitRole } from "../shared/ward-rules.ts";
+import type { VerifiedHello, VisitRole } from "../shared/ward-rules.ts";
+import { checkHugAnswer, checkHugRequest, HUG_ANSWER_MS, HUG_REPEAT_MS, hugSpot, hugStillPossible } from "../shared/hug-rules.ts";
+import type { PendingHug } from "../shared/hug-rules.ts";
+import { isMorningWindow, phraseAllowed, shouldOpenWindow } from "../shared/morning.ts";
+import { addPeace } from "../shared/planter.ts";
+import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
+import { shouldGreet } from "../shared/return-rules.ts";
+import { hugAvailable } from "../shared/ward-rules.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
-  | { joined: false; ward: number; instance: number }
-  | { joined: true; ward: number; instance: number; record: GuestRecord };
+  | { joined: false; ward: number; instance: number; ip?: string | null }
+  | { joined: true; ward: number; instance: number; ip?: string | null; record: GuestRecord };
 
 const REPLACED_CODE = 4000;
 const FULL_CODE = 4001;
+/** 들어올 수 없어요(차단, 새 게스트를 너무 많이 만듦). 화면은 다시 잇지 않아요. */
+const DENIED_CODE = 4003;
+/** 메시지를 너무 빨리 계속 보냈어요. */
+const TOO_MANY_CODE = 4008;
+/** Worker가 IP 해시를 담아 보내는 내부 헤더예요. Worker가 항상 덮어써서 화면이 바꿀 수 없어요. */
+export const IP_HASH_HEADER = "X-Onward-Ip-Hash";
+/** IP 해시가 없을 때 요청 제한을 셀 자리예요. Worker를 거치면 생기지 않아요. */
+const NO_IP = "0".repeat(64);
+
+/** 병실에서 보관 기간이 있는 표예요. */
+const RETENTION: readonly RetentionRule[] = [
+  { table: "left_blessing", kind: "at", column: "at", keepMs: KEEP_MS },
+  { table: "gifts", kind: "day", column: "day" },
+  { table: "lamps", kind: "day", column: "day" },
+  { table: "gift_counts", kind: "day", column: "day" },
+  { table: "daily_visitors", kind: "day", column: "day" },
+  { table: "daily_stats", kind: "day", column: "day" },
+  { table: "morning_open", kind: "day", column: "day" },
+  { table: "hug_sent", kind: "at", column: "at", keepMs: HUG_REPEAT_MS },
+  { table: "hug_pending", kind: "at", column: "at", keepMs: HUG_ANSWER_MS },
+];
 const MAX_INSTANCE = 20;
-type DeniedAction = "bless" | "bow" | "gift" | "lamp" | "visit-link";
+type DeniedAction = Extract<ServerMessage, { type: "action-denied" }>["action"];
 type DeniedReason = Extract<ServerMessage, { type: "action-denied" }>["reason"];
 
 /**
  * 병동 인스턴스 하나를 맡는 Durable Object예요. 건물 하나, 병실 여섯, 침대 서른여섯이에요.
- * 주기적으로 도는 일은 없어요. 메시지가 오거나, 끊긴 사람의 유예가 끝날 때만 깨어나요.
+ * 주기적으로 도는 일은 없어요. 메시지가 오거나, 끊긴 사람의 유예가 끝나거나,
+ * 보관 기간이 지난 데이터가 있을 때(하루에 많아야 한 번)만 깨어나요.
  */
 export class WardRoom extends DurableObject<Env> {
+  /** 연결마다 1초에 받은 메시지 수예요. 하이버네이션 뒤에는 0부터 다시 세요. 그동안 조용했다는 뜻이라 괜찮아요. */
+  private readonly rates = new WeakMap<WebSocket, RateState>();
+
   constructor(ctx: DurableObjectState, env: Env) {
     super(ctx, env);
     // 연결 유지용 글자에는 객체를 깨우지 않고 바로 답해요.
@@ -91,6 +137,19 @@ export class WardRoom extends DurableObject<Env> {
       room INTEGER PRIMARY KEY, bed INTEGER NOT NULL, at INTEGER NOT NULL)`);
     // 이 객체가 맡은 병동 번호예요. 문병 링크 주인의 위치를 알릴 때 써요.
     sql.exec(`CREATE TABLE IF NOT EXISTS place (ward INTEGER NOT NULL, instance INTEGER NOT NULL)`);
+    // 다음에 보관 기간을 정리할 시각이에요. alarm 하나를 재접속 유예와 함께 쓰려고 적어 둬요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS retention (due INTEGER NOT NULL)`);
+    // 병실마다 모인 평안의 누적 수예요. 더하기만 하고 지우지 않아요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS planter (room INTEGER PRIMARY KEY, total INTEGER NOT NULL)`);
+    // 오늘 아침 창문이 열린 병실이에요. 병실마다 하루 한 번이에요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS morning_open (
+      room INTEGER NOT NULL, day TEXT NOT NULL, PRIMARY KEY (room, day))`);
+    // 안아 주기를 보낸 짝(guestId 해시)과 시각이에요. 같은 상대에게 10분에 한 번만 보내려고 둬요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS hug_sent (
+      sender TEXT NOT NULL, target TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (sender, target))`);
+    // 답을 기다리는 안아 주기예요. 타이머 없이, 답이 오면 시각을 견주고 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS hug_pending (
+      id TEXT PRIMARY KEY, from_id TEXT NOT NULL, from_key TEXT NOT NULL, to_id TEXT NOT NULL, at INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -113,14 +172,24 @@ export class WardRoom extends DurableObject<Env> {
       sql.exec("DELETE FROM place");
       sql.exec("INSERT INTO place (ward, instance) VALUES (?, ?)", ward, instance);
     }
+    const header = request.headers.get(IP_HASH_HEADER);
+    const ip = header && IP_HASH_PATTERN.test(header) ? header : null;
     const pair = new WebSocketPair();
     const [client, server] = Object.values(pair);
     this.ctx.acceptWebSocket(server);
-    server.serializeAttachment({ joined: false, ward, instance } satisfies Attachment);
+    server.serializeAttachment({ joined: false, ward, instance, ip } satisfies Attachment);
     return new Response(null, { status: 101, webSocket: client });
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    // 1초에 10개를 넘으면 읽지 않아요. 넘친 초가 3번 이어지면 연결을 닫아요.
+    const rate = rateStep(this.rates.get(ws) ?? newRateState(), Date.now());
+    this.rates.set(ws, rate.state);
+    if (rate.verdict === "drop") return;
+    if (rate.verdict === "close") {
+      await this.disconnect(ws, TOO_MANY_CODE, "too-many");
+      return;
+    }
     const version = readVersion(raw);
     if (version !== null && version !== PROTOCOL_VERSION) {
       // 화면이 다른 버전이면 새로고침하라고 알려요. 나머지는 읽지 않아요.
@@ -149,17 +218,125 @@ export class WardRoom extends DurableObject<Env> {
     await this.disconnect(ws);
   }
 
-  /** 끊긴 사람의 유예가 끝나면 침대를 반납하고 나갔다고 알려요. 남은 사람이 있을 때만 다시 맞춰요. */
+  /**
+   * 끊긴 사람의 유예가 끝나면 침대를 반납하고 나갔다고 알려요.
+   * 보관 기간을 정리할 때가 됐으면 지난 데이터를 지워요. 남은 일이 있을 때만 다시 맞춰요.
+   */
   async alarm(): Promise<void> {
-    const { expired, nextAlarm } = expireAway(this.awayGuests(), Date.now());
+    const now = Date.now();
+    const { expired, nextAlarm } = expireAway(this.awayGuests(), now);
     const before = this.lastVisits();
     for (const guest of expired) {
       this.ctx.storage.sql.exec("DELETE FROM away WHERE key = ?", guest.key);
       this.broadcast({ kind: "leave", id: guest.record.id });
       await this.leftWard(guest.key, guest.record);
     }
-    if (nextAlarm !== null) await this.ctx.storage.setAlarm(nextAlarm);
+    let due = this.retentionDue();
+    if (due !== null && due <= now) {
+      deleteExpired(this.ctx.storage.sql, RETENTION, now, koreanDay(new Date(now)));
+      due = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
+      this.setRetentionDue(due);
+    }
+    const next = earlierAlarm(nextAlarm, due);
+    if (next !== null) await this.ctx.storage.setAlarm(next);
     if (expired.length > 0) this.refreshCatVisits(before);
+  }
+
+  private retentionDue(): number | null {
+    return this.ctx.storage.sql.exec<{ due: number }>("SELECT due FROM retention").toArray()[0]?.due ?? null;
+  }
+
+  private setRetentionDue(due: number | null): void {
+    const sql = this.ctx.storage.sql;
+    sql.exec("DELETE FROM retention");
+    if (due !== null) sql.exec("INSERT INTO retention (due) VALUES (?)", due);
+  }
+
+  /** 보관 기간이 있는 데이터를 쓴 뒤 불러요. 정리 예정이 없을 때만 새로 맞춰요. */
+  private async keepTidy(): Promise<void> {
+    if (this.retentionDue() !== null) return;
+    const now = Date.now();
+    const due = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
+    if (due === null) return;
+    this.setRetentionDue(due);
+    const wanted = alarmToSet(await this.ctx.storage.getAlarm(), due);
+    if (wanted !== null) await this.ctx.storage.setAlarm(wanted);
+  }
+
+  /**
+   * 운영자 작업을 지금 이 병실에 있는 사람에게 바로 반영해요. directory만 불러요.
+   * 반영한 사람 수를 돌려줘요. 없으면 0이고, 다음 입장 때 directory의 기록으로 반영돼요.
+   */
+  async moderate(change: Moderation): Promise<number> {
+    const matches = (key: string | undefined, ip: string | undefined): boolean =>
+      change.kind === "block" && change.ip !== undefined ? ip === change.ip : key !== undefined && key === change.key;
+    const before = this.lastVisits();
+    let affected = 0;
+    let left = false;
+    for (const { ws, record } of this.joined()) {
+      if (!matches(record.key, record.ip)) continue;
+      affected++;
+      const attachment = ws.deserializeAttachment() as Attachment;
+      if (change.kind === "block") {
+        this.send(ws, { v: PROTOCOL_VERSION, type: "entry-denied", reason: "blocked" });
+        ws.serializeAttachment({ joined: false, ward: attachment.ward, instance: attachment.instance } satisfies Attachment);
+        try {
+          ws.close(DENIED_CODE, "blocked");
+        } catch {
+          // 이미 닫혔으면 그대로예요.
+        }
+        this.broadcast({ kind: "leave", id: record.id });
+        if (record.key) await this.leftWard(record.key, record);
+        left = true;
+        continue;
+      }
+      const next = this.moderated(record, change);
+      this.save(ws, attachment, next);
+      if (change.kind === "reset") this.send(ws, { v: PROTOCOL_VERSION, type: "nickname-reset", nickname: next.nickname });
+      this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+    }
+    for (const guest of this.awayGuests()) {
+      if (!matches(guest.key, guest.record.ip)) continue;
+      affected++;
+      if (change.kind === "block") {
+        this.ctx.storage.sql.exec("DELETE FROM away WHERE key = ?", guest.key);
+        this.broadcast({ kind: "leave", id: guest.record.id });
+        await this.leftWard(guest.key, guest.record);
+        left = true;
+        continue;
+      }
+      const next = this.moderated(guest.record, change);
+      this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), guest.key);
+      this.broadcast({ kind: "update", guest: toPublic(next) });
+    }
+    if (left) this.refreshCatVisits(before);
+    return affected;
+  }
+
+  private moderated(record: GuestRecord, change: Exclude<Moderation, { kind: "block" }>): GuestRecord {
+    if (change.kind === "unhide") return { ...record, hidden: false };
+    return {
+      ...record,
+      hidden: false,
+      bannedNickname: change.banned,
+      nickname: autoNickname(animalLabel(record.animal), Math.random()),
+    };
+  }
+
+  /** 서로 다른 세 사람이 신고한 사람의 닉네임을 가려요. 이미 가려져 있으면 아무것도 하지 않아요. */
+  private hide(key: string): void {
+    for (const { ws, record } of this.joined()) {
+      if (record.key !== key || record.hidden) continue;
+      const next = { ...record, hidden: true };
+      this.save(ws, ws.deserializeAttachment() as Attachment, next);
+      this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+    }
+    for (const guest of this.awayGuests()) {
+      if (guest.key !== key || guest.record.hidden) continue;
+      const next = { ...guest.record, hidden: true };
+      this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), key);
+      this.broadcast({ kind: "update", guest: toPublic(next) });
+    }
   }
 
   /** 지금 연결된 사람들이에요. 연결에 붙은 정보로 매번 다시 만들어요. */
@@ -203,7 +380,13 @@ export class WardRoom extends DurableObject<Env> {
   }
 
   private save(ws: WebSocket, attachment: Attachment, record: GuestRecord): void {
-    ws.serializeAttachment({ joined: true, ward: attachment.ward, instance: attachment.instance, record } satisfies Attachment);
+    ws.serializeAttachment({
+      joined: true,
+      ward: attachment.ward,
+      instance: attachment.instance,
+      ip: attachment.ip ?? null,
+      record,
+    } satisfies Attachment);
   }
 
   /** 이 병동의 번호예요. 연결이 처음 들어올 때 적어 둔 값이에요. */
@@ -256,7 +439,7 @@ export class WardRoom extends DurableObject<Env> {
     }
   }
 
-  private async disconnect(ws: WebSocket): Promise<void> {
+  private async disconnect(ws: WebSocket, code = 1000, reason = "bye"): Promise<void> {
     const attachment = ws.deserializeAttachment() as Attachment | null;
     try {
       ws.serializeAttachment({
@@ -268,11 +451,19 @@ export class WardRoom extends DurableObject<Env> {
       // 닫힌 연결에는 쓸 수 없어도 괜찮아요.
     }
     try {
-      ws.close(1000, "bye");
+      ws.close(code, reason);
     } catch {
       // 이미 닫혔으면 그대로예요.
     }
     if (!attachment?.joined) return;
+    if (attachment.record.discharge) {
+      // 퇴원한 사람은 자리를 맡아 두지 않고 바로 나가요.
+      const before = this.lastVisits();
+      this.broadcast({ kind: "leave", id: attachment.record.id });
+      if (attachment.record.key) await this.leftWard(attachment.record.key, attachment.record);
+      this.refreshCatVisits(before);
+      return;
+    }
     // 바로 내보내지 않고 30초 동안 자리를 맡아 둬요. 다른 사람에게는 그대로 보여요.
     const now = Date.now();
     const away = toAway(attachment.record, await hashGuest(attachment.record.guestId), now);
@@ -293,33 +484,59 @@ export class WardRoom extends DurableObject<Env> {
     hello: Extract<ClientMessage, { type: "hello" }>,
   ): Promise<void> {
     if (attachment.joined) {
-      // 이미 들어와 있으면 모습만 바꿔요.
+      // 퇴원하는 중에는 옷과 모습을 바꾸지 않아요.
+      if (attachment.record.discharge) return;
+      // 이미 들어와 있으면 모습만 바꿔요. 운영자가 되돌린 닉네임으로는 다시 바꾸지 못해요.
       const before = this.lastVisits();
-      const result = updateProfile(attachment.record, hello);
+      const fixed = enforceBannedNickname(hello.nickname, attachment.record.bannedNickname, hello.animal, Math.random());
+      const result = updateProfile(attachment.record, { ...hello, nickname: fixed.nickname });
       if (result.kind === "rejected") {
         this.send(ws, { v: PROTOCOL_VERSION, type: "nickname-rejected", problem: result.problem });
         return;
       }
       this.save(ws, attachment, result.record);
+      if (fixed.reset) this.send(ws, { v: PROTOCOL_VERSION, type: "nickname-reset", nickname: fixed.nickname });
       this.broadcast({ kind: "update", guest: toPublic(result.record) }, ws);
       if (result.record.bed !== attachment.record.bed) this.refreshCatVisits(before);
       return;
     }
 
     const now = Date.now();
-    const key = await hashGuest(hello.guestId);
+    // 서명이 맞는 토큰만 믿어요. 없거나 틀리면 새 게스트로 보고 새 토큰을 줘요.
+    const secret = requireSecret(this.env.TOKEN_SECRET, "TOKEN_SECRET");
+    const ip = attachment.ip ?? null;
+    let guestId = await verifyGuest(secret, hello.token);
+    const directory = this.directory();
+    if (guestId === null) {
+      if (!(await directory.allowNewGuest(ip ?? NO_IP, now))) {
+        this.deny(ws, "limited");
+        return;
+      }
+      const issued = await issueGuest(secret);
+      guestId = issued.guestId;
+      this.send(ws, { v: PROTOCOL_VERSION, type: "guest-token", token: issued.token });
+    }
+    const key = await hashGuest(guestId);
+    const standing = await directory.standing(key, ip);
+    if (standing.blocked) {
+      this.deny(ws, "blocked");
+      return;
+    }
+    const fixed = enforceBannedNickname(hello.nickname, standing.bannedNickname, hello.animal, Math.random());
+    const verified: VerifiedHello = { ...hello, guestId, nickname: fixed.nickname };
     const away = this.awayGuests().filter((guest) => guest.until > now);
     const returning = away.find((guest) => guest.key === key) ?? null;
     const others = this.joined(ws);
     // 끊긴 줄 아직 모르는 예전 연결이 남아 있어도 같은 사람이면 그 자리를 이어받아요.
-    const stillOpen = others.find((other) => other.record.guestId === hello.guestId)?.record ?? null;
-    const previous = returning?.record ?? stillOpen;
+    const stillOpen = others.find((other) => other.record.guestId === guestId)?.record ?? null;
+    // 퇴원하던 연결이 남아 있으면 이어받지 않고 새로 들어와요.
+    const previous = (returning?.record ?? stillOpen)?.discharge ? null : (returning?.record ?? stillOpen);
 
     // 문병 링크로 왔으면 directory에서 확인해요. 30초 안에 돌아온 문병객은 이미 받은 역할을 그대로 써요.
     let visit: { role: VisitRole; spot: { x: number; z: number } } | null = null;
     if (hello.visitToken && !previous?.visit) {
       // 닉네임이 맞지 않으면 링크를 세지 않고 먼저 돌려보내요.
-      const nickname = checkNickname(hello.nickname);
+      const nickname = checkNickname(verified.nickname);
       if (!nickname.ok) {
         this.send(ws, { v: PROTOCOL_VERSION, type: "nickname-rejected", problem: nickname.problem });
         return;
@@ -350,7 +567,7 @@ export class WardRoom extends DurableObject<Env> {
     const admission = admit(
       others.map((other) => other.record),
       nonVisitorsAway - (returning && !returning.record.visit ? 1 : 0),
-      hello,
+      verified,
       WARD_CAPACITY,
       crypto.randomUUID().replace(/-/g, "").slice(0, 8),
       previous,
@@ -388,28 +605,40 @@ export class WardRoom extends DurableObject<Env> {
     if (returning) {
       this.ctx.storage.sql.exec("DELETE FROM away WHERE key = ?", returning.key);
       // 맡아 둔 사람이 더 없으면 alarm도 지워요. 쓸데없이 깨지 않게요.
+      // 보관 기간 정리가 남아 있으면 그때로 맞춰 둬요.
       if (nextAlarmAt(away.filter((guest) => guest !== returning)) === null) {
-        await this.ctx.storage.deleteAlarm();
+        const due = this.retentionDue();
+        if (due === null) await this.ctx.storage.deleteAlarm();
+        else await this.ctx.storage.setAlarm(due);
       }
     }
 
     // 새로 들어오면 directory에서 새 평안 주소를 받고, 없는 동안 도착한 평안을 꺼내요.
     // 30초 안에 돌아온 사람은 쓰던 주소를 그대로 써서 directory에 묻지 않아요.
     // 링크 주인이면 이번 주소와 병동 위치를 directory에 함께 적어요. 문병객은 자기 링크의 위치를 바꾸지 않아요.
-    let record: GuestRecord = { ...admission.record, key };
+    let record: GuestRecord = {
+      ...admission.record,
+      key,
+      hidden: standing.hidden,
+      ...(standing.bannedNickname ? { bannedNickname: standing.bannedNickname } : {}),
+      ...(ip ? { ip } : {}),
+    };
     let inbox: SendableCard[] = [];
+    let welcomeBack = false;
     if (!admission.restored || !record.address) {
       const place = record.visit
         ? null
-        : { ward: attachment.ward, instance: attachment.instance, bed: record.bed, nickname: record.nickname, animal: record.animal };
-      const entered = await this.directory().enter(key, now, place);
-      record = { ...record, address: entered.address, linked: entered.linked };
+        : { ward: attachment.ward, instance: attachment.instance, bed: record.bed, nickname: publicNickname(record), animal: record.animal };
+      const entered = await directory.enter(key, now, place);
+      record = { ...record, address: entered.address, linked: entered.linked, visitDays: entered.visitDays };
       inbox = entered.inbox.filter(isCard);
+      welcomeBack = entered.welcomeBack;
     }
     const role = record.visit ?? null;
     const owner = role ? this.ownerHere(role.owner) : null;
     this.save(ws, attachment, record);
     this.tidy(new Date(now));
+    if (fixed.reset) this.send(ws, { v: PROTOCOL_VERSION, type: "nickname-reset", nickname: record.nickname });
     this.send(ws, {
       v: PROTOCOL_VERSION,
       type: "snapshot",
@@ -427,6 +656,10 @@ export class WardRoom extends DurableObject<Env> {
       inbox,
       stats: this.stats(now),
       visit: role ? { ownerNickname: role.ownerNickname, ownerPresent: owner !== null, bed: role.bed } : null,
+      greet: !admission.restored && shouldGreet(record.visitDays ?? 0),
+      welcomeBack,
+      morningRooms: this.morningRooms(now),
+      planters: this.planterTotals(),
     });
     if (admission.restored) {
       // 다른 사람에게는 자리를 비운 적이 없던 것처럼 보여요. 모습이 바뀌었을 때만 알려요.
@@ -436,9 +669,21 @@ export class WardRoom extends DurableObject<Env> {
     }
     this.refreshCatVisits(before);
     this.countVisitor(key, now);
+    await this.openWindowIfMorning(roomAt(record.x, record.z)?.index ?? null, now);
+    await this.keepTidy();
     // 새로 온 문병객이면 주인 화면에만 알려요.
     if (role && !admission.restored && owner?.ws) {
-      this.send(owner.ws, { v: PROTOCOL_VERSION, type: "visitor-arrived", id: record.id, nickname: record.nickname });
+      this.send(owner.ws, { v: PROTOCOL_VERSION, type: "visitor-arrived", id: record.id, nickname: publicNickname(record) });
+    }
+  }
+
+  /** 들어올 수 없다고 알리고 연결을 닫아요. 화면은 다시 잇지 않아요. 이유는 더 자세히 알리지 않아요. */
+  private deny(ws: WebSocket, reason: "blocked" | "limited"): void {
+    this.send(ws, { v: PROTOCOL_VERSION, type: "entry-denied", reason });
+    try {
+      ws.close(DENIED_CODE, reason);
+    } catch {
+      // 이미 닫혔으면 그대로예요.
     }
   }
 
@@ -449,8 +694,10 @@ export class WardRoom extends DurableObject<Env> {
       this.send(ws, { v: PROTOCOL_VERSION, type: "action-denied", action, reason, ...(item === undefined ? {} : { item }) });
     };
     const save = (next: GuestRecord): void => this.save(ws, attachment, next);
-    // 문병객은 걷기, 평안, 목례와 한마디, 선물만 할 수 있어요. 나머지는 말없이 무시해요.
+    // 문병객은 걷기, 평안, 목례와 한마디, 선물, 안아 주기만 할 수 있어요. 나머지는 말없이 무시해요.
     if (record.visit && !visitorMay(message.type)) return;
+    // 퇴원하는 사람은 문 쪽으로 걸어 나가기만 해요.
+    if (record.discharge && message.type !== "walk-to") return;
 
     switch (message.type) {
       case "walk-to": {
@@ -468,6 +715,7 @@ export class WardRoom extends DurableObject<Env> {
         this.broadcast({ kind: "walk", id: record.id, x: spot.x, z: spot.z }, ws);
         // 병실을 옮기거나 침대에서 일어났을 때만 고양이 방문을 다시 따져요.
         if (hadBed || roomChanged) this.refreshCatVisits(before);
+        if (roomChanged) await this.openWindowIfMorning(roomAt(spot.x, spot.z)?.index ?? null, nowMs);
         return;
       }
       case "lie-down": {
@@ -489,6 +737,7 @@ export class WardRoom extends DurableObject<Env> {
         }
         // 그 침대에 남겨져 있던 평안을 전하고 바로 지워요.
         await this.deliverLeft(ws, message.bedId, record, nowMs);
+        await this.openWindowIfMorning(BEDS[message.bedId].roomIndex, nowMs);
         return;
       }
       case "get-up": {
@@ -501,6 +750,8 @@ export class WardRoom extends DurableObject<Env> {
       }
       case "bow": {
         if (!actionReady(record, "bow", nowMs)) return deny("bow", "too-fast");
+        // "좋은 아침이에요"는 한국 시간 아침에만 받아요.
+        if (!phraseAllowed(message.phrase, nowMs)) return deny("bow", "not-morning");
         save({ ...record, lastAction: { ...record.lastAction, bow: nowMs } });
         this.broadcast({ kind: "bow", id: record.id, phrase: message.phrase }, ws);
         this.countBlessing(nowMs);
@@ -510,6 +761,7 @@ export class WardRoom extends DurableObject<Env> {
         if (!actionReady(record, "bless", nowMs)) return deny("bless", "too-fast");
         const target = resolveTarget(this.everyone(), message);
         if (!target) return deny("bless", "no-target");
+        const peaceRoom = this.roomOfTarget(target, record);
         if (record.visit && this.toOwnerInbox(record.visit, target.bedId)) {
           // 주인이 자리에 없으면 주인 침대로 보낸 평안은 주인에게 전해요. 빈 침대에는 남기지 않아요.
           const result = await this.leaveForVisitedOwner(record, "bless", null, nowMs);
@@ -518,6 +770,7 @@ export class WardRoom extends DurableObject<Env> {
           this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
           this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
           this.countBlessing(nowMs);
+          this.addPeaceTo(peaceRoom);
           return;
         }
         save({ ...record, lastAction: { ...record.lastAction, bless: nowMs } });
@@ -526,7 +779,10 @@ export class WardRoom extends DurableObject<Env> {
         if (target.bedId !== null && target.targetId === null && this.bedIsEmpty(target.bedId)) {
           await this.leaveOnBed(target.bedId, record, "bless", null, nowMs);
         }
+        // 퇴원하는 사람에게 보낸 평안은 배웅이에요.
+        if (target.targetId !== null) await this.farewell(target.targetId, record, nowMs);
         this.countBlessing(nowMs);
+        this.addPeaceTo(peaceRoom);
         return;
       }
       case "gift": {
@@ -583,6 +839,7 @@ export class WardRoom extends DurableObject<Env> {
         if (emptyBed) await this.leaveOnBed(stand, record, "gift", message.item, nowMs);
         if (toOwner) this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
         this.countBlessing(nowMs);
+        await this.keepTidy();
         return;
       }
       case "leave-for": {
@@ -600,7 +857,7 @@ export class WardRoom extends DurableObject<Env> {
         const result = await directory.leaveFor(
           sender,
           message.address,
-          { nickname: record.nickname, animal: record.animal, kind: message.kind, item, at: nowMs },
+          { nickname: publicNickname(record), animal: record.animal, kind: message.kind, item, at: nowMs },
           nowMs,
           day,
         );
@@ -608,6 +865,8 @@ export class WardRoom extends DurableObject<Env> {
         if (result === "saved") {
           this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
           this.countBlessing(nowMs);
+          // 자리에 없는 분께 남긴 평안은 보낸 사람이 있는 병실의 화분에 모여요.
+          if (message.kind === "bless") this.addPeaceTo(roomAt(record.x, record.z)?.index ?? null);
         }
         else deny(action, result === "once-a-day" ? "once-a-day" : "no-target");
         return;
@@ -623,7 +882,7 @@ export class WardRoom extends DurableObject<Env> {
           if (record.bed === null) return deny("visit-link", "no-bed");
           token = await directory.createVisitLink(
             key,
-            { nickname: record.nickname, animal: record.animal, address: record.address },
+            { nickname: publicNickname(record), animal: record.animal, address: record.address },
             { ward: attachment.ward, instance: attachment.instance, bed: record.bed },
             nowMs,
           );
@@ -636,6 +895,147 @@ export class WardRoom extends DurableObject<Env> {
         linked = linked && status.active;
         save({ ...record, key, linked, lastAction: { ...record.lastAction, link: nowMs } });
         this.send(ws, { v: PROTOCOL_VERSION, type: "visit-link", token, active: status.active, visits: status.visits });
+        return;
+      }
+      case "report": {
+        if (!actionReady(record, "report", nowMs)) return deny("report", "too-fast");
+        save({ ...record, lastAction: { ...record.lastAction, report: nowMs } });
+        const target = this.everyone().find((guest) => guest.id === message.targetId) ?? null;
+        const reporterHash = record.key ?? (await hashGuest(record.guestId));
+        if (!target?.key || target.key === reporterHash) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: "no-target" });
+          return;
+        }
+        const place = this.place();
+        const outcome = await this.directory().report(
+          {
+            room: `ward-${place.ward}-${place.instance}`,
+            reason: message.reason,
+            reporterId: record.id,
+            reporterHash,
+            targetId: target.id,
+            targetHash: target.key,
+            targetIp: target.ip ?? null,
+            // 이미 가려졌어도 운영자가 볼 수 있게 원래 닉네임을 적어요.
+            targetNickname: target.nickname,
+            targetAnimal: target.animal,
+          },
+          nowMs,
+        );
+        this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: outcome.result });
+        if (outcome.hide) this.hide(target.key);
+        return;
+      }
+      case "sleep": {
+        if (Boolean(record.sleeping) === message.sleeping) return;
+        const next = { ...record, sleeping: message.sleeping };
+        save(next);
+        // 안아 주기를 받을 수 있는지가 바뀔 때만 다른 사람에게 알려요.
+        if (hugAvailable(next) !== hugAvailable(record)) this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+        return;
+      }
+      case "hug-request": {
+        if (!actionReady(record, "hug", nowMs)) return deny("hug", "too-fast");
+        save({ ...record, lastAction: { ...record.lastAction, hug: nowMs } });
+        const sql = this.ctx.storage.sql;
+        sql.exec("DELETE FROM hug_sent WHERE at <= ?", nowMs - HUG_REPEAT_MS);
+        sql.exec("DELETE FROM hug_pending WHERE at <= ?", nowMs - HUG_ANSWER_MS * 2);
+        const sender = record.key ?? (await hashGuest(record.guestId));
+        const target = this.joined(ws).find((entry) => entry.record.id === message.targetId) ?? null;
+        const last = target?.record.key
+          ? (sql
+              .exec<{ at: number }>("SELECT at FROM hug_sent WHERE sender = ? AND target = ?", sender, target.record.key)
+              .toArray()[0]?.at ?? null)
+          : null;
+        const check = checkHugRequest({ ...record, key: sender }, target?.record ?? null, last, nowMs);
+        if (!check.ok) return deny("hug", check.reason);
+        const id = randomId(12);
+        sql.exec(
+          "INSERT INTO hug_pending (id, from_id, from_key, to_id, at) VALUES (?, ?, ?, ?, ?)",
+          id,
+          record.id,
+          sender,
+          target!.record.id,
+          nowMs,
+        );
+        sql.exec(
+          "INSERT OR REPLACE INTO hug_sent (sender, target, at) VALUES (?, ?, ?)",
+          sender,
+          target!.record.key as string,
+          nowMs,
+        );
+        this.send(target!.ws, { v: PROTOCOL_VERSION, type: "hug-offer", requestId: id, fromId: record.id });
+        await this.keepTidy();
+        return;
+      }
+      case "hug-answer": {
+        const sql = this.ctx.storage.sql;
+        const row = sql
+          .exec<{ id: string; from_id: string; from_key: string; to_id: string; at: number }>(
+            "SELECT id, from_id, from_key, to_id, at FROM hug_pending WHERE id = ?",
+            message.requestId,
+          )
+          .toArray()[0];
+        const pending: PendingHug | null = row
+          ? { id: row.id, fromId: row.from_id, fromKey: row.from_key, toId: row.to_id, at: row.at }
+          : null;
+        const answer = checkHugAnswer(pending, record.id, nowMs);
+        // 남의 요청에 답하려 하면 지우지 않고 무시해요.
+        if (answer === "unknown") return;
+        sql.exec("DELETE FROM hug_pending WHERE id = ?", message.requestId);
+        // 10초가 지났으면 보낸 사람에게 아무것도 알리지 않아요.
+        if (answer === "expired" || !pending) return;
+        const from = this.joined().find((entry) => entry.record.id === pending.fromId && entry.record.key === pending.fromKey);
+        if (!from) return;
+        if (!message.accept) {
+          this.send(from.ws, { v: PROTOCOL_VERSION, type: "hug-declined" });
+          return;
+        }
+        if (!hugStillPossible(from.record, record)) return;
+        // 안아 주는 사람은 상대 곁으로 다가가요. 누워 있으면 침대 옆자리예요.
+        // 안아 주는 사람이 누워 있었으면 일어나서 가요.
+        const spot = hugSpot(from.record, record);
+        const before = from.record.bed !== null ? this.lastVisits() : null;
+        this.save(from.ws, from.ws.deserializeAttachment() as Attachment, {
+          ...from.record,
+          x: spot.x,
+          z: spot.z,
+          bed: null,
+          lyingSince: null,
+        });
+        this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: record.bed });
+        if (before) this.refreshCatVisits(before);
+        return;
+      }
+      case "discharge": {
+        if (canDischarge(record) !== "ok") return deny("discharge", "no-bed");
+        const before = this.lastVisits();
+        const room = record.bed !== null ? BEDS[record.bed].roomIndex : (roomAt(record.x, record.z)?.index ?? null);
+        const next = startDischarge({ ...record, lastAction: { ...record.lastAction, discharge: nowMs } }, nowMs, message.closeLink);
+        save(next);
+        const key = record.key ?? (await hashGuest(record.guestId));
+        const directory = this.directory();
+        if (message.closeLink) await directory.disableVisitLink(key);
+        await directory.markDischarged(key, nowMs);
+        this.send(ws, { v: PROTOCOL_VERSION, type: "discharge-started", until: nowMs + FAREWELL_MS });
+        // 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
+        this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+        if (room !== null) {
+          const text = JSON.stringify({
+            v: PROTOCOL_VERSION,
+            type: "event",
+            event: { kind: "discharge", id: record.id },
+          } satisfies ServerMessage);
+          for (const entry of this.joined(ws)) {
+            if (roomAt(entry.record.x, entry.record.z)?.index !== room) continue;
+            try {
+              entry.ws.send(text);
+            } catch {
+              // 닫히는 중인 연결은 건너뛰어요.
+            }
+          }
+        }
+        this.refreshCatVisits(before);
         return;
       }
       case "lamp": {
@@ -654,6 +1054,7 @@ export class WardRoom extends DurableObject<Env> {
         save({ ...record, lastAction: { ...record.lastAction, lamp: nowMs } });
         this.broadcast({ kind: "lamp", id: record.id, room: result.room, count });
         this.countBlessing(nowMs, true);
+        await this.keepTidy();
         return;
       }
     }
@@ -671,10 +1072,70 @@ export class WardRoom extends DurableObject<Env> {
     return this.directory().leaveForOwner(
       sender,
       visit.owner,
-      { nickname: record.nickname, animal: record.animal, kind, item, at: nowMs },
+      { nickname: publicNickname(record), animal: record.animal, kind, item, at: nowMs },
       nowMs,
       koreanDay(new Date(nowMs)),
     );
+  }
+
+  /** 평안이 모인 병실이에요. 침대면 그 침대의 병실, 사람이면 그 사람이 있는 병실, 아니면 보낸 사람의 병실이에요. */
+  private roomOfTarget(target: { bedId: number | null; targetId: string | null }, sender: GuestRecord): number | null {
+    if (target.bedId !== null) return BEDS[target.bedId]?.roomIndex ?? null;
+    const person = target.targetId ? this.everyone().find((guest) => guest.id === target.targetId) : null;
+    const at = person ?? sender;
+    return roomAt(at.x, at.z)?.index ?? null;
+  }
+
+  /** 병실 화분에 평안 하나를 더하고 모두에게 알려요. 줄지 않아요. */
+  private addPeaceTo(room: number | null): void {
+    if (room === null || room < 0 || room >= ROOMS.length) return;
+    const sql = this.ctx.storage.sql;
+    const before = sql.exec<{ total: number }>("SELECT total FROM planter WHERE room = ?", room).toArray()[0]?.total ?? 0;
+    const { total } = addPeace(before);
+    sql.exec("INSERT OR REPLACE INTO planter (room, total) VALUES (?, ?)", room, total);
+    this.broadcast({ kind: "planter", room, total });
+  }
+
+  private planterTotals(): number[] {
+    const totals = ROOMS.map(() => 0);
+    for (const row of this.ctx.storage.sql.exec<{ room: number; total: number }>("SELECT room, total FROM planter")) {
+      if (row.room >= 0 && row.room < totals.length) totals[row.room] = row.total;
+    }
+    return totals;
+  }
+
+  /** 아침에 그날 처음 누가 들어온 병실이면 창문을 열어요. 병실마다 하루 한 번이에요. */
+  private async openWindowIfMorning(room: number | null, nowMs: number): Promise<void> {
+    if (room === null || !isMorningWindow(nowMs)) return;
+    const sql = this.ctx.storage.sql;
+    const day = koreanDay(new Date(nowMs));
+    const opened = sql.exec("SELECT 1 AS one FROM morning_open WHERE room = ? AND day = ?", room, day).toArray().length > 0;
+    if (!shouldOpenWindow(nowMs, opened)) return;
+    sql.exec("DELETE FROM morning_open WHERE day != ?", day);
+    sql.exec("INSERT INTO morning_open (room, day) VALUES (?, ?)", room, day);
+    this.broadcast({ kind: "window-open", room });
+    await this.keepTidy();
+  }
+
+  /** 오늘 아침 창문이 열린 병실이에요. 아침이 지나면 비어요. */
+  private morningRooms(nowMs: number): number[] {
+    if (!isMorningWindow(nowMs)) return [];
+    return this.ctx.storage.sql
+      .exec<{ room: number }>("SELECT room FROM morning_open WHERE day = ?", koreanDay(new Date(nowMs)))
+      .toArray()
+      .map((row) => row.room)
+      .filter((room) => room >= 0 && room < ROOMS.length);
+  }
+
+  /** 퇴원하는 사람에게 온 평안이면 배웅으로 세고, 그 사람에게만 지금까지의 수를 알려요. */
+  private async farewell(targetId: string, sender: GuestRecord, nowMs: number): Promise<void> {
+    const target = this.joined().find((entry) => entry.record.id === targetId);
+    if (!target?.record.discharge) return;
+    const fromKey = sender.key ?? (await hashGuest(sender.guestId));
+    const result = countFarewell(target.record, fromKey, nowMs);
+    if (!result.counted) return;
+    this.save(target.ws, target.ws.deserializeAttachment() as Attachment, result.record);
+    this.send(target.ws, { v: PROTOCOL_VERSION, type: "farewell-count", count: farewellCount(result.record) });
   }
 
   /** 오늘의 집계예요. */
@@ -728,13 +1189,14 @@ export class WardRoom extends DurableObject<Env> {
     sql.exec(
       "INSERT INTO left_blessing (bed, nickname, animal, kind, item, at, sender) VALUES (?, ?, ?, ?, ?, ?, ?)",
       bed,
-      record.nickname,
+      publicNickname(record),
       record.animal,
       kind,
       item,
       nowMs,
       sender,
     );
+    await this.keepTidy();
   }
 
   /** 침대를 받은 사람에게 그 침대에 남겨진 평안을 전하고 지워요. */
@@ -773,13 +1235,17 @@ export class WardRoom extends DurableObject<Env> {
     sql.exec("DELETE FROM left_blessing WHERE at < ?", now.getTime() - KEEP_MS);
     sql.exec("DELETE FROM daily_visitors WHERE day != ?", day);
     sql.exec("DELETE FROM daily_stats WHERE day != ?", day);
+    sql.exec("DELETE FROM morning_open WHERE day != ?", day);
   }
 }
 
-async function hashGuest(guestId: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`onward:${guestId}`));
-  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+/** 안아 주기 요청 번호예요. 소문자와 숫자만 써요. */
+function randomId(length: number): string {
+  const alphabet = "abcdefghijklmnopqrstuvwxyz0123456789";
+  const bytes = crypto.getRandomValues(new Uint8Array(length));
+  return Array.from(bytes, (byte) => alphabet[byte % alphabet.length]).join("");
 }
+
 
 const ANIMALS = new Set(["rabbit", "bear", "penguin", "otter", "deer"]);
 type SendableCard = BlessingCard & { animal: "rabbit" | "bear" | "penguin" | "otter" | "deer" };

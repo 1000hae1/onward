@@ -89,8 +89,11 @@ export function checkVisit(
   return { kind: "ok", link };
 }
 
-/** 문병객이 보낼 수 있는 메시지예요. 침대에 눕기, 불빛, 자리에 없는 사람에게 남기기, 링크 만들기는 받지 않아요. */
-const VISITOR_ALLOWED = new Set(["hello", "walk-to", "bless", "bow", "gift"]);
+/**
+ * 문병객이 보낼 수 있는 메시지예요. 침대에 눕기, 불빛, 자리에 없는 사람에게 남기기, 링크 만들기, 퇴원은 받지 않아요.
+ * 안아 주기는 받아요. 누구를 안을 수 있는지(주인만)는 hug-rules가 정해요.
+ */
+const VISITOR_ALLOWED = new Set(["hello", "walk-to", "bless", "bow", "gift", "report", "hug-request", "hug-answer"]);
 
 export function visitorMay(type: string): boolean {
   return VISITOR_ALLOWED.has(type);

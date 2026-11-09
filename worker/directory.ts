@@ -18,6 +18,81 @@ import {
   VISIT_SESSION_MS,
 } from "../shared/visit-rules.ts";
 import type { VisitLinkRow } from "../shared/visit-rules.ts";
+import {
+  ADMIN_FAILS_PER_HOUR,
+  decideReport,
+  deleteExpired,
+  earliestExpiry,
+  KEEP,
+  NEW_GUESTS_PER_HOUR,
+  nextRetentionAlarm,
+  REPORT_REASONS,
+  underHourlyLimit,
+} from "../shared/safety-rules.ts";
+import type { Moderation, ReportResult, RetentionRule } from "../shared/safety-rules.ts";
+import { koreanDay } from "../shared/ward-rules.ts";
+import { countVisitDay, VISIT_DAYS_KEEP_MS } from "../shared/return-rules.ts";
+
+/** 병실 서버가 신고를 넘길 때 담는 것이에요. 해시와 공개 번호만 있어요. */
+export interface ReportInput {
+  room: string;
+  reason: number;
+  reporterId: string;
+  reporterHash: string;
+  targetId: string;
+  targetHash: string;
+  targetIp: string | null;
+  targetNickname: string;
+  targetAnimal: string;
+}
+
+/** 들어오려는 사람에 대해 directory가 아는 것이에요. */
+export interface GuestStanding {
+  blocked: boolean;
+  hidden: boolean;
+  bannedNickname: string | null;
+}
+
+export interface ReportRow {
+  id: number;
+  at: number;
+  room: string;
+  reason: string;
+  nickname: string;
+  reporterId: string;
+  reporterHash: string;
+  targetId: string;
+  targetHash: string;
+  targetIp: string | null;
+  handled: boolean;
+  targetHidden: boolean;
+}
+
+export type AdminResult = { ok: true; affected: number } | { ok: false; error: "unknown_guest" };
+
+const ROOM_PATTERN = /^ward-\d{1,2}-\d{1,2}$/;
+
+/** directory에서 보관 기간이 있는 표예요. alarm이 이 목록대로 지워요. */
+const RETENTION: readonly RetentionRule[] = [
+  { table: "address_book", kind: "at", column: "created", keepMs: KEEP_MS },
+  { table: "inbox", kind: "at", column: "at", keepMs: KEEP_MS },
+  { table: "inbox_daily", kind: "day", column: "day" },
+  { table: "gift_daily", kind: "day", column: "day" },
+  { table: "visit_attempt", kind: "at", column: "at", keepMs: KEEP.visitAttempt },
+  { table: "visit_session", kind: "at", column: "started", keepMs: VISIT_SESSION_MS },
+  // 꺼진 문병 링크는 만든 지 7일이 지나면 지워요. 켜진 링크는 주인이 끌 때까지 둬요.
+  { table: "visit_link", kind: "at", column: "created", keepMs: KEEP_MS, where: "off = 1" },
+  { table: "report", kind: "at", column: "at", keepMs: KEEP.report },
+  { table: "hidden_guest", kind: "at", column: "at", keepMs: KEEP.report },
+  { table: "nickname_reset", kind: "at", column: "at", keepMs: KEEP.report },
+  { table: "block", kind: "at", column: "at", keepMs: KEEP.report },
+  { table: "guest_issue", kind: "at", column: "at", keepMs: KEEP.limit },
+  { table: "admin_fail", kind: "at", column: "at", keepMs: KEEP.limit },
+  { table: "audit_log", kind: "at", column: "at", keepMs: KEEP.audit },
+  // 다녀간 날 수와 퇴원 표시는 마지막으로 다녀간 뒤 180일이 지나면 지워요.
+  { table: "guest_days", kind: "at", column: "last_at", keepMs: VISIT_DAYS_KEEP_MS },
+  { table: "discharged", kind: "at", column: "at", keepMs: VISIT_DAYS_KEEP_MS },
+];
 
 export type LeaveResult = "saved" | "unknown" | "once-a-day";
 
@@ -67,7 +142,8 @@ interface LinkSqlRow {
  * 표는 기능별로 나눠 두어서, 나중에 문병 링크 표가 따로 붙어도 서로 섞이지 않아요.
  *
  * 받는 것은 모두 해시예요. guestId와 평안 주소 원문은 저장하지 않아요.
- * 주기적으로 도는 일은 없고, 오래된 기록은 요청이 올 때 함께 정리해요.
+ * 주기적으로 도는 일은 없어요. 오래된 기록은 요청이 올 때 함께 정리하고,
+ * 보관 기간이 지난 것은 지울 데이터가 있을 때만 맞추는 alarm이 지워요(하루에 많아야 한 번).
  */
 export class Directory extends DurableObject<Env> {
   constructor(ctx: DurableObjectState, env: Env) {
@@ -98,6 +174,286 @@ export class Directory extends DurableObject<Env> {
     // 지금 들어와 있는 문병객이에요. 링크마다 3명까지예요. 병실 서버가 나갈 때 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS visit_session (
       id TEXT PRIMARY KEY, owner TEXT NOT NULL, started INTEGER NOT NULL)`);
+    // 신고예요. 사람은 공개 번호와 guestId 해시로만 적어요. 30일이 지나면 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS report (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, day TEXT NOT NULL, room TEXT NOT NULL,
+      reason TEXT NOT NULL, nickname TEXT NOT NULL, animal TEXT NOT NULL,
+      reporter_id TEXT NOT NULL, reporter_hash TEXT NOT NULL,
+      target_id TEXT NOT NULL, target_hash TEXT NOT NULL, target_ip TEXT,
+      handled INTEGER NOT NULL DEFAULT 0)`);
+    sql.exec("CREATE INDEX IF NOT EXISTS report_target ON report (target_hash)");
+    sql.exec("CREATE INDEX IF NOT EXISTS report_reporter ON report (reporter_hash, day)");
+    // 서로 다른 세 사람이 신고해서 닉네임을 가린 사람이에요. 운영자가 처리하면 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS hidden_guest (guest_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)`);
+    // 운영자가 되돌린 닉네임이에요. 같은 닉네임으로 다시 들어오면 자동 닉네임으로 바꿔요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS nickname_reset (
+      guest_hash TEXT PRIMARY KEY, nickname TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // 입장 차단이에요. kind는 guest(guestId 해시)나 ip(IP 해시)예요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS block (
+      kind TEXT NOT NULL, value TEXT NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (kind, value))`);
+    // 요청 제한용이에요. IP 해시마다 새 게스트를 만든 시각과 운영자 키를 틀린 시각이에요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS guest_issue (ip_hash TEXT NOT NULL, at INTEGER NOT NULL)`);
+    sql.exec("CREATE INDEX IF NOT EXISTS guest_issue_ip ON guest_issue (ip_hash)");
+    sql.exec(`CREATE TABLE IF NOT EXISTS admin_fail (ip_hash TEXT NOT NULL, at INTEGER NOT NULL)`);
+    sql.exec("CREATE INDEX IF NOT EXISTS admin_fail_ip ON admin_fail (ip_hash)");
+    // 운영자 작업 기록이에요. 넣기만 하고 고치거나 지우는 API는 없어요. 1년이 지나면 alarm이 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS audit_log (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, at INTEGER NOT NULL, action TEXT NOT NULL,
+      target TEXT NOT NULL, reason TEXT NOT NULL)`);
+    // 다녀간 날 수예요(한국 날짜, 같은 날은 한 번). 본인에게도 숫자로는 보내지 않아요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS guest_days (
+      guest_hash TEXT PRIMARY KEY, days INTEGER NOT NULL, last_day TEXT NOT NULL, last_at INTEGER NOT NULL)`);
+    // 퇴원한 사람이에요. 다시 들어오면 "다시 들러 주셨네요"로 맞고 지워요. 다른 판단에는 쓰지 않아요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS discharged (guest_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)`);
+  }
+
+  /* ───────────── 보관 기간 ───────────── */
+
+  /** 보관 기간이 지난 데이터를 지워요. 남은 데이터가 있을 때만 다음 alarm을 맞춰요. */
+  async alarm(): Promise<void> {
+    const now = Date.now();
+    deleteExpired(this.ctx.storage.sql, RETENTION, now, koreanDay(new Date(now)));
+    const next = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
+    if (next !== null) await this.ctx.storage.setAlarm(next);
+  }
+
+  /** 무언가 저장한 뒤 불러요. 맞춰 둔 alarm이 없을 때만 새로 맞춰요. */
+  private async keepTidy(): Promise<void> {
+    if ((await this.ctx.storage.getAlarm()) !== null) return;
+    const now = Date.now();
+    const next = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
+    if (next !== null) await this.ctx.storage.setAlarm(next);
+  }
+
+  /* ───────────── 입장과 요청 제한 ───────────── */
+
+  /** 들어오려는 사람이 막혔는지, 닉네임이 가려졌는지, 되돌린 닉네임이 있는지예요. */
+  async standing(guestHash: string, ipHash: string | null): Promise<GuestStanding> {
+    const sql = this.ctx.storage.sql;
+    const blocked =
+      sql.exec("SELECT 1 FROM block WHERE kind = 'guest' AND value = ?", guestHash).toArray().length > 0 ||
+      (ipHash !== null && sql.exec("SELECT 1 FROM block WHERE kind = 'ip' AND value = ?", ipHash).toArray().length > 0);
+    const hidden = sql.exec("SELECT 1 FROM hidden_guest WHERE guest_hash = ?", guestHash).toArray().length > 0;
+    const reset = sql
+      .exec<{ nickname: string }>("SELECT nickname FROM nickname_reset WHERE guest_hash = ?", guestHash)
+      .toArray()[0];
+    return { blocked, hidden, bannedNickname: reset?.nickname ?? null };
+  }
+
+  /** 이 IP 해시에서 새 게스트를 만들어도 되는지 보고, 되면 센 뒤 true예요. */
+  async allowNewGuest(ipHash: string, nowMs: number): Promise<boolean> {
+    const sql = this.ctx.storage.sql;
+    if (sql.exec("SELECT 1 FROM block WHERE kind = 'ip' AND value = ?", ipHash).toArray().length > 0) return false;
+    const times = sql
+      .exec<{ at: number }>("SELECT at FROM guest_issue WHERE ip_hash = ? AND at > ?", ipHash, nowMs - KEEP.limit)
+      .toArray()
+      .map((row) => row.at);
+    if (!underHourlyLimit(times, nowMs, NEW_GUESTS_PER_HOUR)) return false;
+    sql.exec("INSERT INTO guest_issue (ip_hash, at) VALUES (?, ?)", ipHash, nowMs);
+    await this.keepTidy();
+    return true;
+  }
+
+  /** 운영자 키를 너무 많이 틀린 IP 해시인지예요. */
+  async adminLocked(ipHash: string, nowMs: number): Promise<boolean> {
+    const times = this.ctx.storage.sql
+      .exec<{ at: number }>("SELECT at FROM admin_fail WHERE ip_hash = ? AND at > ?", ipHash, nowMs - KEEP.limit)
+      .toArray()
+      .map((row) => row.at);
+    return !underHourlyLimit(times, nowMs, ADMIN_FAILS_PER_HOUR);
+  }
+
+  async adminFailed(ipHash: string, nowMs: number): Promise<void> {
+    this.ctx.storage.sql.exec("INSERT INTO admin_fail (ip_hash, at) VALUES (?, ?)", ipHash, nowMs);
+    await this.keepTidy();
+  }
+
+  /* ───────────── 신고 ───────────── */
+
+  /** 신고를 받아요. 서로 다른 세 사람이 신고하면 hide가 true이고, 병실 서버가 닉네임을 가려요. */
+  async report(input: ReportInput, nowMs: number): Promise<{ result: ReportResult; hide: boolean }> {
+    const sql = this.ctx.storage.sql;
+    const day = koreanDay(new Date(nowMs));
+    const reason = REPORT_REASONS[input.reason];
+    if (!reason || !ROOM_PATTERN.test(input.room)) return { result: "no-target", hide: false };
+    const reporterToday = sql
+      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM report WHERE reporter_hash = ? AND day = ?", input.reporterHash, day)
+      .one().n;
+    const openReporters = sql
+      .exec<{ reporter_hash: string }>(
+        "SELECT DISTINCT reporter_hash FROM report WHERE target_hash = ? AND handled = 0",
+        input.targetHash,
+      )
+      .toArray()
+      .map((row) => row.reporter_hash);
+    const alreadyHidden = sql.exec("SELECT 1 FROM hidden_guest WHERE guest_hash = ?", input.targetHash).toArray().length > 0;
+    const decision = decideReport({
+      reporter: input.reporterHash,
+      target: input.targetHash,
+      reporterToday,
+      openReporters,
+      alreadyHidden,
+    });
+    if (decision.result !== "saved") return decision;
+    sql.exec(
+      `INSERT INTO report (at, day, room, reason, nickname, animal, reporter_id, reporter_hash, target_id, target_hash, target_ip)
+       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+      nowMs,
+      day,
+      input.room,
+      reason,
+      input.targetNickname,
+      input.targetAnimal,
+      input.reporterId,
+      input.reporterHash,
+      input.targetId,
+      input.targetHash,
+      input.targetIp,
+    );
+    if (decision.hide) {
+      sql.exec("INSERT OR IGNORE INTO hidden_guest (guest_hash, at) VALUES (?, ?)", input.targetHash, nowMs);
+    }
+    await this.keepTidy();
+    return { result: alreadyHidden ? "saved" : decision.result, hide: alreadyHidden || decision.hide };
+  }
+
+  /* ───────────── 운영자 ───────────── */
+
+  async listReports(limit: number): Promise<ReportRow[]> {
+    return this.ctx.storage.sql
+      .exec<{
+        id: number;
+        at: number;
+        room: string;
+        reason: string;
+        nickname: string;
+        reporter_id: string;
+        reporter_hash: string;
+        target_id: string;
+        target_hash: string;
+        target_ip: string | null;
+        handled: number;
+        hidden: number;
+      }>(
+        `SELECT r.id, r.at, r.room, r.reason, r.nickname, r.reporter_id, r.reporter_hash, r.target_id, r.target_hash,
+                r.target_ip, r.handled, (h.guest_hash IS NOT NULL) AS hidden
+         FROM report r LEFT JOIN hidden_guest h ON h.guest_hash = r.target_hash
+         ORDER BY r.at DESC, r.id DESC LIMIT ?`,
+        limit,
+      )
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        at: row.at,
+        room: row.room,
+        reason: row.reason,
+        nickname: row.nickname,
+        reporterId: row.reporter_id,
+        reporterHash: row.reporter_hash,
+        targetId: row.target_id,
+        targetHash: row.target_hash,
+        targetIp: row.target_ip,
+        handled: row.handled !== 0,
+        targetHidden: row.hidden !== 0,
+      }));
+  }
+
+  /** guestId 해시나 IP 해시로 입장을 막아요. 지금 병실에 있으면 그 병실에서도 내보내요. */
+  async adminBlock(target: { guestHash?: string; ipHash?: string }, reason: string, nowMs: number): Promise<AdminResult> {
+    const sql = this.ctx.storage.sql;
+    const kind = target.guestHash ? "guest" : "ip";
+    const value = target.guestHash ?? target.ipHash ?? "";
+    sql.exec("INSERT OR REPLACE INTO block (kind, value, at) VALUES (?, ?, ?)", kind, value, nowMs);
+    const column = kind === "guest" ? "target_hash" : "target_ip";
+    sql.exec(`UPDATE report SET handled = 1 WHERE ${column} = ?`, value);
+    if (kind === "guest") sql.exec("DELETE FROM hidden_guest WHERE guest_hash = ?", value);
+    this.audit("block", `${kind}:${value}`, reason, nowMs);
+    const affected = await this.tellRooms(
+      this.roomsOf(column, value),
+      kind === "guest" ? { kind: "block", key: value } : { kind: "block", ip: value },
+    );
+    await this.keepTidy();
+    return { ok: true, affected };
+  }
+
+  /** 닉네임을 자동 닉네임으로 되돌리고 가림을 풀어요. 신고된 적 있는 사람에게만 할 수 있어요. */
+  async adminResetNickname(guestHash: string, reason: string, nowMs: number): Promise<AdminResult> {
+    const sql = this.ctx.storage.sql;
+    const latest = sql
+      .exec<{ nickname: string }>("SELECT nickname FROM report WHERE target_hash = ? ORDER BY at DESC LIMIT 1", guestHash)
+      .toArray()[0];
+    if (!latest) return { ok: false, error: "unknown_guest" };
+    sql.exec(
+      "INSERT OR REPLACE INTO nickname_reset (guest_hash, nickname, at) VALUES (?, ?, ?)",
+      guestHash,
+      latest.nickname,
+      nowMs,
+    );
+    sql.exec("DELETE FROM hidden_guest WHERE guest_hash = ?", guestHash);
+    sql.exec("UPDATE report SET handled = 1 WHERE target_hash = ?", guestHash);
+    this.audit("reset-nickname", `guest:${guestHash}`, reason, nowMs);
+    const affected = await this.tellRooms(this.roomsOf("target_hash", guestHash), {
+      kind: "reset",
+      key: guestHash,
+      banned: latest.nickname,
+    });
+    await this.keepTidy();
+    return { ok: true, affected };
+  }
+
+  /** 문병 링크를 꺼요. */
+  async adminRevokeVisitLink(guestHash: string, reason: string, nowMs: number): Promise<AdminResult> {
+    const before = this.linksOf(guestHash);
+    if (before.length === 0) return { ok: false, error: "unknown_guest" };
+    await this.disableVisitLink(guestHash);
+    this.audit("revoke-visit-link", `guest:${guestHash}`, reason, nowMs);
+    await this.keepTidy();
+    return { ok: true, affected: before.filter((row) => !row.off).length };
+  }
+
+  /** 확인해 보니 문제가 없을 때 가림을 풀어요. */
+  async adminClearFlag(guestHash: string, reason: string, nowMs: number): Promise<AdminResult> {
+    const sql = this.ctx.storage.sql;
+    const known = sql.exec("SELECT 1 FROM report WHERE target_hash = ? LIMIT 1", guestHash).toArray().length > 0;
+    if (!known) return { ok: false, error: "unknown_guest" };
+    sql.exec("DELETE FROM hidden_guest WHERE guest_hash = ?", guestHash);
+    sql.exec("UPDATE report SET handled = 1 WHERE target_hash = ?", guestHash);
+    this.audit("clear-flag", `guest:${guestHash}`, reason, nowMs);
+    const affected = await this.tellRooms(this.roomsOf("target_hash", guestHash), { kind: "unhide", key: guestHash });
+    await this.keepTidy();
+    return { ok: true, affected };
+  }
+
+  private audit(action: string, target: string, reason: string, nowMs: number): void {
+    this.ctx.storage.sql.exec(
+      "INSERT INTO audit_log (at, action, target, reason) VALUES (?, ?, ?, ?)",
+      nowMs,
+      action,
+      target,
+      reason,
+    );
+  }
+
+  /** 신고가 들어온 병실들이에요. 그 사람이 지금 있을 만한 곳이에요. column은 이 파일 안의 값만 들어와요. */
+  private roomsOf(column: "target_hash" | "target_ip", value: string): string[] {
+    return this.ctx.storage.sql
+      .exec<{ room: string }>(`SELECT DISTINCT room FROM report WHERE ${column} = ?`, value)
+      .toArray()
+      .map((row) => row.room)
+      .filter((room) => ROOM_PATTERN.test(room));
+  }
+
+  /** 병실 서버에 바로 알려요. 그 사람이 지금 없으면 다음 입장 때 standing으로 반영돼요. */
+  private async tellRooms(rooms: readonly string[], change: Moderation): Promise<number> {
+    let affected = 0;
+    for (const room of rooms) {
+      try {
+        affected += await this.env.WARD_ROOM.getByName(room).moderate(change);
+      } catch {
+        // 병실에 닿지 않아도 기록은 남았어요. 다음 입장 때 반영돼요.
+      }
+    }
+    return affected;
   }
 
   /**
@@ -108,7 +464,7 @@ export class Directory extends DurableObject<Env> {
     owner: string,
     nowMs: number,
     place: (OwnerPlace & { nickname: string; animal: string }) | null = null,
-  ): Promise<{ address: string; inbox: BlessingCard[]; linked: boolean }> {
+  ): Promise<{ address: string; inbox: BlessingCard[]; linked: boolean; visitDays: number; welcomeBack: boolean }> {
     this.tidy(nowMs);
     const address = encodeAddress(crypto.getRandomValues(new Uint8Array(16)));
     const sql = this.ctx.storage.sql;
@@ -144,7 +500,33 @@ export class Directory extends DurableObject<Env> {
     const inbox = rows.map((row) =>
       toCard({ ...row, kind: row.kind === "gift" ? "gift" : "bless" } satisfies StoredBlessing),
     );
-    return { address, inbox, linked };
+    const visitDays = this.countDay(owner, nowMs);
+    const welcomeBack = sql.exec("DELETE FROM discharged WHERE guest_hash = ?", owner).rowsWritten > 0;
+    await this.keepTidy();
+    return { address, inbox, linked, visitDays, welcomeBack };
+  }
+
+  /** 오늘 다녀간 것을 세요. 같은 한국 날짜에는 한 번만이에요. 지금까지의 날 수를 돌려줘요. */
+  private countDay(owner: string, nowMs: number): number {
+    const sql = this.ctx.storage.sql;
+    const row = sql
+      .exec<{ days: number; last_day: string }>("SELECT days, last_day FROM guest_days WHERE guest_hash = ?", owner)
+      .toArray()[0];
+    const next = countVisitDay(row ? { days: row.days, lastDay: row.last_day } : null, koreanDay(new Date(nowMs)));
+    sql.exec(
+      "INSERT OR REPLACE INTO guest_days (guest_hash, days, last_day, last_at) VALUES (?, ?, ?, ?)",
+      owner,
+      next.days,
+      next.lastDay,
+      nowMs,
+    );
+    return next.days;
+  }
+
+  /** 퇴원했어요. 다음 입장 때 한 번 반겨 주려고만 적어 둬요. */
+  async markDischarged(owner: string, nowMs: number): Promise<void> {
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO discharged (guest_hash, at) VALUES (?, ?)", owner, nowMs);
+    await this.keepTidy();
   }
 
   /** 평안 주소의 주인에게 남겨요. 같은 사람에게는 하루 한 번이에요. */
@@ -155,13 +537,17 @@ export class Directory extends DurableObject<Env> {
       .exec<{ owner: string }>("SELECT owner FROM address_book WHERE address_hash = ?", await hashAddress(address))
       .toArray()[0]?.owner;
     if (!owner) return "unknown";
-    return this.deposit(sender, owner, card, nowMs, day);
+    const result = this.deposit(sender, owner, card, nowMs, day);
+    await this.keepTidy();
+    return result;
   }
 
   /** 문병객이 자리에 없는 주인에게 남겨요. 주소 대신 주인의 해시로 바로 남기고, 규칙은 같아요. */
   async leaveForOwner(sender: string, owner: string, card: BlessingCard, nowMs: number, day: string): Promise<LeaveResult> {
     this.tidy(nowMs, day);
-    return this.deposit(sender, owner, card, nowMs, day);
+    const result = this.deposit(sender, owner, card, nowMs, day);
+    await this.keepTidy();
+    return result;
   }
 
   private deposit(sender: string, owner: string, card: BlessingCard, nowMs: number, day: string): LeaveResult {
@@ -200,6 +586,7 @@ export class Directory extends DurableObject<Env> {
       .toArray()[0]?.day ?? null;
     if (!fiveLeafAllowed(last, day)) return false;
     sql.exec("INSERT OR REPLACE INTO gift_daily (guest, item, day) VALUES (?, ?, ?)", guest, item, day);
+    await this.keepTidy();
     return true;
   }
 
@@ -223,6 +610,7 @@ export class Directory extends DurableObject<Env> {
     sql.exec("DELETE FROM visit_attempt WHERE owner = ?", owner);
     sql.exec("DELETE FROM visit_session WHERE owner = ?", owner);
     for (const row of next.filter((entry) => entry.owner === owner)) this.writeLink(row);
+    await this.keepTidy();
     return token;
   }
 
@@ -276,6 +664,7 @@ export class Directory extends DurableObject<Env> {
     sql.exec("INSERT INTO visit_attempt (owner, at) VALUES (?, ?)", owner, nowMs);
     sql.exec("INSERT INTO visit_session (id, owner, started) VALUES (?, ?, ?)", session, owner, nowMs);
     sql.exec("UPDATE visit_link SET visits = visits + 1 WHERE owner = ?", owner);
+    await this.keepTidy();
     return { kind: "ok", owner, ownerNickname: check.link.nickname, bed: check.link.bed, session };
   }
 

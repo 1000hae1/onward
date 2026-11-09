@@ -35,6 +35,48 @@ export function createChoiceRow<T>(
   };
 }
 
+export interface PictureChoiceRow<T> extends ChoiceRow<T> {
+  /** 카드마다 그림 주소를 정해요. null이면 그림 없이 이름만 보여요. */
+  setPictures(source: (value: T) => string | null): void;
+}
+
+/** 그림과 이름이 함께 있는 고르기 카드 줄이에요. 그림은 꾸밈이라 읽어 주지 않아요. */
+export function createPictureChoiceRow<T>(
+  items: readonly { value: T; label: string }[],
+  onPick: (value: T) => void,
+): PictureChoiceRow<T> {
+  const element = document.createElement("div");
+  element.className = "ward-row picture-row";
+  const cards = items.map((item) => {
+    const button = createButton("", () => onPick(item.value));
+    button.className = "picture-choice";
+    const picture = document.createElement("img");
+    picture.alt = "";
+    picture.hidden = true;
+    picture.decoding = "async";
+    const name = document.createElement("span");
+    name.textContent = item.label;
+    button.append(picture, name);
+    return { value: item.value, button, picture };
+  });
+  element.append(...cards.map((card) => card.button));
+  return {
+    element,
+    select(value) {
+      for (const card of cards) {
+        card.button.setAttribute("aria-pressed", String(card.value === value));
+      }
+    },
+    setPictures(source) {
+      for (const card of cards) {
+        const next = source(card.value);
+        card.picture.hidden = next === null;
+        if (next !== null && card.picture.getAttribute("src") !== next) card.picture.src = next;
+      }
+    },
+  };
+}
+
 export function createText(tag: "h1" | "p" | "label", text: string): HTMLElement {
   const element = document.createElement(tag);
   element.textContent = text;
