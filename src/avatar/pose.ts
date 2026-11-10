@@ -40,6 +40,14 @@ export interface Pose {
   bedTurn: number;
   /** 몸을 눕힌 비율이에요. */
   bedLie: number;
+  /** 벤치 앞자리에서 앉는 자리로 옮겨 간 비율이에요. */
+  seatTravel: number;
+  /** 벤치 높이로 올라앉은 비율이에요. */
+  seatLift: number;
+  /** 벤치 앞쪽으로 돌아선 비율이에요. */
+  seatTurn: number;
+  /** 등을 기대고 발을 앞으로 내민 비율이에요. */
+  seatSit: number;
 }
 
 export interface PoseInput {
@@ -53,6 +61,8 @@ export interface PoseInput {
   gestureElapsed: number;
   /** 0은 선 자세, 1은 다 누운 자세예요. */
   bedProgress: number;
+  /** 0은 선 자세, 1은 벤치에 다 앉은 자세예요. 없으면 0이에요. */
+  seatProgress?: number;
   /** 한 손에 꽃다발을 들고 있으면 그 팔은 앞으로 든 채예요. */
   carrying: boolean;
 }
@@ -83,6 +93,13 @@ const BOW_LEAN = 0.36;
 const BOW_ARM_SWING = 1.1;
 
 const LYING_ARM_SWING = 0.15;
+
+/** 벤치에 앉으면 등받이 쪽으로 살짝 기대고, 짧은 발은 앞으로 내밀어 달랑 들려요. */
+const SEAT_LEAN = -0.1;
+const SEAT_FOOT_STEP = 0.08;
+const SEAT_FOOT_LIFT = 0.025;
+/** 두 팔은 무릎 위에 얹듯 조금 앞으로 와요. */
+const SEAT_ARM_SWING = 0.4;
 
 /** 두 팔을 앞으로 벌려 상대를 감싸요. */
 const HUG_ARM_SWING = 1.2;
@@ -130,6 +147,10 @@ export function createPose(): Pose {
     bedLift: 0,
     bedTurn: 0,
     bedLie: 0,
+    seatTravel: 0,
+    seatLift: 0,
+    seatTurn: 0,
+    seatSit: 0,
   };
 }
 
@@ -163,6 +184,7 @@ export function gestureWeight(gesture: Gesture, elapsed: number): number {
 /** 지금 입력에 맞는 자세를 out에 써요. */
 export function composePose(out: Pose, input: PoseInput): Pose {
   const { walkPhase, walkWeight, breathPhase, gesture, gestureElapsed, bedProgress, carrying } = input;
+  const seatProgress = input.seatProgress ?? 0;
   const side = Math.sin(walkPhase);
   const stride = Math.cos(walkPhase);
   const w = walkWeight;
@@ -226,6 +248,26 @@ export function composePose(out: Pose, input: PoseInput): Pose {
     out.footRightLift = mix(out.footRightLift, 0, lie);
     out.footLeftStep = mix(out.footLeftStep, 0, lie);
     out.footRightStep = mix(out.footRightStep, 0, lie);
+  }
+
+  // 벤치 앞에서 돌아선 뒤, 뒤로 옮겨 가며 올라앉아요. 일어날 때는 이 순서를 거꾸로 밟아요.
+  out.seatTurn = smoothstep(0, 0.45, seatProgress);
+  out.seatTravel = smoothstep(0.15, 0.75, seatProgress);
+  out.seatLift = smoothstep(0.2, 0.8, seatProgress);
+  out.seatSit = smoothstep(0.4, 1, seatProgress);
+
+  if (out.seatSit > 0) {
+    const sit = out.seatSit;
+    // 앉은 채로 목례하면 기댄 자세에서 숙여요.
+    out.lean += SEAT_LEAN * sit;
+    out.footLeftStep = mix(out.footLeftStep, SEAT_FOOT_STEP, sit);
+    out.footRightStep = mix(out.footRightStep, SEAT_FOOT_STEP, sit);
+    out.footLeftLift = mix(out.footLeftLift, SEAT_FOOT_LIFT, sit);
+    out.footRightLift = mix(out.footRightLift, SEAT_FOOT_LIFT, sit);
+    if (!gesture) {
+      out.armLeftSwing = mix(out.armLeftSwing, SEAT_ARM_SWING, sit);
+      if (!carrying) out.armRightSwing = mix(out.armRightSwing, SEAT_ARM_SWING, sit);
+    }
   }
   return out;
 }

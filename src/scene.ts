@@ -16,6 +16,7 @@ import type { BlessingCardMessage, Guest } from "../shared/protocol";
 import { createWardClient } from "./net/ward-client";
 import { loadGuestToken, loadSeat, readWardParams, saveSeat, storageWorks, wardLabel } from "./net/ward-params";
 import { bedGuide, bedGuideText } from "../shared/bed-rules";
+import { BENCH_FULL_TEXT, SEAT_TAKEN_TEXT } from "../shared/bench-rules";
 import { NO_STORAGE_TEXT } from "./ui/entry-text";
 import { createButton } from "./ui/widgets";
 import { followTopStack } from "./ui/top-stack";
@@ -458,6 +459,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     const low = event.bed !== null;
     const face = low ? BEDS[event.bed as number] : b;
     const travel = Math.hypot(spot.x - a.x, spot.z - a.z) / HUG_WALK_SPEED;
+    // 벤치에 앉아 있던 안기는 사람은 일어나서 기다려요. 서버는 이미 자리를 비웠어요.
+    if (event.b === myId) player.leaveSeat();
     if (event.a === myId) {
       player.whenUp(() =>
         player.walkToSpot(spot.x, spot.z, () => {
@@ -612,7 +615,17 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       } else if (bed === null && me?.lying) {
         client.send({ type: "get-up" });
       }
-      if (bed === null && me && Math.hypot(me.x - player.walkX, me.z - player.walkZ) > 0.3) {
+      // 벤치 자리도 맞춰요. 내가 앉아 있는데 서버는 모르면 다시 앉겠다고 하고, 안 되면 일어나요.
+      const seat = player.seat;
+      const serverSeat = me?.bench ?? null;
+      if (seat !== null && serverSeat !== seat) {
+        void client.askSeat(seat).then((granted) => {
+          if (!granted) player.leaveSeat();
+        });
+      } else if (seat === null && serverSeat !== null) {
+        client.send({ type: "stand" });
+      }
+      if (bed === null && seat === null && me && Math.hypot(me.x - player.walkX, me.z - player.walkZ) > 0.3) {
         client.send({ type: "walk-to", x: player.walkX, z: player.walkZ });
       }
     },
@@ -847,6 +860,10 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       const hint = guide && guide.kind !== "pick-here" ? ` ${bedGuideText(guide)}` : "";
       toast((moving ? BED_MOVE_TAKEN_TEXT : BED_CLAIM_TAKEN_TEXT) + hint);
     },
+    askSeat: (seat) => client.askSeat(seat),
+    isSeatTaken: (seat) => client.online && remotes.isSeatTaken(seat),
+    standUp: () => client.send({ type: "stand" }),
+    seatRefused: (full) => toast(full ? BENCH_FULL_TEXT : SEAT_TAKEN_TEXT),
   });
   player.setClaimConfirm((_bed, proceed) => {
     if (actionBar) actionBar.confirmClaim(proceed);
@@ -1232,7 +1249,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     if (hugBack) {
       hugBack.left -= dt;
       if (hugBack.left <= 0) {
-        if (player.lyingBed === null) {
+        if (player.lyingBed === null && !player.seated) {
           player.faceToward(hugBack.face.x, hugBack.face.z);
           player.playGesture("hug");
         }

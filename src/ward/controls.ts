@@ -38,6 +38,19 @@ import {
 } from "./bed-flow";
 import type { BedFlow, FlowStep, WalkOrder } from "./bed-flow";
 import {
+  arrivedAtSeat,
+  headToSeat,
+  isSeated,
+  NO_SEAT,
+  rise,
+  seatAllowsGesture,
+  seatInUse,
+  seatProgress,
+  tickSeat,
+} from "./seat-flow";
+import type { SeatFlow } from "./seat-flow";
+import { benchTap } from "../../shared/bench-rules";
+import {
   cameraAngleToSee,
   easeDistance,
   enteredThroughFront,
@@ -49,6 +62,7 @@ import {
 } from "./camera-view";
 import {
   BED_BOXES,
+  BENCH_BOXES,
   bedApproach,
   bedRest,
   bedRestYaw,
@@ -60,8 +74,12 @@ import {
   OBSTACLES,
   PLAYER_RADIUS,
   PLAYER_START,
+  seatApproach,
+  seatRest,
+  seatYaw,
   WALK_AREAS,
   WALL_BOXES,
+  YARD_BENCH,
 } from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "./movement";
 import type { NavGrid, Point } from "./movement";
@@ -136,6 +154,14 @@ export interface PlayerNet {
   getUp(): void;
   /** 다른 분이 먼저 침대를 차지했을 때예요. moving이면 침대를 옮기려던 때예요. */
   bedRefused(moving: boolean): void;
+  /** 앞마당 벤치 자리에 앉겠다고 해요. 서버가 먼저 온 사람을 앉혀요. */
+  askSeat(seat: number): Promise<boolean>;
+  /** 다른 분이 앉아 있는 자리인지예요. */
+  isSeatTaken(seat: number): boolean;
+  /** 벤치에서 일어났다고 알려요. 걸어가면 walkTo가 대신 알려요. */
+  standUp(): void;
+  /** 벤치에 앉지 못했을 때예요. full이면 누르기 전부터 두 자리가 다 차 있었어요. */
+  seatRefused(full: boolean): void;
 }
 
 export interface PlayerControls {
@@ -206,6 +232,12 @@ export interface PlayerControls {
   readonly claimedBed: number | null;
   /** 배정받은 내 침대예요. 걸어 다녀도 그대로예요. 문병객이거나 아직 고르지 않았으면 null이에요. */
   readonly ownedBed: number | null;
+  /** 앉아 있거나 앉으러 가는 벤치 자리예요. */
+  readonly seat: number | null;
+  /** 벤치에 앉는 중이거나 앉아 있거나 일어나는 중이에요. */
+  readonly seated: boolean;
+  /** 벤치에서 일어나요. 서버가 이미 자리를 비웠을 때(안아 주기, 다시 이었을 때) 써요. */
+  leaveSeat(): void;
 }
 
 /** 아바타와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동, 침대를 탭하면 눕기예요. */
@@ -308,6 +340,11 @@ export function createPlayerControls(
   /** 배정받은 내 침대예요. 서버에 이어져 있으면 서버가 정한 값이고, 혼자일 때는 이 화면에서 정해요. */
   let ownedBed: number | null = null;
   let flow: BedFlow = FREE;
+  let seatFlow: SeatFlow = NO_SEAT;
+  /** 벤치에서 다 일어난 뒤 할 일이에요. 없으면 일어났다고 서버에 알려요. */
+  let afterRise: (() => void) | null = null;
+  /** 가장 최근에 벤치 자리를 물어본 askToken이에요. */
+  let lastSeatAsk = 0;
   let outfit = initialChoice.outfit;
   /** 처음에는 현관을 바라봐요. */
   let yaw = Math.PI;
@@ -373,15 +410,30 @@ export function createPlayerControls(
     return onFloor ? { x: hit.x, z: hit.z } : null;
   };
 
-  /** 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요. */
-  const startWalk = (order: WalkOrder, tellServer = true): void => {
+  /** 벤치에서 일어나기 시작해요. 다 일어나면 then을 해요. */
+  const riseThen = (then: (() => void) | null): void => {
+    seatFlow = rise(seatFlow, BED_TRANSITION_SECONDS);
+    afterRise = then;
+  };
+
+  /**
+   * 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요.
+   * 벤치에 앉아 있으면 먼저 일어나요. seat가 있으면 그 자리에 앉으러 가는 길이에요.
+   */
+  const startWalk = (order: WalkOrder, tellServer = true, seat?: number): void => {
+    if (isSeated(seatFlow)) {
+      riseThen(() => startWalk(order, tellServer, seat));
+      return;
+    }
     const spot = order.kind === "bed" ? bedApproach(BEDS[order.bed]) : order.point;
     const goal = nav.nearestFree(spot);
     const nextPath = goal ? nav.findPath(position, goal) : [];
+    seatFlow = NO_SEAT;
     if (!goal || nextPath.length === 0) {
       if (flow.kind === "heading") flow = FREE;
       return;
     }
+    if (seat !== undefined) seatFlow = headToSeat(seat);
     // 눕으러 가는 길은 서버가 침대를 내줄 때 이미 알고 있어요. 그 밖의 걸음만 목적지를 알려요.
     if (tellServer && !(order.kind === "bed" && order.lie)) net?.walkTo(goal.x, goal.z);
     path = nextPath;
@@ -479,6 +531,75 @@ export function createPlayerControls(
     }
   };
 
+  /** 벤치 자리로 가서 앉아요. 누워 있거나 다른 자리에 앉아 있으면 먼저 일어나요. 서버는 이미 허락했어요. */
+  const goToSeat = (seat: number): void => {
+    if (isSeated(seatFlow)) {
+      riseThen(() => goToSeat(seat));
+      return;
+    }
+    if (!canStartGesture(flow)) {
+      // 침대에서 일어난 뒤에 가요. 일어난 뒤 가려던 곳은 잊어요.
+      if (flow.kind === "leaving") flow = { ...flow, next: null };
+      afterUp = () => goToSeat(seat);
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
+      return;
+    }
+    flow = FREE;
+    gesture = null;
+    const spot = seatApproach(seat);
+    if (Math.hypot(spot.x - position.x, spot.z - position.z) < 0.15) {
+      path = [];
+      seatFlow = arrivedAtSeat(headToSeat(seat));
+      yawGoal = seatYaw(seat);
+      return;
+    }
+    startWalk({ kind: "spot", point: spot }, false, seat);
+  };
+
+  /** 벤치에서 일어나요. 앉으러 가던 중이면 그만둬요. 서버에도 알려요. */
+  const standFromSeat = (): void => {
+    if (seatFlow.kind === "heading") {
+      seatFlow = NO_SEAT;
+      path = [];
+    } else if (isSeated(seatFlow)) {
+      riseThen(null);
+    }
+    net?.standUp();
+  };
+
+  /** 벤치를 눌렀을 때예요. 빈자리를 서버에 먼저 묻고, 허락받으면 걸어가요. */
+  const chooseBench = (bench: number, token: number): void => {
+    const tap = benchTap(bench, { seat: seatInUse(seatFlow), x: position.x, z: position.z }, (seat) =>
+      net ? net.isSeatTaken(seat) : false,
+    );
+    if (tap.kind === "stand") {
+      standFromSeat();
+      return;
+    }
+    if (tap.kind === "full") {
+      net?.seatRefused(true);
+      return;
+    }
+    if (!net) {
+      goToSeat(tap.seat);
+      return;
+    }
+    const asking = net;
+    lastSeatAsk = token;
+    void asking.askSeat(tap.seat).then((granted) => {
+      if (!granted) {
+        if (token === askToken) asking.seatRefused(false);
+        return;
+      }
+      if (token !== askToken) {
+        // 그사이 다른 곳을 눌렀어요. 서버는 앉은 줄 아니 일어났다고 알려요. 다른 벤치를 다시 물었으면 그대로 둬요.
+        if (lastSeatAsk === token && seatInUse(seatFlow) === null) asking.standUp();
+        return;
+      }
+      goToSeat(tap.seat);
+    });
+  };
+
   const handleTap = (clientX: number, clientY: number): void => {
     if (!inputEnabled) return;
     const rect = canvas.getBoundingClientRect();
@@ -499,9 +620,14 @@ export function createPlayerControls(
     // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
     afterUp = null;
     afterWalk = null;
-    ++askToken;
+    const token = ++askToken;
     if (bed !== null) {
       chooseBed(bed);
+      return;
+    }
+    const bench = pickBox(origin, reach, BENCH_BOXES, WALL_BOXES);
+    if (bench !== null) {
+      chooseBench(bench, token);
       return;
     }
 
@@ -550,7 +676,7 @@ export function createPlayerControls(
       return shownZ;
     },
     get canGesture() {
-      return canStartGesture(flow);
+      return canStartGesture(flow) && seatAllowsGesture(seatFlow);
     },
     setChoice(choice) {
       avatar.setChoice(choice);
@@ -562,9 +688,12 @@ export function createPlayerControls(
       }
     },
     playGesture(next) {
-      if (!canStartGesture(flow)) return;
-      // 걷던 중이면 멈춰 서서 해요. 다른 사람 화면에서도 여기서 멈추게 알려요.
-      if (path.length > 0) net?.walkTo(position.x, position.z);
+      if (!canStartGesture(flow) || !seatAllowsGesture(seatFlow)) return;
+      // 걷던 중이면 멈춰 서서 해요. 다른 사람 화면에서도 여기서 멈추게 알려요. 벤치로 가던 길이면 앉지 않아요.
+      if (path.length > 0) {
+        net?.walkTo(position.x, position.z);
+        if (seatFlow.kind === "heading") seatFlow = NO_SEAT;
+      }
       flow = FREE;
       path = [];
       gesture = next;
@@ -580,7 +709,7 @@ export function createPlayerControls(
       net = next;
     },
     correctDestination(x, z) {
-      if (path.length === 0 || flow.kind !== "free") return;
+      if (path.length === 0 || flow.kind !== "free" || seatFlow.kind !== "none") return;
       startWalk({ kind: "spot", point: { x, z } }, false);
     },
     forceGetUp() {
@@ -638,6 +767,13 @@ export function createPlayerControls(
     },
     walkToSpot(x, z, then, tellServer = false) {
       afterUp = null;
+      if (isSeated(seatFlow)) {
+        // 벤치에서 일어난 뒤에 걸어가요.
+        afterWalk = null;
+        riseThen(() => this.walkToSpot(x, z, then, tellServer));
+        return;
+      }
+      seatFlow = NO_SEAT;
       const goal = nav.nearestFree({ x, z });
       if (!goal || Math.hypot(goal.x - position.x, goal.z - position.z) < 0.05) {
         afterWalk = null;
@@ -656,7 +792,9 @@ export function createPlayerControls(
       const dx = x - position.x;
       const dz = z - position.z;
       afterUp = null;
+      afterRise = null;
       flow = FREE;
+      seatFlow = NO_SEAT;
       path = [];
       glance = null;
       position = { x, z };
@@ -702,6 +840,20 @@ export function createPlayerControls(
     get ownedBed() {
       return ownedBed;
     },
+    get seat() {
+      return seatInUse(seatFlow);
+    },
+    get seated() {
+      return isSeated(seatFlow);
+    },
+    leaveSeat() {
+      if (seatFlow.kind === "heading") {
+        seatFlow = NO_SEAT;
+        path = [];
+      } else if (isSeated(seatFlow) && seatFlow.kind !== "rising") {
+        riseThen(null);
+      }
+    },
     update(dt) {
       const stillMotion = reduceMotion.matches;
       applyStep(tickFlow(flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
@@ -709,6 +861,15 @@ export function createPlayerControls(
         const action = afterUp;
         afterUp = null;
         action();
+      }
+      const seatStep = tickSeat(seatFlow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS);
+      seatFlow = seatStep.flow;
+      if (seatStep.stood) {
+        const action = afterRise;
+        afterRise = null;
+        // 다른 곳으로 가지 않고 일어나기만 했으면 서버에 알려요. 이미 알렸으면 서버가 그냥 넘겨요.
+        if (action) action();
+        else net?.standUp();
       }
       // 쓰던 침대를 내놓았으면 서버에 알려요.
       const claimed = claimedOf(flow);
@@ -745,6 +906,10 @@ export function createPlayerControls(
           const granted = flow.lie && flow.bed === ownedBed;
           applyStep(arrivedAtBed(flow, granted));
         }
+        if (path.length === 0 && seatFlow.kind === "heading") {
+          yawGoal = seatYaw(seatFlow.seat);
+          seatFlow = arrivedAtSeat(seatFlow);
+        }
         if (path.length === 0 && afterWalk) {
           const action = afterWalk;
           afterWalk = null;
@@ -771,6 +936,7 @@ export function createPlayerControls(
         gesture,
         gestureElapsed,
         bedProgress: bedProgress(flow, BED_TRANSITION_SECONDS),
+        seatProgress: seatProgress(seatFlow, BED_TRANSITION_SECONDS),
         carrying: outfit === "visitor",
       });
 
@@ -785,6 +951,13 @@ export function createPlayerControls(
         nextZ += (rest.z - nextZ) * pose.bedTravel;
         shownYaw = turnToward(yaw, bedRestYaw(bed), pose.bedTurn);
       }
+      // 벤치에 앉는 동안에는 앞자리와 앉는 자리 사이를 옮겨 가요.
+      if (isSeated(seatFlow) && seatFlow.kind !== "none") {
+        const rest = seatRest(seatFlow.seat);
+        nextX += (rest.x - nextX) * pose.seatTravel;
+        nextZ += (rest.z - nextZ) * pose.seatTravel;
+        shownYaw = turnToward(shownYaw, seatYaw(seatFlow.seat), pose.seatTurn);
+      }
       const movedX = nextX - shownX;
       const movedZ = nextZ - shownZ;
       shownX = nextX;
@@ -793,7 +966,8 @@ export function createPlayerControls(
       avatar.apply(pose);
       shadow.position.x = shownX;
       shadow.position.z = shownZ;
-      shadow.position.y = FLOOR_SHADOW_Y + (BED_SHADOW_Y - FLOOR_SHADOW_Y) * pose.bedLift;
+      shadow.position.y =
+        FLOOR_SHADOW_Y + (BED_SHADOW_Y - FLOOR_SHADOW_Y) * pose.bedLift + YARD_BENCH.seatY * pose.seatLift;
       desired.x += movedX;
       desired.z += movedZ;
       controls.target.x += movedX;

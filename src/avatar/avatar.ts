@@ -5,9 +5,12 @@ import type { Pose } from "./pose";
 import { speciesById, speciesScale } from "./species";
 import type { AvatarChoice } from "./species";
 import { EGG_DEPTH, eggRadius, eggY } from "./egg";
+import { YARD_BENCH } from "../../shared/ward-layout";
 
 /** 이불 위에 올라선 높이예요. */
 const BED_STAND_Y = 0.62;
+/** 벤치 위에 올라앉은 높이예요. 달걀 몸의 바닥이 앉는 판에 살짝 묻혀요. */
+const SEAT_SIT_Y = YARD_BENCH.seatY - 0.02;
 /**
  * 누울 때 뒤로 기대는 각도예요. 달걀 몸은 완전히 누우면 발치에서 얼굴이 가려져서,
  * 등받이를 세운 병원 침대처럼 비스듬히 기대고 머리를 베개 쪽에 둬요.
@@ -133,9 +136,9 @@ export function createAvatar(choice: AvatarChoice): Avatar {
       footRight.visible = !simple;
     },
     apply(pose) {
-      standY = pose.bedLift * BED_STAND_Y;
+      standY = pose.bedLift * BED_STAND_Y + pose.seatLift * SEAT_SIT_Y;
       lie = pose.bedLie;
-      base.position.y = pose.bedLift * BED_STAND_Y + pose.bedLie * BED_LIE_RAISE * size;
+      base.position.y = standY + pose.bedLie * BED_LIE_RAISE * size;
       base.rotation.x = pose.bedLie * LYING_PITCH;
       shell.position.y = pose.bob;
       shell.rotation.set(pose.lean, pose.twist, pose.sway);

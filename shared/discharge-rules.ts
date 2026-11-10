@@ -25,6 +25,7 @@ export function startDischarge(record: GuestRecord, nowMs: number, closeLink = f
     ...record,
     bed: null,
     lyingSince: null,
+    bench: null,
     outfit: "visitor",
     linked: closeLink ? false : record.linked,
     discharge: { at: nowMs, from: [] },

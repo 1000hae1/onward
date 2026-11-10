@@ -37,6 +37,8 @@ export interface GuestRecord {
   address: string;
   /** 내 침대에 누운 시각이에요. 밀리초예요. 서 있으면 null이에요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
+  /** 지금 앉아 있는 앞마당 벤치 자리예요. 서 있으면 비어 있어요. 침대 배정과 따로예요. */
+  bench?: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
   lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "hug" | "discharge", number>>;
   /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
@@ -88,6 +90,7 @@ export function toPublic(record: GuestRecord): Guest {
     z: record.z,
     bed: record.bed,
     lying: isLying(record),
+    bench: record.bench ?? null,
     address: record.address,
     hugOk: hugAvailable(record),
   };

@@ -1,9 +1,10 @@
 import { z } from "zod";
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
 import { APPLE_NOTE_MAX, APPLE_PHRASES, APPLE_SLOTS } from "./apple-limits.ts";
+import { BENCH_SEAT_COUNT } from "./ward-layout.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 7;
+export const PROTOCOL_VERSION = 8;
 /** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
@@ -37,6 +38,8 @@ export type StatsResponse = z.infer<typeof statsResponseSchema>;
 const v = z.literal(PROTOCOL_VERSION);
 const coordinate = z.number().finite().min(-1000).max(1000);
 const bedId = z.number().int().min(0).max(BED_COUNT - 1);
+/** 앞마당 벤치 자리 번호예요. 벤치 넷에 두 자리씩이에요. */
+const seatId = z.number().int().min(0).max(BENCH_SEAT_COUNT - 1);
 /** 다른 사람을 가리키는 공개 번호예요. guestId는 남에게 보내지 않아요. */
 const publicId = z.string().regex(/^[a-z0-9]{8}$/);
 /** 한마디 번호예요. 5번 "좋은 아침이에요"는 아침(06:30~09:00)에만 서버가 받아요. */
@@ -92,6 +95,10 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("lie-down"), bedId }),
   /** 침대에서 내려와요. 배정은 그대로예요. */
   z.object({ v, type: z.literal("get-up") }),
+  /** 앞마당 벤치 자리에 앉고 싶어요. 답은 seat-granted나 seat-unavailable이에요. */
+  z.object({ v, type: z.literal("sit"), seat: seatId }),
+  /** 벤치에서 일어나요. 걸어가면(walk-to) 따로 보내지 않아도 일어나요. */
+  z.object({ v, type: z.literal("stand") }),
   z
     .object({ v, type: z.literal("bless"), targetId: publicId.optional(), bedId: bedId.optional() })
     .refine(exactlyOneTarget),
@@ -134,6 +141,8 @@ export const guestSchema = z.object({
   bed: bedId.nullable(),
   /** 지금 그 침대에 누워 있는지예요. */
   lying: z.boolean(),
+  /** 지금 앉아 있는 앞마당 벤치 자리예요. 서 있으면 null이에요. */
+  bench: seatId.nullable(),
   address,
   /** 지금 안아 주기 요청을 받을 수 있는지예요. 잠들었는지, 설정으로 껐는지는 나누지 않아요. */
   hugOk: z.boolean(),
@@ -182,6 +191,10 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
   /** 누군가 침대를 내놓았어요. */
   z.object({ kind: z.literal("bed-released"), id: publicId }),
   z.object({ kind: z.literal("get-up"), id: publicId }),
+  /** 누군가 앞마당 벤치에 앉아요. 벤치 앞자리로 걸어가서 앉아요. */
+  z.object({ kind: z.literal("sit"), id: publicId, seat: seatId }),
+  /** 누군가 벤치에서 일어나요. */
+  z.object({ kind: z.literal("stand"), id: publicId }),
   z.object({ kind: z.literal("bless"), id: publicId, bedId: bedId.nullable(), targetId: publicId.nullable() }),
   z.object({ kind: z.literal("bow"), id: publicId, phrase }),
   z.object({ kind: z.literal("gift"), id: publicId, gift: placedGiftSchema }),
@@ -269,6 +282,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ v, type: z.literal("position-corrected"), x: coordinate, z: coordinate }),
   z.object({ v, type: z.literal("bed-granted"), bedId }),
   z.object({ v, type: z.literal("bed-unavailable"), bedId }),
+  z.object({ v, type: z.literal("seat-granted"), seat: seatId }),
+  z.object({ v, type: z.literal("seat-unavailable"), seat: seatId }),
   z.object({
     v,
     type: z.literal("nickname-rejected"),

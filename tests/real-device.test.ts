@@ -45,6 +45,7 @@ const guest = (index: number): Guest => ({
   z: 3.98765432101,
   bed: index,
   lying: true,
+  bench: null,
   address: "A".repeat(22),
   hugOk: true,
 });

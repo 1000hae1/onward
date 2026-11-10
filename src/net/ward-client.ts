@@ -108,6 +108,8 @@ export interface WardClient {
   askBed(bed: number): Promise<boolean>;
   /** 이 침대를 내 침대로 달라고 해요(처음 고르기, 옮기기). 서버에 닿지 않을 때는 바로 허락해요. */
   claimBed(bed: number): Promise<boolean>;
+  /** 앞마당 벤치 자리에 앉겠다고 해요. 서버에 닿지 않을 때는 바로 허락해요. */
+  askSeat(seat: number): Promise<boolean>;
   /** 방명록 링크로 문병 갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
   setVisit(visit: { token: string; ward: number; instance: number } | null): void;
   readonly ward: number;
@@ -151,6 +153,7 @@ export function createWardClient(
   /** 서버 시각에서 이 기기 시각을 뺀 값이에요. */
   let clockOffset = 0;
   const bedAnswers = new Map<number, (granted: boolean) => void>();
+  const seatAnswers = new Map<number, (granted: boolean) => void>();
 
   const helloMessage = (current: Profile): ClientMessage => ({
     v: PROTOCOL_VERSION,
@@ -188,6 +191,22 @@ export function createWardClient(
     });
   };
 
+  /** 벤치 자리 요청을 보내고 seat-granted나 seat-unavailable을 기다려요. 같은 자리의 앞선 요청은 거절로 끝내요. */
+  const askAboutSeat = (seat: number): Promise<boolean> => {
+    if (!online) return Promise.resolve(true);
+    seatAnswers.get(seat)?.(false);
+    return new Promise((resolve) => {
+      seatAnswers.set(seat, resolve);
+      rawSend({ v: PROTOCOL_VERSION, type: "sit", seat });
+      setTimeout(() => {
+        if (seatAnswers.get(seat) === resolve) {
+          seatAnswers.delete(seat);
+          resolve(false);
+        }
+      }, BED_ANSWER_MS);
+    });
+  };
+
   const rawSend = (message: ClientMessage): void => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
   };
@@ -212,6 +231,8 @@ export function createWardClient(
   const settleBeds = (granted: boolean): void => {
     for (const answer of bedAnswers.values()) answer(granted);
     bedAnswers.clear();
+    for (const answer of seatAnswers.values()) answer(granted);
+    seatAnswers.clear();
   };
 
   const handle = (message: ServerMessage): void => {
@@ -241,6 +262,13 @@ export function createWardClient(
         const answer = bedAnswers.get(message.bedId);
         bedAnswers.delete(message.bedId);
         answer?.(message.type === "bed-granted");
+        return;
+      }
+      case "seat-granted":
+      case "seat-unavailable": {
+        const answer = seatAnswers.get(message.seat);
+        seatAnswers.delete(message.seat);
+        answer?.(message.type === "seat-granted");
         return;
       }
       case "nickname-rejected":
@@ -461,6 +489,9 @@ export function createWardClient(
     },
     claimBed(bed) {
       return askAboutBed("claim-bed", bed);
+    },
+    askSeat(seat) {
+      return askAboutSeat(seat);
     },
   };
 }

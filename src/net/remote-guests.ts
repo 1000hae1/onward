@@ -3,7 +3,18 @@ import type { Camera, Object3D } from "three";
 import { pickBox } from "../ward/camera-view";
 import { blessingText } from "../../shared/gestures";
 import type { Guest, WardEvent } from "../../shared/protocol";
-import { bedApproach, bedHeadSpot, bedRest, bedRestYaw, BEDS, roomAt, WALL_BOXES } from "../../shared/ward-layout";
+import {
+  bedApproach,
+  bedHeadSpot,
+  bedRest,
+  bedRestYaw,
+  BEDS,
+  roomAt,
+  seatApproach,
+  seatRest,
+  seatYaw,
+  WALL_BOXES,
+} from "../../shared/ward-layout";
 import { createAvatar } from "../avatar/avatar";
 import type { Avatar } from "../avatar/avatar";
 import { HAND_HEIGHT, HAND_REACH, HEAD_CENTER_Y } from "../avatar/kit";
@@ -32,6 +43,8 @@ import {
   tickFlow,
 } from "../ward/bed-flow";
 import type { BedFlow, FlowStep, WalkOrder } from "../ward/bed-flow";
+import { arrivedAtSeat, headToSeat, isSeated, NO_SEAT, rise, seatInUse, seatProgress, tickSeat } from "../ward/seat-flow";
+import type { SeatFlow } from "../ward/seat-flow";
 import { turnToward } from "../ward/camera-view";
 import type { NavGrid, Point } from "../ward/movement";
 import { stepAlong } from "../ward/movement";
@@ -66,6 +79,9 @@ interface Remote {
   label: HeadLabels;
   pose: Pose;
   flow: BedFlow;
+  seat: SeatFlow;
+  /** 벤치에서 다 일어난 뒤 할 일이에요. */
+  afterRise: (() => void) | null;
   position: Point;
   path: Point[];
   yaw: number;
@@ -102,6 +118,8 @@ export interface RemoteGuests {
   isBedTaken(bed: number): boolean;
   /** 이 침대를 배정받은 사람이에요. 그 사람이 걸어 다녀도 그 사람 것이에요. */
   ownerOfBed(bed: number): Guest | null;
+  /** 다른 분이 앉아 있거나 앉으러 가는 벤치 자리인지예요. */
+  isSeatTaken(seat: number): boolean;
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
   headSpot(id: string): Spot | null;
@@ -143,7 +161,18 @@ export function createRemoteGuests(
     z: remote.shownZ + Math.cos(remote.yaw) * HAND_REACH * remote.avatar.size,
   });
 
-  const startWalk = (remote: Remote, order: WalkOrder): void => {
+  const riseThen = (remote: Remote, then: (() => void) | null): void => {
+    remote.seat = rise(remote.seat, BED_TRANSITION_SECONDS);
+    remote.afterRise = then;
+  };
+
+  /** 정해진 곳으로 걸어가요. 벤치에 앉아 있으면 먼저 일어나요. seat가 있으면 그 자리에 앉으러 가는 길이에요. */
+  const startWalk = (remote: Remote, order: WalkOrder, seat?: number): void => {
+    if (isSeated(remote.seat)) {
+      riseThen(remote, () => startWalk(remote, order, seat));
+      return;
+    }
+    remote.seat = NO_SEAT;
     const spot = order.kind === "bed" ? bedApproach(BEDS[order.bed]) : order.point;
     const goal = nav.nearestFree(spot);
     const path = goal ? nav.findPath(remote.position, goal) : [];
@@ -152,10 +181,51 @@ export function createRemoteGuests(
       remote.position = { x: spot.x, z: spot.z };
       remote.path = [];
       if (remote.flow.kind === "heading") applyStep(remote, arrivedAtBed(remote.flow, true));
+      if (seat !== undefined) sitNow(remote, seat);
       return;
     }
     remote.path = path;
     remote.gesture = null;
+    if (seat !== undefined) remote.seat = headToSeat(seat);
+  };
+
+  const sitNow = (remote: Remote, seat: number): void => {
+    remote.seat = arrivedAtSeat(headToSeat(seat));
+    remote.yawGoal = seatYaw(seat);
+  };
+
+  /** 벤치 자리로 가서 앉아요. 누워 있거나 다른 자리에 앉아 있으면 먼저 일어나요. */
+  const goToSeat = (remote: Remote, seat: number): void => {
+    if (isSeated(remote.seat)) {
+      if (seatInUse(remote.seat) === seat) return;
+      riseThen(remote, () => goToSeat(remote, seat));
+      return;
+    }
+    if (!canStartGesture(remote.flow)) {
+      if (remote.flow.kind === "leaving") remote.flow = { ...remote.flow, next: null };
+      remote.queued = () => goToSeat(remote, seat);
+      applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
+      return;
+    }
+    remote.flow = FREE;
+    remote.afterWalk = null;
+    const spot = seatApproach(seat);
+    if (Math.hypot(spot.x - remote.position.x, spot.z - remote.position.z) < 0.15) {
+      remote.path = [];
+      sitNow(remote, seat);
+      return;
+    }
+    startWalk(remote, { kind: "spot", point: spot }, seat);
+  };
+
+  /** 벤치에서 일어나요. 앉으러 가던 중이면 그 자리에 멈춰요. */
+  const standRemote = (remote: Remote): void => {
+    if (remote.seat.kind === "heading") {
+      remote.seat = NO_SEAT;
+      remote.path = [];
+    } else if (isSeated(remote.seat) && remote.seat.kind !== "rising") {
+      riseThen(remote, null);
+    }
   };
 
   const applyStep = (remote: Remote, step: FlowStep): void => {
@@ -172,9 +242,14 @@ export function createRemoteGuests(
     labelsRoot?.append(element);
     const label = createHeadLabels(element);
     label.setName(guest.nickname);
-    // 누워 있는 사람은 침대 곁 자리에서 바로 누운 모습으로 시작해요.
+    // 누워 있는 사람은 침대 곁 자리에서 바로 누운 모습으로 시작해요. 벤치에 앉은 사람도 앉은 모습이에요.
     const lying = guest.bed !== null && guest.lying && guest.outfit === "patient";
-    const start = lying ? bedApproach(BEDS[guest.bed as number]) : { x: guest.x, z: guest.z };
+    const sitting = !lying && guest.bench !== null;
+    const start = lying
+      ? bedApproach(BEDS[guest.bed as number])
+      : sitting
+        ? seatApproach(guest.bench as number)
+        : { x: guest.x, z: guest.z };
     const remote: Remote = {
       guest,
       avatar,
@@ -182,9 +257,11 @@ export function createRemoteGuests(
       label,
       pose: createPose(),
       flow: lying ? { kind: "lying", bed: guest.bed as number } : FREE,
+      seat: sitting ? { kind: "sitting", seat: guest.bench as number } : NO_SEAT,
+      afterRise: null,
       position: { x: start.x, z: start.z },
       path: [],
-      yaw: Math.PI,
+      yaw: sitting ? seatYaw(guest.bench as number) : Math.PI,
       yawGoal: null,
       walkPhase: 0,
       breathPhase: Math.random() * Math.PI * 2,
@@ -224,6 +301,11 @@ export function createRemoteGuests(
   };
 
   const play = (remote: Remote, gesture: Gesture): void => {
+    // 벤치로 가던 중이면 바로 앉은 채로 해요. 서버는 이미 앉은 줄 알아요.
+    if (remote.seat.kind === "heading") {
+      remote.position = seatApproach(remote.seat.seat);
+      sitNow(remote, remote.seat.seat);
+    }
     remote.flow = FREE;
     remote.path = [];
     remote.gesture = gesture;
@@ -279,6 +361,9 @@ export function createRemoteGuests(
             walkZ: remote.position.z,
             lyingBed: null,
           });
+          // 앉고 일어나는 event를 놓쳤어도 서버가 아는 대로 맞춰요.
+          if (event.guest.bench === null && seatInUse(remote.seat) !== null) standRemote(remote);
+          else if (event.guest.bench !== null && seatInUse(remote.seat) !== event.guest.bench) goToSeat(remote, event.guest.bench);
           const lyingNow = event.guest.bed !== null && event.guest.lying;
           if (!lyingNow && remote.flow.kind !== "free") {
             applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
@@ -288,14 +373,23 @@ export function createRemoteGuests(
           }
           return;
         }
+        case "sit":
+          remote.guest = { ...remote.guest, lying: false, bench: event.seat };
+          remote.afterWalk = null;
+          goToSeat(remote, event.seat);
+          return;
+        case "stand":
+          remote.guest = { ...remote.guest, bench: null };
+          standRemote(remote);
+          return;
         case "walk":
-          // 걸어가면 침대에서 내려오지만 침대는 그대로 그 사람 것이에요. 이름표도 그대로예요.
-          remote.guest = { ...remote.guest, lying: false };
+          // 걸어가면 침대나 벤치에서 내려오지만 침대는 그대로 그 사람 것이에요. 이름표도 그대로예요.
+          remote.guest = { ...remote.guest, lying: false, bench: null };
           remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
         case "lie":
-          remote.guest = { ...remote.guest, bed: event.bedId, lying: true };
+          remote.guest = { ...remote.guest, bed: event.bedId, lying: true, bench: null };
           applyStep(remote, tapBed(remote.flow, event.bedId, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           return;
         case "bed-claimed":
@@ -341,6 +435,13 @@ export function createRemoteGuests(
     update(dt, viewer, camera, stillMotion) {
       for (const remote of remotes.values()) {
         applyStep(remote, tickFlow(remote.flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
+        const seatStep = tickSeat(remote.seat, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS);
+        remote.seat = seatStep.flow;
+        if (seatStep.stood && remote.afterRise) {
+          const action = remote.afterRise;
+          remote.afterRise = null;
+          action();
+        }
         if (remote.queued && remote.flow.kind === "free") {
           const action = remote.queued;
           remote.queued = null;
@@ -363,6 +464,7 @@ export function createRemoteGuests(
           if (remote.path.length === 0 && remote.flow.kind === "heading") {
             applyStep(remote, arrivedAtBed(remote.flow, true));
           }
+          if (remote.path.length === 0 && remote.seat.kind === "heading") sitNow(remote, remote.seat.seat);
           if (remote.path.length === 0 && remote.afterWalk) {
             const action = remote.afterWalk;
             remote.afterWalk = null;
@@ -401,6 +503,7 @@ export function createRemoteGuests(
           gesture: remote.gesture,
           gestureElapsed: remote.gestureElapsed,
           bedProgress: progress,
+          seatProgress: seatProgress(remote.seat, BED_TRANSITION_SECONDS),
           carrying: remote.guest.outfit === "visitor",
         });
 
@@ -414,6 +517,13 @@ export function createRemoteGuests(
           x += (rest.x - x) * remote.pose.bedTravel;
           z += (rest.z - z) * remote.pose.bedTravel;
           yaw = turnToward(yaw, bedRestYaw(bed), remote.pose.bedTurn);
+        }
+        const seat = remote.seat;
+        if (isSeated(seat) && seat.kind !== "none") {
+          const rest = seatRest(seat.seat);
+          x += (rest.x - x) * remote.pose.seatTravel;
+          z += (rest.z - z) * remote.pose.seatTravel;
+          yaw = turnToward(yaw, seatYaw(seat.seat), remote.pose.seatTurn);
         }
         remote.shownX = x;
         remote.shownZ = z;
@@ -447,6 +557,12 @@ export function createRemoteGuests(
         if (remote.guest.bed === bed && remote.guest.outfit === "patient") return remote.guest;
       }
       return null;
+    },
+    isSeatTaken(seat) {
+      for (const remote of remotes.values()) {
+        if (remote.guest.bench === seat || seatInUse(remote.seat) === seat) return true;
+      }
+      return false;
     },
     isBedTaken(bed) {
       for (const remote of remotes.values()) {
@@ -506,11 +622,13 @@ export function createRemoteGuests(
         remote.yawGoal = Math.atan2(face.x - remote.position.x, face.z - remote.position.z);
         play(remote, low ? "hug-low" : "hug");
       };
-      whenStanding(remote, () => {
+      const go = (): void => {
         startWalk(remote, { kind: "spot", point: spot });
         if (remote.path.length === 0) embrace();
         else remote.afterWalk = embrace;
-      });
+      };
+      // 벤치에 앉아 있었으면 일어난 뒤에 다가가요.
+      whenStanding(remote, () => (isSeated(remote.seat) ? riseThen(remote, go) : go()));
     },
     hugBack(id, face, delay) {
       const remote = remotes.get(id);
@@ -518,7 +636,7 @@ export function createRemoteGuests(
       remote.delayed = {
         left: delay,
         action: () => {
-          if (remote.flow.kind !== "free") return;
+          if (remote.flow.kind !== "free" || isSeated(remote.seat)) return;
           remote.yawGoal = Math.atan2(face.x - remote.position.x, face.z - remote.position.z);
           play(remote, "hug");
         },

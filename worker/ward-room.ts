@@ -67,6 +67,7 @@ import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge
 import { shouldGreet } from "../shared/return-rules.ts";
 import { hugAvailable } from "../shared/ward-rules.ts";
 import { claimBed, isLying, lieDown, releaseBed, seatOnEntry, standUp } from "../shared/bed-rules.ts";
+import { leaveSeat, seatOf, takeSeat } from "../shared/bench-rules.ts";
 import { headcount, shouldReport } from "../shared/presence-rules.ts";
 import { departureOf, MAX_DEPARTURES_PER_REPORT } from "../shared/metrics-rules.ts";
 
@@ -799,13 +800,15 @@ export class WardRoom extends DurableObject<Env> {
         if (spot.x !== message.x || spot.z !== message.z) {
           this.send(ws, { v: PROTOCOL_VERSION, type: "position-corrected", x: spot.x, z: spot.z });
         }
-        // 걸어가면 누워 있던 침대에서 내려와요. 침대 배정은 그대로예요.
+        // 걸어가면 누워 있던 침대나 앉아 있던 벤치에서 내려와요. 침대 배정은 그대로예요.
         const hadBed = record.lyingSince !== null;
+        const hadSeat = seatOf(record) !== null;
         const roomChanged = roomAt(record.x, record.z)?.index !== roomAt(spot.x, spot.z)?.index;
         // 고양이 방문은 병실을 옮기거나 일어날 때만 따지니, 그때만 저장소를 읽어요.
         const before = hadBed || roomChanged ? this.lastVisits() : [];
-        save({ ...record, x: spot.x, z: spot.z, lyingSince: null });
+        save({ ...record, x: spot.x, z: spot.z, lyingSince: null, bench: null });
         if (hadBed) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        if (hadSeat) this.broadcast({ kind: "stand", id: record.id }, ws);
         this.broadcast({ kind: "walk", id: record.id, x: spot.x, z: spot.z }, ws);
         // 병실을 옮기거나 침대에서 일어났을 때만 고양이 방문을 다시 따져요.
         if (hadBed || roomChanged) this.refreshCatVisits(before);
@@ -855,10 +858,12 @@ export class WardRoom extends DurableObject<Env> {
           return;
         }
         const before = this.lastVisits();
-        // 눕는 사람은 침대 곁 자리에 있는 것으로 봐요.
+        // 눕는 사람은 침대 곁 자리에 있는 것으로 봐요. 벤치에 앉아 있었으면 일어나요.
         const spot = bedApproach(BEDS[message.bedId]);
-        save({ ...result.record, x: spot.x, z: spot.z });
+        const hadSeat = seatOf(record) !== null;
+        save({ ...result.record, x: spot.x, z: spot.z, bench: null });
         this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
+        if (hadSeat) this.broadcast({ kind: "stand", id: record.id }, ws);
         this.broadcast({ kind: "lie", id: record.id, bedId: message.bedId }, ws);
         this.refreshCatVisits(before);
         await this.openWindowIfMorning(BEDS[message.bedId].roomIndex, nowMs);
@@ -872,6 +877,30 @@ export class WardRoom extends DurableObject<Env> {
         save(next);
         this.broadcast({ kind: "get-up", id: record.id }, ws);
         this.refreshCatVisits(before);
+        return;
+      }
+      case "sit": {
+        // 먼저 처리된 사람이 앉아요. 잠시 끊긴 사람의 자리도 그 사람 것이에요.
+        const result = takeSeat(this.everyone(ws), record, message.seat);
+        if (!result.granted) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "seat-unavailable", seat: message.seat });
+          return;
+        }
+        const before = result.wasLying ? this.lastVisits() : null;
+        save(result.record);
+        this.send(ws, { v: PROTOCOL_VERSION, type: "seat-granted", seat: message.seat });
+        if (result.record === record) return;
+        // 누워 있었으면 먼저 일어나요. 침대는 그대로 내 것이에요.
+        if (result.wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "sit", id: record.id, seat: message.seat }, ws);
+        if (before) this.refreshCatVisits(before);
+        return;
+      }
+      case "stand": {
+        const next = leaveSeat(record);
+        if (!next) return;
+        save(next);
+        this.broadcast({ kind: "stand", id: record.id }, ws);
         return;
       }
       case "bow": {
@@ -1109,7 +1138,15 @@ export class WardRoom extends DurableObject<Env> {
           x: spot.x,
           z: spot.z,
           lyingSince: null,
+          bench: null,
         });
+        // 벤치에 앉아 있던 사람은 둘 다 일어나서 안아요. 자기 화면은 hug를 보고 일어나요.
+        if (seatOf(from.record) !== null) this.broadcast({ kind: "stand", id: from.record.id }, from.ws);
+        const standing = leaveSeat(record);
+        if (standing) {
+          save(standing);
+          this.broadcast({ kind: "stand", id: record.id }, ws);
+        }
         this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: lyingBed });
         if (before) this.refreshCatVisits(before);
         return;
