@@ -497,7 +497,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     });
   };
 
-  /** 퇴원을 받아 줬어요. 평상복으로 갈아입고 문 쪽으로 천천히 걸어 나가요. */
+  /** 퇴원을 받아 줬어요. 환자복을 벗고 문 쪽으로 천천히 걸어 나가요. */
   const beginDischarge = (until: number): void => {
     dischargeUntil = until;
     farewellsReceived = 0;
@@ -507,7 +507,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     if (settingsRoot) settingsRoot.hidden = true;
     const bed = player.claimedBed;
     const room = roomAt(player.walkX, player.walkZ) ?? (bed !== null ? ROOMS[BEDS[bed].roomIndex] : null);
-    // 저장하지 않고 이번에만 평상복이에요. 다음에 들어올 때는 원래 옷이에요.
+    // 저장하지 않고 이번에만 문병객 모습이에요. 다음에 들어올 때는 원래 옷이에요.
     player.setChoice({ species: current.species, outfit: "visitor" });
     player.setInputEnabled(false);
     notice?.show("오늘 퇴원해요. 평안히 다녀가세요.", 5);
@@ -932,7 +932,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     labels?.setName(next.nickname);
   };
 
-  /** 문병객으로 고른 평상복은 저장하지 않아요. 다음에 일반으로 들어올 때는 원래 옷이에요. */
+  /** 문병객으로 고른 옷차림은 저장하지 않아요. 다음에 일반으로 들어올 때는 원래 옷이에요. */
   const persist = (next: Profile): void => {
     saveProfile(visitOwner ? { ...next, outfit: profile.outfit } : next);
   };
@@ -1043,7 +1043,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     });
   };
 
-  /** 방명록 링크로 왔으면 제목이 바뀌고 옷은 평상복이에요. */
+  /** 방명록 링크로 왔으면 제목이 바뀌고 옷은 문병객 모습이에요. */
   const visitEntry = (): { title?: string; lockOutfit?: "visitor" } =>
     visitOwner ? { title: visitTitle(visitOwner), lockOutfit: "visitor" } : {};
 

@@ -155,7 +155,7 @@ const patient = (n: number): GuestRecord => ({
   lastAction: {},
 });
 
-test("문병객은 정원이 차도 들어오고, 평상복으로 침대 곁에서 시작해요", () => {
+test("문병객은 정원이 차도 들어오고, 문병객 모습으로 침대 곁에서 시작해요", () => {
   const full = Array.from({ length: WARD_CAPACITY }, (_, i) => patient(i));
   assert.equal(admit(full, 0, hello(), WARD_CAPACITY, "newguest").kind, "full");
   const spot = visitorSpot(4, 0);
@@ -174,7 +174,7 @@ test("문병객은 정원에 세지 않아요", () => {
   assert.equal(admit(others, 0, hello(), WARD_CAPACITY, "newguest").kind, "admitted");
 });
 
-test("문병객은 침대를 차지하지 못하고, 옷을 바꿔도 평상복이에요", () => {
+test("문병객은 침대를 차지하지 못하고, 옷을 바꿔도 문병객 모습이에요", () => {
   const visitor: GuestRecord = { ...patient(1), visit: role, outfit: "visitor" };
   assert.equal(claimBed([], visitor, 4).granted, false);
   // 화면에서 환자복을 보내도 서버가 문병객 옷으로 둬요.

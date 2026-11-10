@@ -19,7 +19,7 @@ export function canDischarge(record: GuestRecord): DischargeCheck {
   return "ok";
 }
 
-/** 퇴원을 시작해요. 침대를 비우고 평상복으로 갈아입어요. closeLink면 방명록 링크도 꺼진 것으로 둬요. */
+/** 퇴원을 시작해요. 침대를 비우고 환자복을 벗고 문병객 모습이 돼요. closeLink면 방명록 링크도 꺼진 것으로 둬요. */
 export function startDischarge(record: GuestRecord, nowMs: number, closeLink = false): GuestRecord {
   return {
     ...record,

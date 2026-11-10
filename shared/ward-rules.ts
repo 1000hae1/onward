@@ -128,7 +128,7 @@ export function admit(
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
   const same = others.find((record) => record.guestId === hello.guestId) ?? null;
   const role = visit?.role ?? returning?.visit ?? null;
-  // 문병객은 평상복에 꽃다발을 들어요. 화면에서 무엇을 골랐든 서버가 정해요.
+  // 문병객은 옷 없이 꽃다발을 들어요. 화면에서 무엇을 골랐든 서버가 정해요.
   const outfit = role ? "visitor" : hello.outfit;
   if (returning) {
     const bed = outfit === "visitor" ? null : returning.bed;

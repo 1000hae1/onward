@@ -20,7 +20,7 @@ import type { BlobSpec, Outfit, SpeciesSpec } from "./species";
 /**
  * 아바타 부품을 동물과 옷차림별로 한 번만 만들어 재사용해요. 재질은 모두가 하나를 함께 써요.
  * 머리와 몸이 하나인 달걀이라 메시는 몸, 팔 뭉치 둘, 발 둘로 아바타 한 명이 5번만 그려져요.
- * 옷 껍질과 팔·발 틀은 동물과 상관없이 한 번 만들어 두고 복사해서 써요.
+ * 환자복 껍질은 동물과 상관없이 한 번 만들어 두고 복사해서 써요. 문병객은 옷 없이 털과 꽃다발만 있어요.
  */
 
 export interface AvatarKit {
@@ -72,16 +72,7 @@ const V_NECK_TIP = 1.56;
 /** 정면에서 V가 벌어지는 φ 폭이에요. 이 밖은 둥근 목둘레예요. */
 const V_NECK_HALF_WIDTH = 0.75;
 const BUTTON_COLOR = "#fbfaf6";
-const KNIT = "#d39a86";
-const KNIT_TRIM = "#bf8571";
-const SCARF = "#e6c784";
 const EYE_COLOR = "#2c2a28";
-
-interface Band {
-  thetas: readonly number[];
-  color: string;
-  shells?: readonly number[];
-}
 
 /** φ 자리의 목둘레 높이예요. 정면에서 V자로 내려가요. */
 function neckline(phi: number): number {
@@ -100,24 +91,19 @@ function buildPajama(): BufferGeometry[] {
   ];
 }
 
-/** 니트에 밑단 줄이 하나 있고, 목에 도톰한 목도리를 둘렀어요. */
-const KNIT_BANDS: readonly Band[] = [
-  { thetas: [0, 0.45, 0.85], color: KNIT },
-  { thetas: [0.85, 0.97], color: KNIT_TRIM },
-  { thetas: [0.97, 1.3, 1.62], color: KNIT },
-  { thetas: [1.62, 1.8, 1.98], color: SCARF, shells: [CLOTHES_SHELL, 1.11, 1.004] },
-];
-
 const PAJAMA_DETAILS: readonly SurfaceBlob[] = [
   { shape: "ball", color: BUTTON_COLOR, on: [1.12, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
   { shape: "ball", color: BUTTON_COLOR, on: [1.38, 0], size: [0.012, 0.012, 0.006], shell: CLOTHES_SHELL, lift: 0.002, small: true },
 ];
 
-const SLEEVE_COLOR: Record<Outfit, string> = { patient: PAJAMA, visitor: KNIT };
+/** 환자복이에요. 문병객은 옷을 입지 않아서 동물마다 털로 아랫몸을 채워요(buildBareBody). */
+function buildClothes(): BufferGeometry {
+  return merged([...buildPajama(), ...surfaceBlobs(PAJAMA_DETAILS)]);
+}
 
-function buildClothes(outfit: Outfit): BufferGeometry {
-  if (outfit === "patient") return merged([...buildPajama(), ...surfaceBlobs(PAJAMA_DETAILS)]);
-  return merged(KNIT_BANDS.map((band) => eggBand(band.thetas, band.shells ?? CLOTHES_SHELL, band.color)));
+/** 옷 없이 드러난 아랫몸의 털이에요. 털이 시작되는 자리까지 몸 색으로 이어요. */
+function buildBareBody(spec: SpeciesSpec): BufferGeometry {
+  return eggBand([0, 0.5, 1.0, FUR_START], 1, spec.fur);
 }
 
 /** 옷 위로 보이는 털과 얼굴이에요. 배 무늬는 아랫부분이 옷에 가려 윗부분만 살짝 보여요. */
@@ -143,7 +129,7 @@ function buildFace(spec: SpeciesSpec): BufferGeometry {
 function buildArm(spec: SpeciesSpec, outfit: Outfit): BufferGeometry {
   // 몸에 기대어 위쪽이 살짝 안으로 기운 작은 뭉치예요. 왼팔(-x) 기준이에요.
   const sleeve = place(
-    paint(new SphereGeometry(1, 8, 5), SLEEVE_COLOR[outfit]),
+    paint(new SphereGeometry(1, 8, 5), outfit === "patient" ? PAJAMA : spec.fur),
     [0, 0, 0],
     [0, 0, -0.3],
     [ARM_HALF_WIDTH, 0.068, 0.058],
@@ -213,7 +199,7 @@ export function getSleepKit(spec: SpeciesSpec): SleepKit {
   });
 }
 
-const clothes = new Map<Outfit, BufferGeometry>();
+let sharedClothes: BufferGeometry | null = null;
 const faces = new Map<string, BufferGeometry>();
 const feet = new Map<string, BufferGeometry>();
 const kits = new Map<string, AvatarKit>();
@@ -230,10 +216,10 @@ function cached<K, V>(map: Map<K, V>, key: K, build: () => V): V {
 /** 동물과 옷차림이 같으면 언제나 같은 부품을 돌려줘요. */
 export function getAvatarKit(spec: SpeciesSpec, outfit: Outfit): AvatarKit {
   return cached(kits, `${spec.id}:${outfit}`, () => {
-    const outfitShell = cached(clothes, outfit, () => buildClothes(outfit));
     const face = cached(faces, spec.id, () => buildFace(spec));
     // merged는 넘긴 조각을 정리하므로, 함께 쓰는 틀은 복사해서 넘겨요.
-    const body = merged([outfitShell.clone(), face.clone()]);
+    const lower = outfit === "patient" ? (sharedClothes ??= buildClothes()).clone() : buildBareBody(spec);
+    const body = merged([lower, face.clone()]);
     const arm = buildArm(spec, outfit);
     return {
       body,

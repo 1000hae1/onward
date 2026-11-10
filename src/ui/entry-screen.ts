@@ -15,7 +15,7 @@ export interface EntryOptions {
   message?: string;
   /** 방명록 링크로 왔으면 "따뜻한 곰님에게 문병 왔어요"처럼 바뀌어요. */
   title?: string;
-  /** 방명록 링크로 왔으면 옷은 고르지 않고 평상복이에요. */
+  /** 방명록 링크로 왔으면 옷은 고르지 않고 문병객 모습이에요. */
   lockOutfit?: Outfit;
   /** 이 기기에 저장된 모습과 게스트 토큰이 있으면 "돌아왔네요"로 맞아요. */
   returning?: boolean;

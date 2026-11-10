@@ -12,7 +12,7 @@
 
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
-| 모습 고르기 | 다섯 동물의 그림을 보고 고르면 뒤의 병동에서 바로 바뀌어요. 옷은 환자복과 평상복 가운데 골라요. | 완성 | 첫 화면에서 동물 그림 → [환자]/[문병객] | `src/ui/entry-screen.ts`, `src/avatar/species.ts`, `src/avatar/portraits.ts`, `src/avatar/egg.ts`, `src/avatar/kit.ts` |
+| 모습 고르기 | 다섯 동물의 그림을 보고 고르면 뒤의 병동에서 바로 바뀌어요. 옷은 환자복과 문병객(옷 없이 꽃다발) 가운데 골라요. | 완성 | 첫 화면에서 동물 그림 → [환자]/[문병객] | `src/ui/entry-screen.ts`, `src/avatar/species.ts`, `src/avatar/portraits.ts`, `src/avatar/egg.ts`, `src/avatar/kit.ts` |
 | 닉네임 정하기 | "따뜻한 곰"처럼 자동 닉네임이 채워져 있고, 고쳐 쓰면 규칙에 맞는지 바로 알려 줘요. | 완성 | 닉네임 칸 수정 → [병동에 들어갈게요] | `src/ui/entry-screen.ts`, `shared/nickname.ts`, `shared/bannedWords.ts`, `worker/ward-room.ts`(hello) |
 | 고양이와 함께 들어가기 | 고양이가 내 옆에서 나란히 걷고, 다른 사람 화면에도 보여요. 내가 멈추면 옆에 앉고, 누우면 침대 옆에 웅크려요. 문처럼 좁은 곳에서는 잠깐 뒤따라와요. | 완성 | [함께 갈게요]/[혼자 갈게요] | `src/cat/companion.ts`, `src/ward/companion-side.ts`, `src/ward/companion-trail.ts`, `src/net/remote-guests.ts` |
 | 간호사의 인사 | 현관으로 들어서면 간호사실 가운데 병아리 간호사가 고개를 숙이며 "어서 오세요. 편히 쉬다 가세요"라고 인사해요. 이 기기에서 두 번째부터는 "다시 오셨네요"예요. 내 화면에서만 보여요. 간호사는 병동 직원이라 닉네임이 없고 평안·선물·신고 대상이 아니에요. | 완성 | 앞마당에서 현관으로 걸어 들어가기 | `src/ward/chick-nurse.ts`, `src/ward/nurse-greeting.ts`, `src/ward/controls.ts`(setLobbyListener) |
@@ -70,7 +70,7 @@
 | 아침 창문 | 06:30~09:00에 그날 처음 병실에 들어오면 창문이 열려요. 병실마다 하루 한 번이에요. | 완성 | 아침에 병실 들어가기 | `shared/morning.ts`, `src/ward/morning-window.ts`, `worker/ward-room.ts`(openWindowIfMorning) |
 | 창가 화분 | 병실에 평안이 모일수록 새싹에서 꽃 여러 송이까지 6단계로 자라요. 줄지 않아요. | 완성 | 병실 안에서 창가 화분 누르기 | `shared/planter.ts`, `src/ward/planter-view.ts` |
 | 함께한 밤 | 밤(22시~6시)에 1분 넘게 머물면 그 밤을 세고, 다음 밤에 "n번째 밤"이라고 알려 줘요. | 완성 | `?clockShift=분`으로 밤을 미리 보기 | `shared/daily.ts`(countNight, nightsText), `src/scene.ts` — 이 브라우저에만 저장해요 |
-| 퇴원하기와 배웅 | 퇴원하면 평상복으로 갈아입고 문으로 걸어 나가요. 같은 병실 사람에게 [배웅하기]가 뜨고, 1분 뒤 "n분이 배웅해 주셨어요" 카드가 보여요. | 완성 | [내 침대] → [퇴원하기] → [퇴원할게요] (퇴원하면 침대를 바로 반납해요) | `shared/discharge-rules.ts`, `src/ui/moments.ts`, `worker/ward-room.ts`(discharge, farewell) |
+| 퇴원하기와 배웅 | 퇴원하면 환자복을 벗고 꽃다발을 든 모습으로 문으로 걸어 나가요. 같은 병실 사람에게 [배웅하기]가 뜨고, 1분 뒤 "n분이 배웅해 주셨어요" 카드가 보여요. | 완성 | [내 침대] → [퇴원하기] → [퇴원할게요] (퇴원하면 침대를 바로 반납해요) | `shared/discharge-rules.ts`, `src/ui/moments.ts`, `worker/ward-room.ts`(discharge, farewell) |
 | 다시 들러 주셨네요 | 퇴원한 뒤 다시 들어오면 한 번 반겨 줘요. | 완성 | 퇴원 뒤 다시 들어가기 | `shared/return-rules.ts`, `worker/directory.ts`(discharged) |
 
 ## 6. 방명록(사과나무)과 문병
@@ -85,7 +85,7 @@
 | 침대 옆 작은 사과나무 | 링크가 켜져 있거나 사과가 있으면, **주인 화면에서만** 내 침대 발치 옆에 작은 나무가 보여요(사과 최대 8알). 다른 사람 화면에는 그리지 않아요. | 완성 | 링크를 만든 뒤 침대에 누워 있기 | `src/ward/apple-tree-view.ts`, `shared/ward-layout.ts`(appleTreeSpot) |
 | 링크로 온 사람의 방명록 | `/guestbook/{토큰}`으로 열면 3D 병동 없이 방명록만 떠요. 같은 나무가 보이고, 다른 분의 사과는 모양과 개수만, 내가 단 사과는 눌러서 내용을 볼 수 있어요. | 완성 | 받은 링크 열기 | `src/guestbook/visitor-page.ts`, `worker/index.ts`(`GET /api/guestbook/{토큰}`) |
 | 사과 달기 | [사과 하나 달아 주기] → 시트에서 이름(2~10자), 한마디 5개 가운데 하나, 짧은 글(선택, 100자). 달면 봉오리에서 사과로 톡 열리고(0.6초) 카드가 잠깐 떠올라요. 같은 링크로 1시간에 10개까지. | 완성 | 링크 화면 → [사과 하나 달아 주기] | `src/guestbook/apple-sheet.ts`, `shared/guestbook-rules.ts`, `worker/index.ts`(`POST /api/guestbook/{토큰}/apples`), `worker/directory.ts`(addApple) |
-| 병실에 문병 가기 | 링크 화면 맨 아래 [병실에 문병 가기 →] → "○○님에게 문병 왔어요" 입장 화면(평상복+꽃다발). 주인 침대 옆에서 시작하고, 침대는 차지하지 못하고, 정원에 세지 않아요. 한 링크로 동시에 3명. | 완성 | 링크 화면 → [병실에 문병 가기 →] → [문병 갈게요] | `src/net/guestbook-api.ts`(goVisit), `src/scene.ts`, `shared/visit-rules.ts`(checkVisit, visitorSpot) |
+| 병실에 문병 가기 | 링크 화면 맨 아래 [병실에 문병 가기 →] → "○○님에게 문병 왔어요" 입장 화면(옷 없이 꽃다발). 주인 침대 옆에서 시작하고, 침대는 차지하지 못하고, 정원에 세지 않아요. 한 링크로 동시에 3명. | 완성 | 링크 화면 → [병실에 문병 가기 →] → [문병 갈게요] | `src/net/guestbook-api.ts`(goVisit), `src/scene.ts`, `shared/visit-rules.ts`(checkVisit, visitorSpot) |
 | 주인이 없을 때 | 주인이 마지막에 있던 침대 옆에 서요. 그때 주인 침대로 빈 평안은 '내가 없는 동안 도착한 평안'으로 전해져요. | 완성 | 주인이 나간 뒤 문병 가서 주인 침대에 평안 빌기 | `shared/visit-rules.ts`(visitorDelivery), `worker/ward-room.ts`(leaveForVisitedOwner) |
 | 문병객 도착 알림 | 문병객이 오면 주인 화면에 "○○님이 문병 왔어요"가 떠요. | 완성 | 주인이 누워 있을 때 문병 가기 | `worker/ward-room.ts`(visitor-arrived), `src/scene.ts` |
 
