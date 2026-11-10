@@ -43,7 +43,8 @@ body {
 
 #notice {
   position: fixed;
-  top: calc(env(safe-area-inset-top) + 5.25rem);
+  /* 연결 안내 띠가 떠 있으면 그만큼 내려가요(top-stack.ts). */
+  top: calc(env(safe-area-inset-top) + 5.25rem + var(--banner-space, 0px));
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100vw - 1.5rem);
@@ -58,14 +59,20 @@ body {
   pointer-events: none;
 }
 
+/* 잠들기 버튼은 #action-bar 안, 행동 버튼 줄 위 오른쪽에 작게 붙어요. 메뉴가 열려도 그 위에 있어서 겹치지 않아요. */
 #sleep-root {
-  position: fixed;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
-  transform: translateX(-50%);
+  justify-self: end;
 }
 
-#sleep-root button,
+#action-bar .sleep-button {
+  flex: none;
+  min-height: 2.75rem;
+  padding: 0 0.95rem;
+  border-radius: 999px;
+  background: rgba(27, 36, 51, 0.85);
+  font-size: 0.875rem;
+}
+
 #sleep-overlay button {
   min-height: 2.75rem;
   padding: 0 1.25rem;
@@ -133,6 +140,11 @@ body {
   gap: 0.5rem;
   width: min(26rem, calc(100vw - 1.5rem));
   box-sizing: border-box;
+}
+
+/* 이모지가 붙어도 PC에서 글자가 한 줄에 들어가게 조금 넓혀요. */
+#action-bar {
+  width: min(32rem, calc(100vw - 1.5rem));
 }
 
 #entry {
@@ -269,6 +281,46 @@ a:focus-visible,
   word-break: keep-all;
 }
 
+/* 이모지 버튼이에요. 이모지는 aria-hidden이라 낭독기는 글자만 읽어요. */
+.emoji-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.button-emoji {
+  flex: none;
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+/* 휴대폰 세로 화면에서는 이모지를 글자 위에 둬서 네 버튼이 한 줄에 들어가요. */
+@media (max-width: 420px) {
+  #action-bar .action-buttons .emoji-button {
+    flex-direction: column;
+    padding: 0.4rem 0.125rem;
+    font-size: 0.8125rem;
+    letter-spacing: -0.02em;
+  }
+}
+
+/* 아주 좁은 휴대폰(360px 무렵)에서도 "목례와 한마디"가 한 줄에 들어가게 여백을 조금 줄여요. */
+@media (max-width: 380px) {
+  #action-bar {
+    width: calc(100vw - 1rem);
+  }
+
+  #action-bar .action-buttons {
+    gap: 0.25rem;
+  }
+
+  #action-bar .action-buttons .emoji-button {
+    padding-inline: 0;
+    font-size: 0.78rem;
+  }
+}
+
 .action-choices {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(6.5rem, 1fr));
@@ -378,7 +430,7 @@ a:focus-visible,
 
 #left-cards {
   position: fixed;
-  top: calc(env(safe-area-inset-top) + 3.5rem);
+  top: calc(env(safe-area-inset-top) + 3.5rem + var(--banner-space, 0px));
   left: 50%;
   transform: translateX(-50%);
   display: grid;
@@ -466,16 +518,20 @@ a:focus-visible,
   }
 }
 
+/* 위쪽 병동 표시와 설정 단추 바로 아래예요. --top-stack-bottom은 top-stack.ts가 재서 넣어요. 버튼들보다 위에 떠요. */
 #connection-banner {
   position: fixed;
   left: 50%;
-  bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
+  top: max(calc(env(safe-area-inset-top) + 0.75rem), calc(var(--top-stack-bottom, 0px) + 0.5rem));
   transform: translateX(-50%);
+  z-index: 40;
+  width: max-content;
   max-width: calc(100vw - 1.5rem);
   box-sizing: border-box;
   margin: 0;
   padding: 0.45rem 0.95rem;
-  border-radius: 999px;
+  border-radius: 1.1rem;
+  word-break: keep-all;
   background: rgba(255, 236, 205, 0.95);
   color: #3b2f22;
   font-size: 0.9375rem;

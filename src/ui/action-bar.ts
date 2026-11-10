@@ -7,7 +7,7 @@ import { gestureDuration } from "../avatar/pose";
 import type { PlayerControls } from "../ward/controls";
 import type { Offerings } from "../ward/offerings";
 import type { HeadLabels } from "./head-labels";
-import { createButton, createText } from "./widgets";
+import { createButton, createEmojiButton, createText } from "./widgets";
 import { SOLO_ONLY_TEXT } from "../../shared/offering-rules";
 import type { HugMenuState } from "../../shared/hug-rules";
 
@@ -310,7 +310,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   const lamp = lampButton();
 
   buttons.append(
-    createButton(
+    createEmojiButton(
+      "🙏",
       "평안 빌기",
       toggleable("pray", () => {
         pickTarget(
@@ -341,7 +342,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         );
       }),
     ),
-    createButton(
+    createEmojiButton(
+      "🙇",
       "목례와 한마디",
       toggleable("blessing", () => {
         openSheet("blessing", "어떤 한마디를 건넬까요?", [
@@ -358,7 +360,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         ]);
       }),
     ),
-    createButton(
+    createEmojiButton(
+      "🍀",
       "머리맡 선물",
       toggleable("gift", () => {
         const now = new Date();
@@ -393,7 +396,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   );
 
   function lampButton(): HTMLButtonElement {
-    return createButton("창가에 불빛", () => {
+    return createEmojiButton("🕯️", "창가에 불빛", () => {
       closeSheet();
       if (sink.online()) {
         // 서버가 받아 주면 빛이 창틀로 날아가고 안내가 떠요. 받지 않으면 이유가 떠요.

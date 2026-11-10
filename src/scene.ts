@@ -18,6 +18,7 @@ import { loadGuestToken, loadSeat, readWardParams, saveSeat, storageWorks, wardL
 import { bedGuide, bedGuideText } from "../shared/bed-rules";
 import { NO_STORAGE_TEXT } from "./ui/entry-text";
 import { createButton } from "./ui/widgets";
+import { followTopStack } from "./ui/top-stack";
 import { lampPlacedText, lampSlotPosition } from "../shared/offering-rules";
 import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
@@ -522,6 +523,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   const gateRoot = element("gate");
   const gate = gateRoot ? createGate(gateRoot) : null;
   const banner = element("connection-banner");
+  if (banner) followTopStack(banner);
   const setBanner = (text: string | null, action?: { label: string; run: () => void }): void => {
     if (!banner) return;
     banner.textContent = text ?? "";
