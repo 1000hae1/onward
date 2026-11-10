@@ -6,8 +6,11 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-11-05",
   "assets": {
-    // /api/*, /ws, /admin/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요(/guestbook/* 화면도 index.html로 가요).
-    "run_worker_first": ["/api/*", "/ws", "/admin", "/admin/*"],
+    // Worker가 index.html을 가져와 방명록 링크 미리보기(meta)를 바꿀 때 써요.
+    "binding": "ASSETS",
+    // /api/*, /ws, /admin/*, /guestbook/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요.
+    // /guestbook/*는 index.html의 미리보기 meta만 바꿔서 돌려줘요(worker/guestbook-page.ts).
+    "run_worker_first": ["/api/*", "/ws", "/admin", "/admin/*", "/guestbook", "/guestbook/*"],
     "not_found_handling": "single-page-application"
   },
   // Workers 로그예요. 자동 요청 로그(invocation_logs)는 꺼요. 요청 URL에 방명록 토큰이 들어갈 수 있어서예요.

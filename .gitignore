@@ -11,3 +11,4 @@ test-results
 playwright-report
 e2e/.tokens.json
 !.env.production
+*.local.md

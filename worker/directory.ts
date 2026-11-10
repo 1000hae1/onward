@@ -760,6 +760,18 @@ export class Directory extends DurableObject<Env> {
     };
   }
 
+  /**
+   * 링크 미리보기에 쓸 주인 닉네임 하나만이에요. 세지 않고 보기만 해요.
+   * 링크가 없거나 꺼졌거나, 주인 닉네임이 신고로 가려졌거나 운영자가 되돌린 닉네임이면 null이에요.
+   */
+  async guestbookPreviewName(token: string): Promise<string | null> {
+    const link = await this.linkForToken(token);
+    if (!link || link.off) return null;
+    const standing = await this.standing(link.owner, null);
+    if (standing.blocked || standing.hidden || standing.bannedNickname === link.nickname) return null;
+    return link.nickname;
+  }
+
   /** 링크로 온 사람이 사과를 달아요. 토큰, 꺼짐, 시간당 10개, 이름과 짧은 글을 모두 여기서 살펴요. */
   async addApple(token: string, writer: string, draft: AppleDraft, nowMs: number): Promise<AddAppleResult> {
     const sql = this.ctx.storage.sql;
