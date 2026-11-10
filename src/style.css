@@ -556,6 +556,10 @@ a:focus-visible,
   color: #ffe2b8;
 }
 
+.settings-feedback {
+  margin-top: 0.5rem;
+}
+
 .settings-note {
   opacity: 0.85;
   font-size: 0.8125rem !important;
@@ -634,6 +638,16 @@ a:focus-visible,
 .farewell-card {
   padding: 1.25rem 1rem;
   gap: 0.75rem;
+}
+
+.farewell-feedback {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  font-size: 0.8125rem;
+  color: #ffe2b8;
+  opacity: 0.85;
 }
 
 .farewell-card h1 {

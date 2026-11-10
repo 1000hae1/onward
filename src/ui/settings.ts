@@ -2,6 +2,7 @@ import type { Profile } from "./profile";
 import type { ViewPrefs } from "./view-prefs";
 import type { QualityChoice } from "../ward/quality";
 import { createButton, createChoiceRow, createText } from "./widgets";
+import { FEEDBACK_FORM_URL } from "../config";
 
 export interface SettingsOptions {
   initial: Profile;
@@ -26,6 +27,13 @@ function link(text: string, href: string, newTab: boolean): HTMLAnchorElement {
     anchor.target = "_blank";
     anchor.rel = "noopener noreferrer";
   }
+  return anchor;
+}
+
+/** [의견보내기]예요. 새 탭으로 열어요. */
+function feedbackLink(): HTMLAnchorElement {
+  const anchor = link("의견보내기(1분이면 돼요)", FEEDBACK_FORM_URL, true);
+  anchor.classList.add("settings-feedback");
   return anchor;
 }
 
@@ -85,6 +93,7 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
     qualityNote,
     createText("p", "글자 크게"),
     largeTextRow.element,
+    feedbackLink(),
     (() => {
       const help = document.createElement("div");
       help.className = "settings-help";
