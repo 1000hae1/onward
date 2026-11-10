@@ -1,5 +1,6 @@
 import { adminBlockSchema, adminGuestActionSchema, PROTOCOL_VERSION } from "../shared/protocol.ts";
 import { checkAdminKey } from "./security.ts";
+import { readMetricsDays } from "../shared/metrics-rules.ts";
 
 /**
  * 운영자 API예요. 화면은 없고 Authorization 헤더의 ADMIN_KEY로만 들어와요.
@@ -45,6 +46,12 @@ export async function handleAdmin(request: Request, env: Env, url: URL, ipHash: 
     const raw = url.searchParams.get("limit");
     const limit = raw && /^\d{1,3}$/.test(raw) ? Math.min(MAX_LIMIT, Math.max(1, Number(raw))) : DEFAULT_LIMIT;
     return reply({ reports: await directory.listReports(limit) });
+  }
+
+  // 날짜별 숫자 지표예요. 사람을 알 수 있는 값은 없어요. ?days=1~400(기본 30)
+  if (url.pathname === "/admin/metrics" && request.method === "GET") {
+    const days = readMetricsDays(url.searchParams.get("days"));
+    return reply({ days, metrics: await directory.metrics(days) });
   }
 
   if (request.method !== "POST") return reply({ error: "not_found" }, 404);

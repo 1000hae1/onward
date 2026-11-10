@@ -26,11 +26,14 @@ Worker는 비밀값 세 개가 있어야 돌아가요. 모두 32자 이상의 �
 # 개발: .dev.vars (git에 올라가지 않아요)
 openssl rand -base64 48   # 값 만들기
 
-# 배포
-npx wrangler secret put TOKEN_SECRET
-npx wrangler secret put IP_SALT
-npx wrangler secret put ADMIN_KEY
+# 배포: 환경마다 따로 넣어요(production은 onward, 미리보기는 onward-preview)
+npx wrangler secret put TOKEN_SECRET --name onward
+npx wrangler secret put IP_SALT --name onward
+npx wrangler secret put ADMIN_KEY --name onward
 ```
+
+배포는 `npm run deploy:preview`로 미리보기에서 확인한 뒤 `npm run deploy`로 해요.
+되돌리기, 비밀값 바꾸기, 무료 한도는 [docs/operations.md](docs/operations.md)에 있어요.
 
 비밀값은 코드, 로그, 응답 어디에도 남기지 않아요. 터미널 기록에도 남지 않게 아래 예시는 환경 변수로 넘겨요.
 
@@ -38,13 +41,23 @@ npx wrangler secret put ADMIN_KEY
 
 화면은 없고 API만 있어요. `Authorization: Bearer <ADMIN_KEY>` 헤더로 들어와요.
 키를 1시간에 10번 틀리면 그 IP 해시에서는 1시간 동안 `429`예요.
-모든 POST 본문에는 프로토콜 버전 `v`(지금은 `3`)와 `reason`(1~200자, audit_log에만 남아요)을 담아요.
+모든 POST 본문에는 프로토콜 버전 `v`(지금은 `5`)와 `reason`(1~200자, audit_log에만 남아요)을 담아요.
 운영자 작업은 모두 `audit_log`에 남고, 이 기록을 고치거나 지우는 API는 없어요(1년 뒤 자동 삭제).
 
 ```sh
 export ONWARD=https://<배포 주소>        # 개발이면 http://localhost:5173
 read -rs ADMIN_KEY && export ADMIN_KEY  # 키를 화면에 보이지 않게 입력해요
 ```
+
+### 날짜별 지표 보기
+
+```sh
+curl -s "$ONWARD/admin/metrics?days=30" -H "Authorization: Bearer $ADMIN_KEY"
+```
+
+답의 `metrics[]`는 최근 날짜부터예요. 하루 입장 수(`entries`), 서로 다른 사람 수(`uniqueGuests`),
+다시 온 사람 비율(`returningRate`), 평균 머문 시간(`avgStayMinutes`), 평안 빌기 수(`blessings`),
+문병 링크로 들어온 수(`visitEntries`)만 있어요. 사람을 알 수 있는 값은 없어요.
 
 ### 최근 신고 보기
 
@@ -60,11 +73,11 @@ curl -s "$ONWARD/admin/reports?limit=50" -H "Authorization: Bearer $ADMIN_KEY"
 ```sh
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
 
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
+  -d '{"v":5,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
 ```
 
 막힌 사람에게는 "지금은 들어올 수 없어요"만 보여요. 지금 병실에 있으면 바로 내보내요. 차단은 30일 뒤에 풀려요.
@@ -74,7 +87,7 @@ curl -s -X POST "$ONWARD/admin/block" \
 ```sh
 curl -s -X POST "$ONWARD/admin/reset-nickname" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
 ```
 
 가림도 함께 풀려요. 같은 닉네임으로 다시 바꾸면 서버가 또 자동 닉네임으로 바꿔요. 신고된 적이 있는 사람에게만 할 수 있어요.
@@ -84,7 +97,7 @@ curl -s -X POST "$ONWARD/admin/reset-nickname" \
 ```sh
 curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
 ```
 
 ### 가림 풀기 (살펴보니 문제가 없을 때)
@@ -92,18 +105,18 @@ curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
 ```sh
 curl -s -X POST "$ONWARD/admin/clear-flag" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":4,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
+  -d '{"v":5,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
 ```
 
 ### 답의 모양
 
 | 상태 | 본문 |
 | --- | --- |
-| 200 | `{"v":4,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
-| 400 | `{"v":4,"error":"bad_request"}` |
-| 401 | `{"v":4,"error":"unauthorized"}` |
-| 404 | `{"v":4,"ok":false,"error":"unknown_guest"}` 또는 `{"v":4,"error":"not_found"}` |
-| 429 | `{"v":4,"error":"too_many"}` |
+| 200 | `{"v":5,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
+| 400 | `{"v":5,"error":"bad_request"}` |
+| 401 | `{"v":5,"error":"unauthorized"}` |
+| 404 | `{"v":5,"ok":false,"error":"unknown_guest"}` 또는 `{"v":5,"error":"not_found"}` |
+| 429 | `{"v":5,"error":"too_many"}` |
 
 ## 안전장치 요약
 

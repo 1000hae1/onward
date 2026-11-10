@@ -36,6 +36,8 @@ export interface Avatar {
   apply(pose: Pose): void;
   /** 얼굴 가운데가 있는 곳을 target에 써요. */
   headWorld(target: Vector3): Vector3;
+  /** 멀리 있을 때 팔과 발을 빼고 몸만 그려요. 그리는 횟수가 다섯 번에서 한 번으로 줄어요. */
+  setSimple(simple: boolean): void;
 }
 
 /**
@@ -97,6 +99,12 @@ export function createAvatar(choice: AvatarChoice): Avatar {
     },
     headWorld(target) {
       return head.getWorldPosition(target);
+    },
+    setSimple(simple) {
+      armLeft.visible = !simple;
+      armRight.visible = !simple;
+      footLeft.visible = !simple;
+      footRight.visible = !simple;
     },
     apply(pose) {
       base.position.y = pose.bedLift * BED_STAND_Y + pose.bedLie * BED_LIE_RAISE;

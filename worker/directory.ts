@@ -32,6 +32,13 @@ import {
 import type { Moderation, ReportResult, RetentionRule } from "../shared/safety-rules.ts";
 import { koreanDay } from "../shared/ward-rules.ts";
 import { countVisitDay, VISIT_DAYS_KEEP_MS } from "../shared/return-rules.ts";
+import { presenceChange, statsTimestamp, tally } from "../shared/presence-rules.ts";
+import type { Headcount } from "../shared/presence-rules.ts";
+import { cleanDepartures, METRICS_KEEP_DAYS, sumDepartures, toMetricsView } from "../shared/metrics-rules.ts";
+import type { MetricsRow, MetricsView } from "../shared/metrics-rules.ts";
+
+/** 날짜별 지표에 더할 수 있는 칸이에요. 표 이름과 열 이름을 SQL에 넣으므로 이 목록 밖의 값은 받지 않아요. */
+type MetricColumn = "entries" | "unique_guests" | "returning_guests" | "stay_ms" | "stays" | "blessings" | "visit_entries";
 
 /** 병실 서버가 신고를 넘길 때 담는 것이에요. 해시와 공개 번호만 있어요. */
 export interface ReportInput {
@@ -91,6 +98,8 @@ const RETENTION: readonly RetentionRule[] = [
   { table: "audit_log", kind: "at", column: "at", keepMs: KEEP.audit },
   // 다녀간 날 수와 퇴원 표시는 마지막으로 다녀간 뒤 180일이 지나면 지워요.
   { table: "guest_days", kind: "at", column: "last_at", keepMs: VISIT_DAYS_KEEP_MS },
+  // 날짜별 숫자 지표예요. 400일이 지나면 지워요.
+  { table: "metrics_daily", kind: "at", column: "created", keepMs: METRICS_KEEP_DAYS * 24 * 60 * 60 * 1000 },
   { table: "discharged", kind: "at", column: "at", keepMs: VISIT_DAYS_KEEP_MS },
 ];
 
@@ -205,6 +214,72 @@ export class Directory extends DurableObject<Env> {
       guest_hash TEXT PRIMARY KEY, days INTEGER NOT NULL, last_day TEXT NOT NULL, last_at INTEGER NOT NULL)`);
     // 퇴원한 사람이에요. 다시 들어오면 "다시 들러 주셨네요"로 맞고 지워요. 다른 판단에는 쓰지 않아요.
     sql.exec(`CREATE TABLE IF NOT EXISTS discharged (guest_hash TEXT PRIMARY KEY, at INTEGER NOT NULL)`);
+    // 병실마다 지금 있는 사람 수예요. 숫자와 병실 이름만 둬요. 아무도 없으면 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS room_presence (
+      room TEXT PRIMARY KEY, patients INTEGER NOT NULL, visitors INTEGER NOT NULL, at INTEGER NOT NULL)`);
+    // 날짜(한국)별 숫자 지표예요. 사람을 가리키는 값은 하나도 없어요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS metrics_daily (
+      day TEXT PRIMARY KEY, created INTEGER NOT NULL,
+      entries INTEGER NOT NULL DEFAULT 0, unique_guests INTEGER NOT NULL DEFAULT 0,
+      returning_guests INTEGER NOT NULL DEFAULT 0, stay_ms INTEGER NOT NULL DEFAULT 0,
+      stays INTEGER NOT NULL DEFAULT 0, blessings INTEGER NOT NULL DEFAULT 0,
+      visit_entries INTEGER NOT NULL DEFAULT 0)`);
+  }
+
+  /* ───────────── 날짜별 지표 ───────────── */
+
+  /** 오늘(한국 날짜) 지표에 더해요. */
+  private bump(nowMs: number, add: Partial<Record<MetricColumn, number>>): void {
+    const entries = Object.entries(add).filter(([, value]) => typeof value === "number" && value > 0) as [MetricColumn, number][];
+    if (entries.length === 0) return;
+    const sql = this.ctx.storage.sql;
+    const day = koreanDay(new Date(nowMs));
+    sql.exec("INSERT OR IGNORE INTO metrics_daily (day, created) VALUES (?, ?)", day, nowMs);
+    const set = entries.map(([column]) => `${column} = ${column} + ?`).join(", ");
+    sql.exec(`UPDATE metrics_daily SET ${set} WHERE day = ?`, ...entries.map(([, value]) => value), day);
+  }
+
+  /** 운영자 API로 보는 최근 날짜별 지표예요. 최근 날짜가 먼저예요. */
+  async metrics(days: number): Promise<MetricsView[]> {
+    return this.ctx.storage.sql
+      .exec<{ [K in keyof MetricsRow]: MetricsRow[K] }>(
+        `SELECT day, entries, unique_guests, returning_guests, stay_ms, stays, blessings, visit_entries
+         FROM metrics_daily ORDER BY day DESC LIMIT ?`,
+        days,
+      )
+      .toArray()
+      .map(toMetricsView);
+  }
+
+  /* ───────────── 접속자 수 ───────────── */
+
+  /** 병실이 들고 날 때 지금 인원을 알려 줘요. 차이값이 아니라 현재값이라 덮어써요. */
+  async reportPresence(room: string, count: Headcount, nowMs: number, departures: unknown = []): Promise<void> {
+    // 정말 나간 사람들의 머문 시간과 평안 빌기 수예요. 인원 보고에 실려 와서 요청이 늘지 않아요.
+    const left = sumDepartures(cleanDepartures(departures));
+    this.bump(nowMs, { stay_ms: left.stayMs, stays: left.stays, blessings: left.blessings });
+    if (left.stays > 0) await this.keepTidy();
+    const change = presenceChange(room, count, nowMs);
+    const sql = this.ctx.storage.sql;
+    if (change.kind === "delete") sql.exec("DELETE FROM room_presence WHERE room = ?", change.room);
+    if (change.kind === "upsert") {
+      sql.exec(
+        "INSERT OR REPLACE INTO room_presence (room, patients, visitors, at) VALUES (?, ?, ?, ?)",
+        change.row.room,
+        change.row.patients,
+        change.row.visitors,
+        change.row.at,
+      );
+    }
+  }
+
+  /** 공개 접속자 수예요. 숫자만 돌려줘요. 오래 소식이 없는 병실은 여기서 지워요. */
+  async presenceStats(nowMs: number): Promise<{ online: number; wards: number; updatedAt: string }> {
+    const sql = this.ctx.storage.sql;
+    const rows = sql.exec<{ room: string; patients: number; visitors: number; at: number }>("SELECT room, patients, visitors, at FROM room_presence").toArray();
+    const result = tally(rows, nowMs);
+    for (const room of result.stale) sql.exec("DELETE FROM room_presence WHERE room = ?", room);
+    return { online: result.online, wards: result.wards, updatedAt: statsTimestamp(nowMs) };
   }
 
   /* ───────────── 보관 기간 ───────────── */
@@ -496,18 +571,26 @@ export class Directory extends DurableObject<Env> {
         owner,
       )
       .toArray();
-    if (rows.length > 0) sql.exec("DELETE FROM inbox WHERE owner = ?", owner);
+    // 여기서는 지우지 않아요. 화면이 받았다고 알리면(ackInbox) 그때 지워요. 연결이 끊겨도 잃어버리지 않게요.
     const inbox = rows.map((row) =>
       toCard({ ...row, kind: row.kind === "gift" ? "gift" : "bless" } satisfies StoredBlessing),
     );
-    const visitDays = this.countDay(owner, nowMs);
+    const day = this.countDay(owner, nowMs);
+    const visitDays = day.days;
+    // 오늘 처음 온 사람이면 서로 다른 사람 수에 더하고, 예전 날에도 왔으면 다시 온 사람에도 더해요.
+    this.bump(nowMs, { entries: 1, unique_guests: day.counted ? 1 : 0, returning_guests: day.counted && day.before ? 1 : 0 });
     const welcomeBack = sql.exec("DELETE FROM discharged WHERE guest_hash = ?", owner).rowsWritten > 0;
     await this.keepTidy();
     return { address, inbox, linked, visitDays, welcomeBack };
   }
 
-  /** 오늘 다녀간 것을 세요. 같은 한국 날짜에는 한 번만이에요. 지금까지의 날 수를 돌려줘요. */
-  private countDay(owner: string, nowMs: number): number {
+  /** 화면이 받았다고 알린 평안을 지워요. upTo 시각까지 남겨진 것만이에요. 그사이 새로 온 것은 남아요. */
+  async ackInbox(owner: string, upTo: number): Promise<void> {
+    this.ctx.storage.sql.exec("DELETE FROM inbox WHERE owner = ? AND at <= ?", owner, upTo);
+  }
+
+  /** 오늘 다녀간 것을 세요. 같은 한국 날짜에는 한 번만이에요. 지금까지의 날 수와 오늘 처음인지, 예전에 온 적 있는지예요. */
+  private countDay(owner: string, nowMs: number): { days: number; counted: boolean; before: boolean } {
     const sql = this.ctx.storage.sql;
     const row = sql
       .exec<{ days: number; last_day: string }>("SELECT days, last_day FROM guest_days WHERE guest_hash = ?", owner)
@@ -520,7 +603,7 @@ export class Directory extends DurableObject<Env> {
       next.lastDay,
       nowMs,
     );
-    return next.days;
+    return { days: next.days, counted: next.counted, before: row !== undefined };
   }
 
   /** 퇴원했어요. 다음 입장 때 한 번 반겨 주려고만 적어 둬요. */
@@ -664,6 +747,7 @@ export class Directory extends DurableObject<Env> {
     sql.exec("INSERT INTO visit_attempt (owner, at) VALUES (?, ?)", owner, nowMs);
     sql.exec("INSERT INTO visit_session (id, owner, started) VALUES (?, ?, ?)", session, owner, nowMs);
     sql.exec("UPDATE visit_link SET visits = visits + 1 WHERE owner = ?", owner);
+    this.bump(nowMs, { visit_entries: 1 });
     await this.keepTidy();
     return { kind: "ok", owner, ownerNickname: check.link.nickname, bed: check.link.bed, session };
   }

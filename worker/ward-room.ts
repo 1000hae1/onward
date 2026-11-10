@@ -56,6 +56,7 @@ import {
 import type { Moderation, RateState, RetentionRule } from "../shared/safety-rules.ts";
 import { autoNickname } from "../shared/nickname.ts";
 import { hashGuest, IP_HASH_PATTERN, issueGuest, requireSecret, verifyGuest } from "./security.ts";
+import { logError } from "./log.ts";
 import { visitorDelivery, visitorMay, visitorSpot } from "../shared/visit-rules.ts";
 import type { VerifiedHello, VisitRole } from "../shared/ward-rules.ts";
 import { checkHugAnswer, checkHugRequest, HUG_ANSWER_MS, HUG_REPEAT_MS, hugSpot, hugStillPossible } from "../shared/hug-rules.ts";
@@ -65,6 +66,8 @@ import { addPeace } from "../shared/planter.ts";
 import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
 import { shouldGreet } from "../shared/return-rules.ts";
 import { hugAvailable } from "../shared/ward-rules.ts";
+import { headcount, shouldReport } from "../shared/presence-rules.ts";
+import { departureOf, MAX_DEPARTURES_PER_REPORT } from "../shared/metrics-rules.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
@@ -75,6 +78,8 @@ const REPLACED_CODE = 4000;
 const FULL_CODE = 4001;
 /** 들어올 수 없어요(차단, 새 게스트를 너무 많이 만듦). 화면은 다시 잇지 않아요. */
 const DENIED_CODE = 4003;
+/** 들어오는 일을 처리하지 못했어요. 화면은 다시 이어요. */
+const ENTRY_FAILED_CODE = 1011;
 /** 메시지를 너무 빨리 계속 보냈어요. */
 const TOO_MANY_CODE = 4008;
 /** Worker가 IP 해시를 담아 보내는 내부 헤더예요. Worker가 항상 덮어써서 화면이 바꿀 수 없어요. */
@@ -150,6 +155,12 @@ export class WardRoom extends DurableObject<Env> {
     // 답을 기다리는 안아 주기예요. 타이머 없이, 답이 오면 시각을 견주고 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS hug_pending (
       id TEXT PRIMARY KEY, from_id TEXT NOT NULL, from_key TEXT NOT NULL, to_id TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // directory에 마지막으로 알린 인원이에요. 숫자만 둬요. 바뀌었을 때만 다시 알리려고 둬요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS presence_sent (
+      patients INTEGER NOT NULL, visitors INTEGER NOT NULL, at INTEGER NOT NULL)`);
+    // 정말 나간 사람의 머문 시간과 평안 빌기 수예요. 누구인지는 적지 않아요. 다음 인원 보고에 실어 보내고 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS departures (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, stay_ms INTEGER NOT NULL, blessings INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -182,6 +193,15 @@ export class WardRoom extends DurableObject<Env> {
   }
 
   async webSocketMessage(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
+    try {
+      await this.receive(ws, raw);
+    } catch (error) {
+      // 메시지 하나를 처리하다 잘못돼도 연결은 그대로 둬요. 오류 종류만 남겨요.
+      logError("ward:message", error);
+    }
+  }
+
+  private async receive(ws: WebSocket, raw: string | ArrayBuffer): Promise<void> {
     // 1초에 10개를 넘으면 읽지 않아요. 넘친 초가 3번 이어지면 연결을 닫아요.
     const rate = rateStep(this.rates.get(ws) ?? newRateState(), Date.now());
     this.rates.set(ws, rate.state);
@@ -203,7 +223,20 @@ export class WardRoom extends DurableObject<Env> {
     if (!attachment) return;
 
     if (message.type === "hello") {
-      await this.hello(ws, attachment, message);
+      try {
+        await this.hello(ws, attachment, message);
+      } catch (error) {
+        // 들어오는 중에 잘못되면 화면이 "연결 중"에 멈추지 않게 알리고 닫아요. 화면은 잠시 뒤 다시 이어요.
+        logError("ward:hello", error);
+        if (!attachment.joined) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "entry-failed" });
+          try {
+            ws.close(ENTRY_FAILED_CODE, "entry-failed");
+          } catch {
+            // 이미 닫혔으면 그대로예요.
+          }
+        }
+      }
       return;
     }
     if (!attachment.joined) return;
@@ -239,7 +272,10 @@ export class WardRoom extends DurableObject<Env> {
     }
     const next = earlierAlarm(nextAlarm, due);
     if (next !== null) await this.ctx.storage.setAlarm(next);
-    if (expired.length > 0) this.refreshCatVisits(before);
+    if (expired.length > 0) {
+      this.refreshCatVisits(before);
+      await this.syncPresence(now);
+    }
   }
 
   private retentionDue(): number | null {
@@ -309,7 +345,10 @@ export class WardRoom extends DurableObject<Env> {
       this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), guest.key);
       this.broadcast({ kind: "update", guest: toPublic(next) });
     }
-    if (left) this.refreshCatVisits(before);
+    if (left) {
+      this.refreshCatVisits(before);
+      await this.syncPresence(Date.now());
+    }
     return affected;
   }
 
@@ -407,6 +446,14 @@ export class WardRoom extends DurableObject<Env> {
 
   /** 유예가 끝나 정말 나간 사람이에요. 문병객이면 자리를 돌려주고, 링크 주인이면 마지막 위치를 알려요. */
   private async leftWard(key: string, record: GuestRecord): Promise<void> {
+    const departure = departureOf(record, Date.now());
+    if (departure) {
+      this.ctx.storage.sql.exec(
+        "INSERT INTO departures (stay_ms, blessings) VALUES (?, ?)",
+        departure.stayMs,
+        departure.blessings,
+      );
+    }
     if (record.visit) await this.directory().releaseVisit(record.visit.session);
     if (record.linked) await this.directory().reportLocation(key, { ...this.place(), bed: record.bed });
   }
@@ -462,6 +509,7 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "leave", id: attachment.record.id });
       if (attachment.record.key) await this.leftWard(attachment.record.key, attachment.record);
       this.refreshCatVisits(before);
+      await this.syncPresence(Date.now());
       return;
     }
     // 바로 내보내지 않고 30초 동안 자리를 맡아 둬요. 다른 사람에게는 그대로 보여요.
@@ -476,6 +524,41 @@ export class WardRoom extends DurableObject<Env> {
     // alarm은 이보다 이른 것이 없을 때만 맞춰요.
     const wanted = alarmToSet(await this.ctx.storage.getAlarm(), away.until);
     if (wanted !== null) await this.ctx.storage.setAlarm(wanted);
+    // 맡아 둔 자리도 인원에 넣어서 보통은 숫자가 그대로예요. 오래된 보고를 새로 고칠 때만 알려요.
+    await this.syncPresence(now);
+  }
+
+  /**
+   * 들고 날 때 불러요. 이 병실의 지금 인원(잠시 끊긴 사람 포함)을 directory에 알려요.
+   * 지난번에 알린 값과 같으면 directory를 깨우지 않아요. 주기적으로 부르지 않아요.
+   */
+  private async syncPresence(nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const last = sql.exec<{ patients: number; visitors: number; at: number }>("SELECT patients, visitors, at FROM presence_sent").toArray()[0] ?? null;
+    const current = headcount(this.everyone());
+    const departures = sql
+      .exec<{ id: number; stay_ms: number; blessings: number }>(
+        "SELECT id, stay_ms, blessings FROM departures ORDER BY id LIMIT ?",
+        MAX_DEPARTURES_PER_REPORT,
+      )
+      .toArray();
+    if (!shouldReport(last, current, nowMs) && departures.length === 0) return;
+    const { ward, instance } = this.place();
+    try {
+      await this.directory().reportPresence(
+        `ward-${ward}-${instance}`,
+        current,
+        nowMs,
+        departures.map((row) => ({ stayMs: row.stay_ms, blessings: row.blessings })),
+      );
+    } catch {
+      // 알리지 못해도 병실은 그대로 돌아가요. 다음 이벤트 때 현재값으로 다시 맞춰요. 퇴장 숫자도 남겨 둬요.
+      return;
+    }
+    const sent = departures.at(-1);
+    if (sent) sql.exec("DELETE FROM departures WHERE id <= ?", sent.id);
+    sql.exec("DELETE FROM presence_sent");
+    sql.exec("INSERT INTO presence_sent (patients, visitors, at) VALUES (?, ?, ?)", current.patients, current.visitors, nowMs);
   }
 
   private async hello(
@@ -618,6 +701,8 @@ export class WardRoom extends DurableObject<Env> {
     // 링크 주인이면 이번 주소와 병동 위치를 directory에 함께 적어요. 문병객은 자기 링크의 위치를 바꾸지 않아요.
     let record: GuestRecord = {
       ...admission.record,
+      // 30초 안에 돌아온 사람은 처음 들어온 시각을 그대로 써요.
+      joinedAt: admission.record.joinedAt ?? now,
       key,
       hidden: standing.hidden,
       ...(standing.bannedNickname ? { bannedNickname: standing.bannedNickname } : {}),
@@ -668,6 +753,7 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "join", guest: toPublic(record) }, ws);
     }
     this.refreshCatVisits(before);
+    await this.syncPresence(now);
     this.countVisitor(key, now);
     await this.openWindowIfMorning(roomAt(record.x, record.z)?.index ?? null, now);
     await this.keepTidy();
@@ -766,14 +852,14 @@ export class WardRoom extends DurableObject<Env> {
           // 주인이 자리에 없으면 주인 침대로 보낸 평안은 주인에게 전해요. 빈 침대에는 남기지 않아요.
           const result = await this.leaveForVisitedOwner(record, "bless", null, nowMs);
           if (result !== "saved") return deny("bless", result === "once-a-day" ? "once-a-day" : "no-target");
-          save({ ...record, lastAction: { ...record.lastAction, bless: nowMs } });
+          save({ ...record, lastAction: { ...record.lastAction, bless: nowMs }, blessings: (record.blessings ?? 0) + 1 });
           this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
           this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
           this.countBlessing(nowMs);
           this.addPeaceTo(peaceRoom);
           return;
         }
-        save({ ...record, lastAction: { ...record.lastAction, bless: nowMs } });
+        save({ ...record, lastAction: { ...record.lastAction, bless: nowMs }, blessings: (record.blessings ?? 0) + 1 });
         this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
         // 빈 침대면 다음에 누울 사람을 위해 남겨 둬요.
         if (target.bedId !== null && target.targetId === null && this.bedIsEmpty(target.bedId)) {
@@ -1036,6 +1122,12 @@ export class WardRoom extends DurableObject<Env> {
           }
         }
         this.refreshCatVisits(before);
+        return;
+      }
+      case "inbox-ack": {
+        // 화면이 받은 데까지만 지워요. 받지 못했으면 다음 입장 때 다시 전해요.
+        const key = record.key ?? (await hashGuest(record.guestId));
+        await this.directory().ackInbox(key, message.upTo);
         return;
       }
       case "lamp": {

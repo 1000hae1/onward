@@ -1,10 +1,9 @@
 /** 문병 링크의 화면 쪽이에요. 주소에서 토큰을 읽고, 주인을 미리 확인하고, 링크를 공유해요. */
 import { PROTOCOL_VERSION, visitPreviewSchema } from "../../shared/protocol";
 import type { VisitPreview } from "../../shared/protocol";
-import { readVisitPath, VISIT_SHARE_TEXT, VISIT_TOKEN_PATTERN } from "../../shared/visit-rules";
+import { VISIT_SHARE_TEXT, VISIT_TOKEN_PATTERN } from "../../shared/visit-rules";
+import { stashVisitPath, VISITING_KEY } from "./visit-path";
 
-/** 이번 탭에서 따라 들어온 링크예요. 새로고침해도 이어지게 이 탭에만 둬요. */
-const VISITING_KEY = "onward.visiting";
 /** 내가 만든 링크예요. 토큰 원본은 서버에 없어서 다시 공유하려면 이 기기에 둬야 해요. */
 const MY_LINK_KEY = "onward.myVisitLink";
 
@@ -13,16 +12,9 @@ const MY_LINK_KEY = "onward.myVisitLink";
  * 어깨 너머로 보이거나 다른 곳으로 퍼지지 않게요. 새로고침하면 탭에 둔 토큰을 써요.
  */
 export function takeVisitToken(): string | null {
-  const fromPath = readVisitPath(window.location.pathname);
-  if (fromPath) {
-    write(() => sessionStorage, VISITING_KEY, fromPath);
-    try {
-      window.history.replaceState(null, "", `/${window.location.search}`);
-    } catch {
-      // 주소를 바꾸지 못해도 들어가는 데는 상관없어요.
-    }
-    return fromPath;
-  }
+  // 보통은 main.ts가 이미 옮겨 뒀어요. 그래도 주소에 남아 있으면 여기서 옮겨요.
+  const fromPath = stashVisitPath();
+  if (fromPath) return fromPath;
   const saved = read(() => sessionStorage, VISITING_KEY);
   return saved && VISIT_TOKEN_PATTERN.test(saved) ? saved : null;
 }

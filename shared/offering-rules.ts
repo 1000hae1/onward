@@ -31,3 +31,11 @@ export function canAddLamp(count: number): boolean {
 export function lampSlotPosition(slot: number): number {
   return (slot + 0.5) / LAMPS_PER_WINDOW * 2 - 1;
 }
+
+/** 내가 창가에 불빛을 놓았을 때의 안내예요. count는 서버가 알려 준 이 병실의 오늘 불빛 수예요. */
+export function lampPlacedText(count: number): string {
+  return `창가에 불빛을 놓았어요. 오늘 이 병실에 ${count}개예요.`;
+}
+
+/** 혼자 머무는 동안 놓은 것은 이 화면에만 보여요. */
+export const SOLO_ONLY_TEXT = "혼자 머무는 중이라 내 화면에만 보여요.";

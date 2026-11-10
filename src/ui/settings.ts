@@ -1,16 +1,15 @@
-import { swapNicknameAnimal } from "../../shared/nickname";
-import { SPECIES, speciesById } from "../avatar/species";
-import type { Outfit, SpeciesId } from "../avatar/species";
-import { avatarPortrait } from "../avatar/portraits";
 import type { Profile } from "./profile";
-import { createButton, createChoiceRow, createPictureChoiceRow, createText } from "./widgets";
+import type { ViewPrefs } from "./view-prefs";
+import type { QualityChoice } from "../ward/quality";
+import { createButton, createChoiceRow, createText } from "./widgets";
 
 export interface SettingsOptions {
   initial: Profile;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
-  /** 문병 링크로 왔으면 옷은 바꿀 수 없어요. */
-  lockOutfit?: boolean;
+  /** 가볍게 보기와 글자 크게예요. 이 기기에만 저장해요. */
+  view: ViewPrefs;
+  onViewChange(view: ViewPrefs): void;
 }
 
 export interface Settings {
@@ -30,9 +29,13 @@ function link(text: string, href: string, newTab: boolean): HTMLAnchorElement {
   return anchor;
 }
 
-/** 입장한 뒤에 모습과 고양이를 바꾸는 패널이에요. 오른쪽 위 버튼으로 열어요. */
+/**
+ * 입장한 뒤에 고양이, 안아 주기 요청, 보기를 바꾸는 패널이에요. 오른쪽 위 버튼으로 열어요.
+ * 동물과 닉네임은 입장 화면에서만 골라요.
+ */
 export function createSettings(root: HTMLElement, options: SettingsOptions): Settings {
   let profile = options.initial;
+  let view = options.view;
   let open = false;
 
   const toggle = createButton("설정", () => setOpen(!open));
@@ -41,23 +44,6 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
   const sheet = document.createElement("div");
   sheet.className = "ward-panel settings-sheet";
 
-  const speciesRow = createPictureChoiceRow<SpeciesId>(
-    SPECIES.map((spec) => ({ value: spec.id, label: spec.label })),
-    (species) => {
-      const nickname = profile.nicknameAuto
-        ? swapNicknameAnimal(profile.nickname, speciesById(species).label)
-        : profile.nickname;
-      change({ ...profile, species, nickname });
-    },
-  );
-  const outfitRow = createChoiceRow<Outfit>(
-    [
-      { value: "patient", label: "환자" },
-      { value: "visitor", label: "문병객" },
-    ],
-    (outfit) => change({ ...profile, outfit }),
-  );
-  outfitRow.element.hidden = options.lockOutfit === true;
   const catRow = createChoiceRow<boolean>(
     [
       { value: true, label: "켜기" },
@@ -72,14 +58,33 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
     ],
     (hugsOff) => change({ ...profile, hugsOff }),
   );
+  const qualityRow = createChoiceRow<QualityChoice>(
+    [
+      { value: "auto", label: "자동" },
+      { value: "light", label: "켜기" },
+      { value: "normal", label: "끄기" },
+    ],
+    (quality) => changeView({ ...view, quality }),
+  );
+  const largeTextRow = createChoiceRow<boolean>(
+    [
+      { value: true, label: "켜기" },
+      { value: false, label: "끄기" },
+    ],
+    (largeText) => changeView({ ...view, largeText }),
+  );
+  const qualityNote = createText("p", "가볍게 보면 배터리를 덜 써요. 가장자리 매끄럽게 하기는 다음에 열 때부터 바뀌어요.");
+  qualityNote.className = "settings-note";
   sheet.append(
-    createText("p", "모습 바꾸기"),
-    speciesRow.element,
-    outfitRow.element,
     createText("p", "고양이와 함께 다니기"),
     catRow.element,
     createText("p", "안아 주기 요청"),
     hugRow.element,
+    createText("p", "가볍게 보기"),
+    qualityRow.element,
+    qualityNote,
+    createText("p", "글자 크게"),
+    largeTextRow.element,
     (() => {
       const help = document.createElement("div");
       help.className = "settings-help";
@@ -87,6 +92,7 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
         createText("p", "마음이 많이 힘들 때는 109(자살예방상담전화, 24시간)에 전화해 주세요."),
         link("109에 전화하기", "tel:109", false),
         link("개인정보 처리방침", "/privacy", true),
+        link("만든 사람과 출처", "/credits", true),
       );
       return help;
     })(),
@@ -97,12 +103,26 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
   function render(): void {
     sheet.hidden = !open;
     toggle.setAttribute("aria-expanded", String(open));
-    speciesRow.select(profile.species);
-    speciesRow.setPictures((species) => avatarPortrait(species, profile.outfit));
-    outfitRow.select(profile.outfit);
     catRow.select(profile.withCat);
     hugRow.select(profile.hugsOff);
+    qualityRow.select(view.quality);
+    largeTextRow.select(view.largeText);
   }
+
+  function changeView(next: ViewPrefs): void {
+    view = next;
+    render();
+    options.onViewChange(view);
+  }
+
+  // Esc로 설정을 닫고, 포커스는 [설정] 버튼으로 돌려요.
+  document.addEventListener("keydown", (event) => {
+    if (event.key !== "Escape" || !open) return;
+    // 아래 동작 메뉴는 이번 Esc로 함께 닫히지 않게 해요.
+    event.stopImmediatePropagation();
+    setOpen(false);
+    toggle.focus();
+  });
 
   function setOpen(next: boolean): void {
     open = next;

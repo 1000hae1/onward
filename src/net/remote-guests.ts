@@ -37,13 +37,17 @@ import type { NavGrid, Point } from "../ward/movement";
 import { stepAlong } from "../ward/movement";
 import type { Offerings } from "../ward/offerings";
 
+import { simpleAvatarAt } from "../ward/quality";
+import { rosterAction } from "./roster";
+import type { Quality } from "../ward/quality";
+
 const WALK_SPEED = 1.8;
 const BODY_TURN_RATE = 10;
 const WALK_BLEND_RATE = 9;
 /** 이보다 먼 사람은 그리지 않아요. 휴대폰에서 버벅이지 않게 해요. */
 const DRAW_DISTANCE = 15;
-/** 다른 동물을 누를 때 맞았다고 보는 상자 크기예요. */
-const GUEST_TAP_HALF = 0.32;
+/** 다른 동물을 누를 때 맞았다고 보는 상자 크기예요. 휴대폰 손가락으로도 맞히기 쉽게 넉넉히 잡아요. */
+export const GUEST_TAP_HALF = 0.5;
 const GUEST_TAP_HEIGHT = 1.2;
 /** 빛이 날아가 닿는 얼굴 높이예요. */
 const HEAD_HEIGHT = HEAD_CENTER_Y;
@@ -82,6 +86,8 @@ interface Remote {
   shownX: number;
   shownZ: number;
   visible: boolean;
+  /** 멀어서 몸만 그리는 중이에요. */
+  simple: boolean;
 }
 
 export interface RemoteGuests {
@@ -90,12 +96,16 @@ export interface RemoteGuests {
   reset(guests: readonly Guest[], me: string): void;
   apply(event: WardEvent): void;
   update(dt: number, viewer: Point, camera: Camera, stillMotion: boolean): void;
+  /** 가볍게 보기에서는 먼 동물을 몸만 그려요. */
+  setQuality(quality: Quality): void;
   isBedTaken(bed: number): boolean;
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
   headSpot(id: string): Spot | null;
   /** 지금 침대에 누운 사람 수예요. 소등 안내에 써요. */
   lyingCount(): number;
+  /** 그 사람이 누워 있거나 눕는 중인 침대예요. 서 있으면 null이에요. */
+  bedOf(id: string): number | null;
   /** 이 평안 주소의 사람이 지금 같은 병실에 있으면 그 사람의 공개 id예요. */
   idForAddress(address: string): string | null;
   /** 지금 함께 있는 사람들이에요. 오늘 만난 사람 목록에 더할 때 써요. */
@@ -182,6 +192,7 @@ export function createRemoteGuests(
       shownX: start.x,
       shownZ: start.z,
       visible: true,
+      simple: false,
     };
     companion.setEnabled(guest.withCat, { walkX: start.x, walkZ: start.z, lyingBed: null });
     remotes.set(guest.id, remote);
@@ -222,10 +233,14 @@ export function createRemoteGuests(
   };
 
   let myId: string | null = null;
+  let quality: Quality = "normal";
 
   return {
     get count() {
       return remotes.size;
+    },
+    setQuality(next) {
+      quality = next;
     },
     reset(guests, me) {
       myId = me;
@@ -233,28 +248,19 @@ export function createRemoteGuests(
       for (const guest of guests) if (guest.id !== me) add(guest);
     },
     apply(event) {
-      if (event.kind === "join") {
-        if (event.guest.id !== myId) add(event.guest);
+      const action = rosterAction(event, (id) => remotes.has(id), myId);
+      if (action === "ignore") return;
+      if (action === "add") {
+        // join을 놓쳤어도 update가 오면 새로 그려요.
+        if (event.kind === "join" || event.kind === "update") add(event.guest);
         return;
       }
-      if (event.kind === "leave") {
-        remove(event.id);
+      if (action === "remove") {
+        if (event.kind === "leave") remove(event.id);
         return;
       }
-      // 선물과 불빛, 창문과 화분, 안아 주기와 퇴원 안내는 화면에서 따로 다뤄요.
-      if (
-        event.kind === "gift" ||
-        event.kind === "lamp" ||
-        event.kind === "cat-visit" ||
-        event.kind === "stats" ||
-        event.kind === "hug" ||
-        event.kind === "window-open" ||
-        event.kind === "planter" ||
-        event.kind === "discharge"
-      ) {
-        return;
-      }
-      const remote = remotes.get(event.kind === "update" ? event.guest.id : event.id);
+      if (event.kind === "join" || event.kind === "leave") return;
+      const remote = remotes.get(event.kind === "update" ? event.guest.id : (event as { id: string }).id);
       if (!remote) return;
 
       switch (event.kind) {
@@ -269,17 +275,24 @@ export function createRemoteGuests(
           });
           if (event.guest.bed === null && remote.flow.kind !== "free") {
             applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
+          } else if (event.guest.bed !== null && event.guest.outfit === "patient" && remote.flow.kind === "free") {
+            // 눕는 event를 놓쳤어도 서버가 아는 침대로 가서 누워요.
+            applyStep(remote, tapBed(remote.flow, event.guest.bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           }
           return;
         }
         case "walk":
+          // 서버는 걸어가면 침대를 비워요. 이름표도 이 값을 따라요.
+          remote.guest = { ...remote.guest, bed: null };
           remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
         case "lie":
+          remote.guest = { ...remote.guest, bed: event.bedId };
           applyStep(remote, tapBed(remote.flow, event.bedId, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           return;
         case "get-up":
+          remote.guest = { ...remote.guest, bed: null };
           if (remote.flow.kind === "heading") {
             remote.flow = FREE;
             remote.path = [];
@@ -385,11 +398,16 @@ export function createRemoteGuests(
         remote.shownX = x;
         remote.shownZ = z;
 
-        const visible = Math.hypot(x - viewer.x, z - viewer.z) < DRAW_DISTANCE;
-        if (visible !== remote.visible) {
+        const distance = Math.hypot(x - viewer.x, z - viewer.z);
+        const visible = distance < DRAW_DISTANCE;
+        const simple = simpleAvatarAt(quality, distance);
+        if (visible !== remote.visible || simple !== remote.simple) {
           remote.visible = visible;
+          remote.simple = simple;
           remote.avatar.root.visible = visible;
-          remote.companion.setVisible(visible);
+          remote.avatar.setSimple(simple);
+          // 멀리서 몸만 그릴 때는 곁의 고양이도 쉬어요.
+          remote.companion.setVisible(visible && !simple);
         }
         remote.companion.update(
           dt,
@@ -431,6 +449,11 @@ export function createRemoteGuests(
       let count = 0;
       for (const remote of remotes.values()) if (remote.flow.kind === "lying" || remote.flow.kind === "entering") count++;
       return count;
+    },
+    bedOf(id) {
+      const flow = remotes.get(id)?.flow;
+      if (!flow) return null;
+      return flow.kind === "lying" || flow.kind === "entering" || (flow.kind === "heading" && flow.lie) ? flow.bed : null;
     },
     idForAddress(address) {
       for (const [id, remote] of remotes) if (remote.guest.address === address) return id;

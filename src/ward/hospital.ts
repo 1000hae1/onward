@@ -10,6 +10,7 @@ import {
 import type { BufferGeometry, Matrix4, Object3D } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { BUILDING, BUILDING_HEIGHT, ENTRANCE, FLOOR_COUNT, FLOOR_HEIGHT } from "../../shared/ward-layout";
+import { facadeWindowCenters, mirrorPairIndex } from "./facade-windows";
 import { addInstances, createRandom, transform } from "./parts";
 
 const WINDOW_SPACING = 3.6;
@@ -43,21 +44,39 @@ function outerWall(
   return geometry;
 }
 
-/** 한 면의 창문 자리를 층과 칸마다 계산해요. */
+/** 창 바깥 끝에서 건물 모서리까지 남기는 벽이에요. */
+const WINDOW_MARGIN = 0.6;
+
+interface FacadeWindow {
+  matrix: Matrix4;
+  /** 불 켜짐을 함께 정하는 창끼리 같은 값이에요. 좌우로 마주 보는 창이 같은 값을 가져요. */
+  key: string;
+}
+
+/**
+ * 한 면의 창문 자리를 층과 칸마다 계산해요. 창은 벽 가운데를 기준으로 대칭이고
+ * 벽 모서리 밖으로 나가지 않아요.
+ */
 function windowsOnFace(
   from: number,
   to: number,
+  keyOf: (floor: number, index: number, count: number) => string,
   place: (along: number, y: number, floor: number) => Matrix4 | null,
-): Matrix4[] {
-  const matrices: Matrix4[] = [];
+): FacadeWindow[] {
+  const centers = facadeWindowCenters(from, to, {
+    spacing: WINDOW_SPACING,
+    width: WINDOW_WIDTH,
+    margin: WINDOW_MARGIN,
+  });
+  const windows: FacadeWindow[] = [];
   for (let floor = 0; floor < FLOOR_COUNT; floor++) {
     const y = FLOOR_HEIGHT * (floor + 0.52);
-    for (let along = from + WINDOW_SPACING / 2; along < to; along += WINDOW_SPACING) {
+    centers.forEach((along, index) => {
       const matrix = place(along, y, floor);
-      if (matrix) matrices.push(matrix);
-    }
+      if (matrix) windows.push({ matrix, key: keyOf(floor, index, centers.length) });
+    });
   }
-  return matrices;
+  return windows;
 }
 
 function createSignTexture(): CanvasTexture {
@@ -90,7 +109,7 @@ export function buildHospital(parent: Object3D): HospitalHandles {
   const top = BUILDING_HEIGHT;
 
   const entranceWidth = ENTRANCE.maxX - ENTRANCE.minX;
-  const frontSide = (BUILDING.maxX - ENTRANCE.maxX);
+  const frontSide = BUILDING.maxX - ENTRANCE.maxX;
   const walls = mergeGeometries([
     // 현관 자리를 비운 앞면
     outerWall((BUILDING.minX + ENTRANCE.minX) / 2, BUILDING.maxZ, frontSide, 0, top, 0),
@@ -119,29 +138,38 @@ export function buildHospital(parent: Object3D): HospitalHandles {
   }
   addInstances(parent, box, new MeshLambertMaterial({ color: "#c9cdd0" }), bands);
 
+  // 앞뒷면은 가운데를 사이에 둔 창끼리, 양옆면은 서로 마주 보는 창끼리 불이 함께 켜져요.
+  const mirrored = (face: string) => (floor: number, index: number, count: number): string =>
+    `${face}:${floor}:${mirrorPairIndex(index, count)}`;
+  const sides = (floor: number, index: number): string => `side:${floor}:${index}`;
   const windows = [
-    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, (along, y, floor) =>
+    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, mirrored("front"), (along, y, floor) =>
       floor === 0 && Math.abs(along) < CANOPY_HALF_WIDTH + WINDOW_WIDTH / 2
         ? null
         : transform(along, y, BUILDING.maxZ + 0.02, 0),
     ),
-    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, (along, y) =>
+    ...windowsOnFace(BUILDING.minX, BUILDING.maxX, mirrored("back"), (along, y) =>
       transform(along, y, BUILDING.minZ - 0.02, Math.PI),
     ),
-    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, (along, y) =>
+    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, sides, (along, y) =>
       transform(BUILDING.minX - 0.02, y, along, -Math.PI / 2),
     ),
-    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, (along, y) =>
+    ...windowsOnFace(BUILDING.minZ, BUILDING.maxZ, sides, (along, y) =>
       transform(BUILDING.maxX + 0.02, y, along, Math.PI / 2),
     ),
   ];
 
   const random = createRandom(3);
+  const rolls = new Map<string, number>();
   const dark: Matrix4[] = [];
   const eveningOnly: Matrix4[] = [];
   const allNight: Matrix4[] = [];
-  for (const matrix of windows) {
-    const roll = random();
+  for (const { matrix, key } of windows) {
+    let roll = rolls.get(key);
+    if (roll === undefined) {
+      roll = random();
+      rolls.set(key, roll);
+    }
     if (roll < ALL_NIGHT_RATIO) allNight.push(matrix);
     else if (roll < ALL_NIGHT_RATIO + EVENING_ONLY_RATIO) eveningOnly.push(matrix);
     else dark.push(matrix);

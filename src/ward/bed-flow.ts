@@ -96,6 +96,15 @@ export function tapBed(
   }
 }
 
+/**
+ * 이미 누웠거나 눕는 중에 다른 침대를 눌렀는지예요. 이때는 바로 옮기지 않고 "이 침대로 옮길까요?"를 먼저 물어요.
+ * 문병객은 눕지 않으니 묻지 않아요.
+ */
+export function needsMoveConfirm(flow: BedFlow, bed: number, canLie: boolean): boolean {
+  if (!canLie) return false;
+  return (flow.kind === "lying" || flow.kind === "entering") && flow.bed !== bed;
+}
+
 /** 빈 바닥을 탭했을 때예요. */
 export function tapFloor(flow: BedFlow, point: FlowPoint, duration: number): FlowStep {
   const order: WalkOrder = { kind: "spot", point };

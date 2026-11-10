@@ -81,9 +81,9 @@ test("두 사람이 서로 보이고, 평안 빌기가 상대에게 도착해요
     const bId = b.frames.find((frame) => frame.type === "snapshot")?.you;
     expect(bId, "B가 snapshot에서 공개 번호를 받아요").toMatch(/^[a-z0-9]{8}$/);
 
-    // A가 [평안 빌기] → [오늘 만난 분께] → 나래곰
+    // A가 [평안 빌기] → [자리에 없는 분께 남기기] → 나래곰
     await a.page.getByRole("button", { name: "평안 빌기" }).click();
-    await a.page.getByRole("button", { name: "오늘 만난 분께" }).click();
+    await a.page.getByRole("button", { name: "자리에 없는 분께 남기기" }).click();
     await a.page.getByRole("button", { name: /^나래곰/ }).click();
 
     // B에게 나를 향한 bless 이벤트가 도착해요.

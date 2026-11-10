@@ -93,7 +93,7 @@ export function checkVisit(
  * 문병객이 보낼 수 있는 메시지예요. 침대에 눕기, 불빛, 자리에 없는 사람에게 남기기, 링크 만들기, 퇴원은 받지 않아요.
  * 안아 주기는 받아요. 누구를 안을 수 있는지(주인만)는 hug-rules가 정해요.
  */
-const VISITOR_ALLOWED = new Set(["hello", "walk-to", "bless", "bow", "gift", "report", "hug-request", "hug-answer"]);
+const VISITOR_ALLOWED = new Set(["hello", "walk-to", "bless", "bow", "gift", "report", "hug-request", "hug-answer", "inbox-ack"]);
 
 export function visitorMay(type: string): boolean {
   return VISITOR_ALLOWED.has(type);
@@ -116,11 +116,7 @@ export function visitorDelivery(visitBed: number, ownerPresent: boolean, targetB
   return !ownerPresent && targetBed === visitBed ? "owner-inbox" : "room";
 }
 
-/** 주소창의 /visit/{토큰}을 읽어요. 맞지 않으면 null이에요. */
-export function readVisitPath(pathname: string): string | null {
-  const match = /^\/visit\/([A-Za-z0-9_-]{22})\/?$/.exec(pathname);
-  return match ? match[1] : null;
-}
+export { readVisitPath } from "./visit-path.ts";
 
 /** 입장 화면의 제목이에요. */
 export function visitTitle(ownerNickname: string): string {

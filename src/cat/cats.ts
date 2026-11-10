@@ -13,7 +13,10 @@ import {
 import type { WallBox, WardRoom } from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "../ward/movement";
 import type { NavGrid } from "../ward/movement";
-import { CAT_NOSE_REACH } from "./cat-kit";
+import { catNoseReach } from "./cat-kit";
+
+/** 코를 맞댈 때 두 고양이 몸통 사이의 거리예요. */
+const NOSE_GAP = catNoseReach("ward") + catNoseReach("companion");
 import { catFrameAt, CAT_GREET_SECONDS, CAT_WALK_SPEED, shouldGreet } from "./cat-path";
 import type { CatPoint, CatRoom, CatVisitPlan } from "./cat-path";
 import { createCatPose } from "./cat-pose";
@@ -228,7 +231,7 @@ export function createCats(
       const gapX = moves.x - cat.moves.x;
       const gapZ = moves.z - cat.moves.z;
       const gap = Math.hypot(gapX, gapZ) || 1;
-      const next = gap + (CAT_NOSE_REACH * 2 - gap) * amount;
+      const next = gap + (NOSE_GAP - gap) * amount;
       moves.x = cat.moves.x + (gapX / gap) * next;
       moves.z = cat.moves.z + (gapZ / gap) * next;
       return;

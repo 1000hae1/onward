@@ -329,6 +329,11 @@ export function bedHeadSpot(bed: BedPlacement): { x: number; y: number; z: numbe
   return { ...roomToWorld(bed, -BED_LENGTH / 2 + 0.22, 0), y: 1.08 };
 }
 
+/** 침대 발치 난간이에요. 누운 사람의 이름표가 여기 달려요. */
+export function bedFootSpot(bed: BedPlacement): { x: number; y: number; z: number } {
+  return { ...roomToWorld(bed, BED_LENGTH / 2 + 0.03, 0), y: 0.82 };
+}
+
 /** 협탁에 선물을 놓는 칸이에요. 귤 바구니와 홍시 접시가 쓰지 않는 두 모서리예요. */
 const GIFT_SLOT_OFFSETS = [
   { x: 0.13, z: -0.13 },

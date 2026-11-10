@@ -8,13 +8,16 @@ import type {
 } from "three";
 import type { HospitalHandles } from "./hospital";
 import type { LandscapeHandles } from "./landscape";
-import { lightSpots } from "../../shared/ward-layout";
+import { lightSpots, NURSE_STATION, NURSE_STATION_CENTER_X } from "../../shared/ward-layout";
+import { setRimGlow } from "../avatar/rim-glow";
+import type { LampGlow } from "./room";
 import type { SkyHandles } from "./sky";
 import type { TimeSlot } from "./time-of-day";
 
 const TRANSITION_SECONDS = 6;
 const FOCUS_FOLLOW_RATE = 2.5;
 const ROOM_LIGHT_Y = 3.1;
+const NURSE_LIGHT_DISTANCE = 8;
 const FOG_NEAR = 50;
 const FOG_FAR = 230;
 
@@ -36,6 +39,8 @@ const COLOR_KEYS = [
   "windowDark",
   "windowEveningOnly",
   "windowAllNight",
+  "nurseLight",
+  "nursePanel",
   "snow",
   "steam",
 ] as const;
@@ -49,6 +54,10 @@ const NUMBER_KEYS = [
   "starOpacity",
   "sunGlowOpacity",
   "moonOpacity",
+  "nurseLightIntensity",
+  "avatarRim",
+  "avatarFill",
+  "bedGlow",
 ] as const;
 
 type ColorKey = (typeof COLOR_KEYS)[number];
@@ -110,6 +119,12 @@ const LOOKS: Record<TimeSlot, Look> = {
     starOpacity: 0,
     sunGlowOpacity: 0.95,
     moonOpacity: 0,
+    nurseLight: "#fff3e0",
+    nursePanel: "#fff6e0",
+    nurseLightIntensity: 0.6,
+    avatarRim: 0,
+    avatarFill: 0,
+    bedGlow: 0,
   }),
   evening: createLook({
     skyZenith: "#2f3068",
@@ -131,14 +146,20 @@ const LOOKS: Record<TimeSlot, Look> = {
     lamp: "#c9b49c",
     gardenLamp: "#ffd48a",
     windowDark: "#3e4468",
-    windowEveningOnly: "#ffd99c",
-    windowAllNight: "#ffd99c",
+    windowEveningOnly: "#ecc993",
+    windowAllNight: "#ecc993",
     glass: 0.16,
     snow: "#e8e3f2",
     steam: "#fff0dc",
     starOpacity: 0.3,
     sunGlowOpacity: 0.85,
     moonOpacity: 0.25,
+    nurseLight: "#ffe2b8",
+    nursePanel: "#ffe8c0",
+    nurseLightIntensity: 6,
+    avatarRim: 0.32,
+    avatarFill: 0.06,
+    bedGlow: 0.45,
   }),
   night: createLook({
     skyZenith: "#060a18",
@@ -161,13 +182,20 @@ const LOOKS: Record<TimeSlot, Look> = {
     gardenLamp: "#ffc98a",
     windowDark: "#1a2138",
     windowEveningOnly: "#1a2138",
-    windowAllNight: "#e9bd7d",
+    windowAllNight: "#c49a64",
     glass: 0.08,
     snow: "#a9b8d6",
     steam: "#7c6f66",
     starOpacity: 1,
     sunGlowOpacity: 0,
     moonOpacity: 1,
+    // 간호사실은 밤에도 은은하게 불이 켜져 있어요. 병실(1.5)보다 조금 밝아요.
+    nurseLight: "#ffd9a6",
+    nursePanel: "#f3d6aa",
+    nurseLightIntensity: 2.6,
+    avatarRim: 0.42,
+    avatarFill: 0.08,
+    bedGlow: 1,
   }),
 };
 
@@ -175,6 +203,8 @@ export interface LightingTargets {
   ceiling: MeshLambertMaterial;
   ceilingPanel: MeshBasicMaterial;
   sleepLamp: MeshBasicMaterial;
+  lampGlow: LampGlow;
+  nurseLamp: MeshBasicMaterial;
   windowGlass: MeshBasicMaterial;
   snowMaterial: PointsMaterial;
   steamMaterials: readonly SpriteMaterial[];
@@ -223,6 +253,15 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
   });
   let targetSpots = startSpots;
 
+  // 간호사실 위의 고정된 빛이에요. 닿는 거리를 줄여 로비 밖까지 번지지 않게 해요.
+  const nurseLight = new PointLight("#ffffff", 0, NURSE_LIGHT_DISTANCE, 1.1);
+  nurseLight.position.set(
+    NURSE_STATION_CENTER_X,
+    ROOM_LIGHT_Y,
+    (NURSE_STATION.minZ + NURSE_STATION.maxZ) / 2,
+  );
+  scene.add(nurseLight);
+
   const apply = (): void => {
     const { colors, numbers } = current;
     background.copy(colors.skyHorizon);
@@ -244,6 +283,12 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
       light.color.copy(colors.roomLight);
       light.intensity = numbers.roomLightIntensity;
     }
+
+    nurseLight.color.copy(colors.nurseLight);
+    nurseLight.intensity = numbers.nurseLightIntensity;
+    targets.nurseLamp.color.copy(colors.nursePanel);
+    setRimGlow(numbers.avatarRim, numbers.avatarFill);
+    targets.lampGlow.setStrength(numbers.bedGlow);
 
     targets.ceiling.emissiveIntensity = numbers.ceilingGlow;
     targets.ceilingPanel.color.copy(colors.panel);

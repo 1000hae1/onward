@@ -99,3 +99,32 @@ export const HUG_DENIED_TEXT: Record<HugDenied, string> = {
   "too-soon": "조금 뒤에 다시 안아 줄 수 있어요.",
   unavailable: "지금은 쉬고 있어요. 다음에 안아 주세요.",
 };
+
+/** 다른 동물 메뉴의 [안아 주기] 상태예요. 할 수 없으면 버튼을 끄고 이유를 보여 줘요. 마지막 판단은 서버가 해요. */
+export type HugMenuState = { enabled: true } | { enabled: false; reason: string };
+
+export const HUG_OFFLINE_TEXT = "병동 서버에 닿으면 안아 줄 수 있어요.";
+export const HUG_LEAVING_TEXT = "퇴원하는 중에는 안아 줄 수 없어요.";
+
+export function hugMenuState(input: {
+  online: boolean;
+  /** 내가 퇴원하는 중인지예요. */
+  leaving: boolean;
+  me: { x: number; z: number };
+  /** 상대의 자리와, 지금 요청을 받을 수 있는지(잠들었거나 받지 않기면 false)예요. */
+  target: { x: number; z: number; hugOk: boolean };
+  /** 이 화면에서 같은 분께 마지막으로 요청한 시각이에요. */
+  lastSentAt: number | null;
+  nowMs: number;
+}): HugMenuState {
+  if (!input.online) return { enabled: false, reason: HUG_OFFLINE_TEXT };
+  if (input.leaving) return { enabled: false, reason: HUG_LEAVING_TEXT };
+  if (!input.target.hugOk) return { enabled: false, reason: HUG_DENIED_TEXT.unavailable };
+  if (input.lastSentAt !== null && input.nowMs - input.lastSentAt < HUG_REPEAT_MS) {
+    return { enabled: false, reason: HUG_DENIED_TEXT["too-soon"] };
+  }
+  if (Math.hypot(input.me.x - input.target.x, input.me.z - input.target.z) > HUG_DISTANCE) {
+    return { enabled: false, reason: HUG_DENIED_TEXT["too-far"] };
+  }
+  return { enabled: true };
+}

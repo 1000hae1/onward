@@ -40,6 +40,10 @@ export interface WinterHandles {
   update(dt: number, centerX: number, centerZ: number): void;
   /** 눈·김·겨울 간식을 한꺼번에 보이거나 숨겨요. */
   setVisible(visible: boolean): void;
+  /** 눈송이를 이만큼(0~1)만 그리고 움직여요. 가볍게 보기와 움직임 줄이기에서 1/3로 줄여요. */
+  setSnowAmount(fraction: number): void;
+  /** 지금 그리는 눈송이 수예요. */
+  readonly snowShown: number;
 }
 
 const lambert = (color: string, flatShading = false): MeshLambertMaterial =>
@@ -195,6 +199,7 @@ function buildSnow(parent: Object3D, softCircle: Texture, count: number) {
   parent.add(points);
 
   let elapsed = 0;
+  let active = count;
   const fullWidth = SNOW_HALF_WIDTH * 2;
   const wrapAround = (value: number, center: number): number => {
     const fromEdge = value - (center - SNOW_HALF_WIDTH);
@@ -202,7 +207,7 @@ function buildSnow(parent: Object3D, softCircle: Texture, count: number) {
   };
   const update = (dt: number, centerX: number, centerZ: number): void => {
     elapsed += dt;
-    for (let i = 0; i < count; i++) {
+    for (let i = 0; i < active; i++) {
       fallY[i] -= speed[i] * dt;
       if (fallY[i] < SNOW_MIN_Y) fallY[i] = SNOW_MAX_Y;
       // 구역 밖으로 벗어난 눈송이는 반대쪽에서 다시 내려요.
@@ -216,7 +221,12 @@ function buildSnow(parent: Object3D, softCircle: Texture, count: number) {
     }
     attribute.needsUpdate = true;
   };
-  return { material, update };
+  /** 앞에서부터 active개만 그려요. 버퍼는 그대로 두어 다시 늘려도 새로 만들지 않아요. */
+  const setAmount = (fraction: number): void => {
+    active = Math.max(0, Math.min(count, Math.round(count * fraction)));
+    geometry.setDrawRange(0, active);
+  };
+  return { material, update, setAmount, shown: () => active };
 }
 
 function buildSteam(parent: Object3D, softCircle: Texture, perRoom: number) {
@@ -285,6 +295,12 @@ export function buildWinter(
     },
     setVisible(visible) {
       group.visible = visible;
+    },
+    setSnowAmount(fraction) {
+      snow.setAmount(fraction);
+    },
+    get snowShown() {
+      return group.visible ? snow.shown() : 0;
     },
   };
 }

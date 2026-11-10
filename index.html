@@ -7,14 +7,20 @@
     <!-- 문병 링크 주소가 다른 사이트로 새어 나가지 않게 해요. 미리보기에는 정적인 제목만 보여요. -->
     <meta name="referrer" content="no-referrer" />
     <title>온기병동</title>
+    <link rel="icon" href="/favicon.ico" sizes="48x48" />
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml" />
+    <link rel="apple-touch-icon" href="/apple-touch-icon.png" />
+    <link rel="manifest" href="/manifest.webmanifest" />
     <link rel="stylesheet" href="/src/style.css" />
   </head>
   <body>
     <canvas id="scene" aria-hidden="true"></canvas>
     <header id="hud" hidden><span id="hud-main"></span><span id="hud-stats" hidden></span></header>
     <p id="notice" role="status" aria-live="polite" hidden></p>
-    <div id="remote-labels"></div>
-    <div id="head-labels" hidden></div>
+    <!-- 머리 위 이름과 말풍선은 그림이에요. 읽을 내용은 #announcer로 따로 보내요. -->
+    <div id="bed-plates" aria-hidden="true"></div>
+    <div id="remote-labels" aria-hidden="true"></div>
+    <div id="head-labels" aria-hidden="true" hidden></div>
     <section id="settings" aria-label="설정" hidden></section>
     <p id="toast" role="status" hidden></p>
     <div id="left-cards" aria-live="polite"></div>
@@ -27,6 +33,9 @@
     <section id="entry" aria-label="병동에 들어가기" hidden></section>
     <section id="gate" role="status" aria-live="polite" hidden></section>
     <main id="loading" role="status" aria-live="polite"></main>
+    <section id="webgl-fallback" role="alert" hidden></section>
+    <!-- 다른 분이 평안을 빌어 주거나 선물을 놓으면 화면 낭독기가 읽어요. 화면에는 보이지 않아요. -->
+    <div id="announcer" class="sr-only" aria-live="polite" aria-atomic="true"></div>
     <script type="module" src="/src/main.ts"></script>
   </body>
 </html>
