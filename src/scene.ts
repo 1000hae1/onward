@@ -161,8 +161,11 @@ function readQualityOverride(search: string): Quality | null {
   return value === "light" || value === "normal" ? value : null;
 }
 
-/** 병실을 만들고 화면에 그리기 시작해요. WebGL을 쓸 수 없으면 오류를 던져요. */
-export function startScene(canvas: HTMLCanvasElement): void {
+/**
+ * 병실을 만들고 화면에 그리기 시작해요. WebGL을 쓸 수 없으면 오류를 던져요.
+ * health는 로딩 화면에서 받은 /api/health 대답이에요. 서버 버전을 견줄 때 써요.
+ */
+export function startScene(canvas: HTMLCanvasElement, health: string): void {
   const phone = isPhoneLike();
   let view: ViewPrefs = loadViewPrefs();
   const hints = deviceHints();
@@ -518,15 +521,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     setBanner("새 버전이 나왔어요. 새로고침해 주세요.", { label: "새로고침", run: () => window.location.reload() });
   };
   // 들어가기 전에 서버 버전을 먼저 견줘요. 예전 번들을 캐시로 쓰고 있으면 바로 알려요.
-  void fetch("/api/health", { cache: "no-store" })
-    .then((response) => response.text())
-    .then((text) => {
-      const version = readVersion(text);
-      if (version !== null && version !== PROTOCOL_VERSION) showOutdated();
-    })
-    .catch(() => {
-      // 서버에 닿지 않으면 연결할 때 다시 알려요.
-    });
+  const serverVersion = readVersion(health);
+  if (serverVersion !== null && serverVersion !== PROTOCOL_VERSION) showOutdated();
 
   const client = createWardClient(params, {
     onSnapshot(snapshot) {
