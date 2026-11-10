@@ -804,19 +804,21 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     else proceed();
   });
 
-  // 가운데 병아리 간호사가 현관으로 들어서는 분께 고개 숙여 인사해요. 내 화면에서만 보여요.
-  const greeter = facilities.nurses[Math.floor(facilities.nurses.length / 2)];
-  const nurseLabelRoot = document.createElement("div");
-  remoteLabels?.append(nurseLabelRoot);
-  const nurseLabel = createHeadLabels(nurseLabelRoot);
-  const nursePoint = new Vector3();
+  // 병아리 간호사 모두 현관으로 들어서는 분께 인사해요. 내 화면에서만 보여요.
+  const nurseGreetings = facilities.nurses.map((nurse) => {
+    const root = document.createElement("div");
+    remoteLabels?.append(root);
+    return { nurse, label: createHeadLabels(root), point: new Vector3() };
+  });
   const nextGreeting = createNurseGreeter({ getItem: readStorage, setItem: writeStorage });
   player.setLobbyListener(() => {
-    if (!entered || !greeter) return;
+    if (!entered || nurseGreetings.length === 0) return;
     const text = nextGreeting();
-    greeter.bow(reduceMotion.matches);
-    nurseLabel.showBubble(text);
-    announcer?.say(`간호사가 "${text}" 하고 인사했어요.`);
+    for (const { nurse, label } of nurseGreetings) {
+      nurse.bow(reduceMotion.matches);
+      label.showBubble(text);
+    }
+    announcer?.say(`간호사들이 "${text}" 하고 인사했어요.`);
   });
 
   const platesRoot = element("bed-plates");
@@ -1201,7 +1203,9 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     renderer.render(scene, camera);
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
-    nurseLabel.update(dt, camera, greeter ? greeter.headWorld(nursePoint) : null);
+    for (const { nurse, label, point } of nurseGreetings) {
+      label.update(dt, camera, nurse.headWorld(point));
+    }
     if (plates) {
       const mine = entered && !visitingNow ? { nickname: current.nickname, bed: player.claimedBed } : null;
       plates.sync(bedPlates(remotes.guests(), mine));
