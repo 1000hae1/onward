@@ -7,8 +7,19 @@ import {
   PROTOCOL_VERSION,
   WARD_CAPACITY,
 } from "../shared/protocol.ts";
-import type { ClientMessage, HealthResponse, ServerMessage, WardEvent, WardStats } from "../shared/protocol.ts";
-import { bedApproach, BEDS, roomAt, ROOMS } from "../shared/ward-layout.ts";
+import type { CatPlayMessage, ClientMessage, HealthResponse, ServerMessage, WardEvent, WardStats } from "../shared/protocol.ts";
+import {
+  catTapAllowed,
+  freshCatState,
+  requestPlay,
+  shouldRub,
+  startRub,
+  wakeFromKnead,
+  wardCatId,
+  wardCatRoom,
+} from "../shared/cat-play-rules.ts";
+import type { ActivePlay, CatState } from "../shared/cat-play-rules.ts";
+import { bedApproach, BEDS, doorSpots, roomAt, ROOMS } from "../shared/ward-layout.ts";
 import {
   actionReady,
   admit,
@@ -104,6 +115,12 @@ export const IP_HASH_HEADER = "X-Onward-Ip-Hash";
 /** IP 해시가 없을 때 요청 제한을 셀 자리예요. Worker를 거치면 생기지 않아요. */
 const NO_IP = "0".repeat(64);
 
+/** 고양이 놀이 기록과 쓰다듬은 횟수를 두는 기간이에요. 어제 쓰다듬은 것까지 기억하려고 이틀이에요. */
+const CAT_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
+/** 이보다 오래전에 끝난 놀이는 snapshot에 담지 않아요. 끝난 뒤 제자리로 돌아가는 동안만 함께 보면 돼요. */
+const CAT_RECENT_MS = 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
+
 /** 병실에서 보관 기간이 있는 표예요. */
 const RETENTION: readonly RetentionRule[] = [
   { table: "left_blessing", kind: "at", column: "at", keepMs: KEEP_MS },
@@ -116,6 +133,9 @@ const RETENTION: readonly RetentionRule[] = [
   { table: "hug_sent", kind: "at", column: "at", keepMs: HUG_REPEAT_MS },
   { table: "hug_pending", kind: "at", column: "at", keepMs: HUG_ANSWER_MS },
   { table: "sleep_kept", kind: "at", column: "at", keepMs: KEPT_KEEP_MS },
+  { table: "cat_state", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
+  { table: "cat_pets", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
+  { table: "cat_rubbed", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
 ];
 const MAX_INSTANCE = 20;
 type DeniedAction = Extract<ServerMessage, { type: "action-denied" }>["action"];
@@ -182,6 +202,15 @@ export class WardRoom extends DurableObject<Env> {
     // 잠든 사람(guestId 해시) 몫으로 쌓아 둔 평안과 선물이에요. 보낸 사람도 해시로만 두고, 깨어나면 숫자만 전하고 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS sleep_kept (
       target TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // 고양이마다 지금 하는 놀이, 연달아 논 횟수, 쉬는 때예요. 병동 고양이는 w0~w5, 데리고 다니는 고양이는 주인의 공개 번호예요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_state (
+      cat TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // 병동 고양이를 쓰다듬어 준 횟수예요. guestId 해시와 한국 날짜로 세요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_pets (
+      guest TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (guest, day))`);
+    // 기억하는 고양이가 오늘 먼저 다가가 비빈 사람이에요. 하루 한 번만이에요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_rubbed (
+      guest TEXT PRIMARY KEY, day TEXT NOT NULL, at INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -489,6 +518,8 @@ export class WardRoom extends DurableObject<Env> {
       ip: attachment.ip ?? null,
       record: next,
     } satisfies Attachment);
+    // 꾹꾹이 뒤 곁에서 자던 고양이는 그 사람이 침대에서 내려오면 깨어나요.
+    if (before?.joined && before.record.lyingSince !== null && next.lyingSince === null) this.wakeCats(next.id);
     // 막 들어온 연결은 join·update에 잠든 상태가 함께 가요.
     if (!before?.joined) return;
     const sleeping = Boolean(next.sleeping);
@@ -525,6 +556,157 @@ export class WardRoom extends DurableObject<Env> {
     }
     if (record.visit) await this.directory().releaseVisit(record.visit.session);
     if (record.linked) await this.directory().reportLocation(key, { ...this.place(), bed: record.bed });
+  }
+
+  private catState(cat: string): CatState {
+    const row = this.ctx.storage.sql.exec<{ data: string }>("SELECT data FROM cat_state WHERE cat = ?", cat).toArray()[0];
+    return row ? (JSON.parse(row.data) as CatState) : freshCatState();
+  }
+
+  private saveCatState(cat: string, state: CatState, nowMs: number): void {
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO cat_state (cat, data, at) VALUES (?, ?, ?)", cat, JSON.stringify(state), nowMs);
+  }
+
+  /** 모두에게 보내는 놀이예요. 닉네임과 연달아 횟수는 담지 않아요. */
+  private catPlayMessage(cat: string, play: ActivePlay): CatPlayMessage {
+    return { catId: cat, kind: play.kind, by: play.by, at: play.at, until: play.until, seed: play.seed, x: play.x, z: play.z, bed: play.bed };
+  }
+
+  /** 들어온 사람에게 보내는 고양이 놀이와 쉬기예요. 방금 끝난 놀이도 담아 제자리로 돌아가는 모습까지 같게 보여요. */
+  private catSnapshot(nowMs: number): { catPlays: CatPlayMessage[]; catRests: { catId: string; until: number }[] } {
+    const catPlays: CatPlayMessage[] = [];
+    const catRests: { catId: string; until: number }[] = [];
+    const present = new Set(this.everyone().map((guest) => guest.id));
+    for (const row of this.ctx.storage.sql.exec<{ cat: string; data: string }>("SELECT cat, data FROM cat_state")) {
+      // 데리고 다니는 고양이는 주인이 병동에 있을 때만이에요.
+      if (wardCatRoom(row.cat) === null && !present.has(row.cat)) continue;
+      const state = JSON.parse(row.data) as CatState;
+      if (state.play && state.play.until > nowMs - CAT_RECENT_MS) catPlays.push(this.catPlayMessage(row.cat, state.play));
+      if (state.restUntil > nowMs) catRests.push({ catId: row.cat, until: state.restUntil });
+    }
+    return { catPlays, catRests };
+  }
+
+  /** 고양이와 놀기를 청했어요. 먼저 처리된 사람이 놀고, 장면은 각 화면이 그려요. */
+  private playWithCat(
+    ws: WebSocket,
+    attachment: Extract<Attachment, { joined: true }>,
+    cat: string,
+    kind: Extract<ClientMessage, { type: "cat-play" }>["kind"],
+    nowMs: number,
+  ): void {
+    const record = attachment.record;
+    const deny = (reason: DeniedReason): void => this.send(ws, { v: PROTOCOL_VERSION, type: "action-denied", action: "cat", reason });
+    // 연결마다 1초 간격, 30초에 여섯 번까지예요.
+    const tap = catTapAllowed(record.catTaps ?? [], nowMs);
+    if (!tap.ok) return deny("too-fast");
+    this.save(ws, attachment, { ...record, catTaps: [...tap.log] });
+
+    // 데리고 다니는 고양이는 주인이 고양이와 함께 병동에 있어야 해요.
+    const wardRoom = wardCatRoom(cat);
+    let owner: GuestRecord | null = null;
+    if (wardRoom === null) {
+      owner = this.everyone().find((guest) => guest.id === cat) ?? null;
+      if (!owner?.withCat) return deny("no-target");
+    }
+    const lyingBed = isLying(record) ? record.bed : null;
+    const decision = requestPlay(
+      this.catState(cat),
+      {
+        catId: cat,
+        kind,
+        owner: owner?.id ?? null,
+        requester: {
+          id: record.id,
+          nickname: publicNickname(record),
+          x: record.x,
+          z: record.z,
+          room: roomAt(record.x, record.z)?.index ?? null,
+          lyingBed,
+          lyingRoom: lyingBed === null ? null : (BEDS[lyingBed]?.roomIndex ?? null),
+        },
+      },
+      nowMs,
+      Math.random(),
+    );
+    switch (decision.kind) {
+      case "denied":
+        return deny(decision.reason);
+      case "busy":
+        this.send(ws, { v: PROTOCOL_VERSION, type: "cat-busy", catId: cat, nickname: decision.nickname, scene: decision.scene });
+        return;
+      case "resting":
+        if (decision.started) {
+          this.saveCatState(cat, decision.state, nowMs);
+          this.broadcast({ kind: "cat-rest", catId: cat, until: decision.until });
+        } else {
+          deny("resting");
+        }
+        return;
+      case "granted": {
+        this.saveCatState(cat, decision.state, nowMs);
+        // 나에게도 보내요. 모두 같은 시각과 시드로 장면을 그려요.
+        this.broadcast({ kind: "cat-play", play: this.catPlayMessage(cat, decision.play) });
+        if (kind !== "pet") return;
+        if (wardRoom !== null && record.key) this.countPet(record.key, nowMs);
+        // 다른 분의 고양이를 쓰다듬으면 주인 화면에만 알려요. 닉네임만 가요.
+        if (owner && owner.id !== record.id) {
+          const ownerWs = this.joined().find((entry) => entry.record.id === owner.id)?.ws;
+          if (ownerWs) this.send(ownerWs, { v: PROTOCOL_VERSION, type: "cat-petted", nickname: publicNickname(record) });
+        }
+        return;
+      }
+    }
+  }
+
+  private countPet(key: string, nowMs: number): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO cat_pets (guest, day, count, at) VALUES (?, ?, 1, ?)
+       ON CONFLICT (guest, day) DO UPDATE SET count = count + 1, at = excluded.at`,
+      key,
+      koreanDay(new Date(nowMs)),
+      nowMs,
+    );
+  }
+
+  /** 침대에서 내려온 사람 곁에서 자던 고양이를 깨워요. 바뀐 고양이만 알려요. */
+  private wakeCats(guestId: string): void {
+    const nowMs = Date.now();
+    for (const cat of [...ROOMS.map((room) => wardCatId(room.index)), guestId]) {
+      const next = wakeFromKnead(this.catState(cat), guestId, nowMs);
+      if (!next?.play) continue;
+      this.saveCatState(cat, next, nowMs);
+      this.broadcast({ kind: "cat-wake", catId: cat, until: next.play.until });
+    }
+  }
+
+  /** 오늘이나 어제 많이 쓰다듬어 준 사람이 들어오면, 가장 가까운 병동 고양이가 먼저 다가와 비벼요. 모두에게 같은 장면이에요. */
+  private rubIfRemembered(record: GuestRecord, nowMs: number): void {
+    if (!record.key) return;
+    const sql = this.ctx.storage.sql;
+    const today = koreanDay(new Date(nowMs));
+    const yesterday = koreanDay(new Date(nowMs - DAY_MS));
+    const count = (day: string): number =>
+      sql.exec<{ count: number }>("SELECT count FROM cat_pets WHERE guest = ? AND day = ?", record.key, day).toArray()[0]?.count ?? 0;
+    const rubbed = sql.exec<{ day: string }>("SELECT day FROM cat_rubbed WHERE guest = ?", record.key).toArray()[0]?.day === today;
+    if (!shouldRub(count(today), count(yesterday), rubbed)) return;
+    // 그 사람과 가장 가까운 문의 병실 고양이예요.
+    let best = ROOMS[0];
+    let bestDistance = Infinity;
+    for (const room of ROOMS) {
+      const door = doorSpots(room).outside;
+      const distance = Math.hypot(door.x - record.x, door.z - record.z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = room;
+      }
+    }
+    const cat = wardCatId(best.index);
+    const started = startRub(this.catState(cat), { id: record.id, nickname: publicNickname(record), x: record.x, z: record.z }, nowMs, Math.random());
+    if (!started) return;
+    this.saveCatState(cat, started.state, nowMs);
+    sql.exec("INSERT OR REPLACE INTO cat_rubbed (guest, day, at) VALUES (?, ?, ?)", record.key, today, nowMs);
+    this.broadcast({ kind: "cat-play", play: this.catPlayMessage(cat, started.play) });
   }
 
   private lastVisits(): CatVisit[] {
@@ -824,6 +1006,7 @@ export class WardRoom extends DurableObject<Env> {
       seasonalGifts: seasonalGiftsAllowed(new Date(now)),
       serverNow: now,
       catVisits: catVisits(this.everyone()),
+      ...this.catSnapshot(now),
       restored: admission.restored,
       inbox,
       stats: this.stats(now),
@@ -846,6 +1029,7 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "join", guest: toPublic(record) }, ws);
     }
     this.refreshCatVisits(before);
+    if (!admission.restored) this.rubIfRemembered(record, now);
     await this.syncPresence(now);
     this.countVisitor(key, now);
     // 지난번 침대를 다시 받았으면 그 침대에 남겨져 있던 평안을 전해요.
@@ -1279,6 +1463,10 @@ export class WardRoom extends DurableObject<Env> {
           }
         }
         this.refreshCatVisits(before);
+        return;
+      }
+      case "cat-play": {
+        this.playWithCat(ws, attachment, message.catId, message.kind, nowMs);
         return;
       }
       case "inbox-ack": {

@@ -12,6 +12,15 @@ import { SOLO_ONLY_TEXT } from "../../shared/offering-rules";
 import { FIVE_LEAF_ITEM } from "../../shared/left-blessings";
 import { giftIcon } from "./icons/gift-icons";
 import type { HugMenuState } from "../../shared/hug-rules";
+import { CAT_PLAY_LABELS } from "../../shared/cat-play-rules";
+import type { CatPlayKind } from "../../shared/cat-play-rules";
+
+/** 고양이를 눌렀을 때 나오는 메뉴예요. 할 수 없는 놀이는 버튼을 끄고 이유를 보여 줘요. */
+export interface CatMenu {
+  title: string;
+  choices: readonly { kind: CatPlayKind; enabled: boolean; reason: string | null }[];
+  pick(kind: CatPlayKind): void;
+}
 
 /** 손을 모은 뒤 빛이 떠나기까지 기다리는 시간이에요. */
 export const LIGHT_DELAY_SECONDS = gestureDuration("pray") * 0.55;
@@ -74,6 +83,10 @@ export interface ActionBar {
   /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
   /** sleepingNote가 있으면 잠든 분이라 메뉴 아래에 안내를 붙여요. */
   openPerson(person: { id: string; nickname: string; hug: HugMenuState; sleepingNote?: string | null }): void;
+  /** 고양이를 눌렀을 때 나오는 작은 메뉴예요. */
+  openCat(menu: CatMenu): void;
+  /** 열려 있는 메뉴를 닫아요. */
+  closeMenu(): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
   /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
@@ -130,6 +143,33 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     sheetName = name;
     sheet.append(createText("p", title), ...children, createButton(cancelLabel, closeSheet));
     sheet.hidden = false;
+  };
+
+  /** 고양이 메뉴예요. 버튼 앞에 이모지를 붙이고, 할 수 없는 놀이는 이유를 아래에 적어요. */
+  const openCat = (menu: CatMenu): void => {
+    const row = document.createElement("div");
+    row.className = "action-choices";
+    const notes = new Set<string>();
+    let first: HTMLButtonElement | null = null;
+    for (const choice of menu.choices) {
+      const { emoji, label } = CAT_PLAY_LABELS[choice.kind];
+      const button = createEmojiButton(emoji, label, () => {
+        closeSheet();
+        menu.pick(choice.kind);
+      });
+      button.disabled = !choice.enabled;
+      if (!choice.enabled && choice.reason) notes.add(choice.reason);
+      if (choice.enabled && !first) first = button;
+      row.append(button);
+    }
+    const children: HTMLElement[] = [row];
+    for (const text of notes) {
+      const note = createText("p", text);
+      note.className = "action-note";
+      children.push(note);
+    }
+    openSheet("cat", menu.title, children);
+    (first as HTMLButtonElement | null)?.focus();
   };
 
   /** 처음 침대를 고를 때 물어요. [이 침대 쓰기]를 누르면 서버가 배정을 확정한 뒤에 가서 누워요. */
@@ -452,6 +492,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     confirmMove,
     confirmClaim,
     openPerson,
+    openCat,
+    closeMenu: closeSheet,
     setHidden(hidden) {
       if (hidden) closeSheet();
       buttons.hidden = hidden;

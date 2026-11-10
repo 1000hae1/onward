@@ -6,6 +6,8 @@ import { CAT_VISIT_AFTER_MS, readVersion } from "../shared/ward-rules";
 import { BEDS } from "../shared/ward-layout";
 import type { CatVisitPlan } from "./cat/cat-path";
 import { createCats } from "./cat/cats";
+import { createCatPlayFlow } from "./ward/cat-play-flow";
+import type { CatPlayFlow } from "./ward/cat-play-flow";
 import { createRemoteGuests } from "./net/remote-guests";
 import { loadMetList, rememberPerson, saveMetList } from "./net/met-list";
 import type { MetList } from "./net/met-list";
@@ -68,6 +70,7 @@ import type { GuestbookMessage, OwnerGuestbook } from "./guestbook/owner-panel";
 import { createAppleTree } from "./ward/apple-tree-view";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
+import { CAT_NOT_LYING_TEXT, CAT_PET_ONLY_TEXT, CAT_REST_TEXT } from "../shared/cat-play-rules";
 import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugMenuState, hugOfferText, hugSpot } from "../shared/hug-rules";
 import type { HugDenied } from "../shared/hug-rules";
 import { isMorningWindow } from "../shared/morning";
@@ -146,6 +149,9 @@ const DENIED_TEXT: Record<DeniedReason, string> = {
   "not-in-room": "병실에 들어가면 놓을 수 있어요.",
   "no-target": "그곳에는 보낼 수 없어요.",
   "too-fast": "조금 천천히 눌러 주세요.",
+  "pet-only": CAT_PET_ONLY_TEXT,
+  "not-lying": CAT_NOT_LYING_TEXT,
+  resting: CAT_REST_TEXT,
 };
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
@@ -334,11 +340,15 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       isTaken: (bed) => player.claimedBed === bed || remotes.isBedTaken(bed),
       visitFor: (roomIndex) =>
         online() ? (serverVisits.get(roomIndex) ?? null) : localVisit?.room === roomIndex ? localVisit.plan : null,
+      personAt: (id) => (online() && id !== myId ? remotes.position(id) : { x: player.walkX, z: player.walkZ }),
     },
     false,
   );
+  /** 고양이와 놀기예요. 연결을 만든 뒤 이어 줘요. */
+  let catFlow: CatPlayFlow | null = null;
+  player.setLongPress((origin, reach) => catFlow?.longPress(origin, reach) ?? false);
   player.setTapFilter((origin, reach) => {
-    if (cats.tap(origin, reach)) return true;
+    if (catFlow?.tap(origin, reach)) return true;
     // 창가 화분을 누르면 이 병실에 모인 평안을 알려 줘요. 그 병실 안에 있을 때만이에요.
     const planterRoom = planters.tap(origin, reach);
     if (planterRoom !== null && roomAt(player.walkX, player.walkZ)?.index === planterRoom) {
@@ -574,6 +584,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         );
       }
       remotes.reset(snapshot.guests, snapshot.you);
+      catFlow?.reset(snapshot.catPlays, snapshot.catRests);
       remember(snapshot.guests, snapshot.you);
       // 내가 없는 동안 도착한 평안이 있으면 들어오자마자 보여 줘요.
       blessingCards?.showInbox(snapshot.inbox, client.serverNow());
@@ -676,6 +687,18 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         return;
       }
       if (event.kind === "leave") moments?.dismissFarewell(event.id);
+      if (event.kind === "cat-play") {
+        catFlow?.onPlay(event.play);
+        return;
+      }
+      if (event.kind === "cat-rest") {
+        catFlow?.onRest(event.catId, event.until);
+        return;
+      }
+      if (event.kind === "cat-wake") {
+        catFlow?.onWake(event.catId, event.until);
+        return;
+      }
       if (event.kind === "cat-visit") {
         const before = serverVisits.get(event.room);
         if (event.visit) {
@@ -700,6 +723,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       reopenEntry(nicknameMessage(problem));
     },
     onDenied(denied) {
+      if (denied.action === "cat" && catFlow?.onDenied(denied.reason)) return;
       if (denied.action === "discharge") {
         toast("내 침대를 고른 뒤 퇴원할 수 있어요.");
         return;
@@ -776,6 +800,12 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     onFarewellCount(count) {
       farewellsReceived = count;
     },
+    onCatBusy(nickname, scene) {
+      catFlow?.onBusy(nickname, scene);
+    },
+    onCatPetted(nickname) {
+      catFlow?.onPetted(nickname);
+    },
     onMessageType(kind) {
       debug?.setLastMessage(kind);
     },
@@ -826,6 +856,20 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   });
 
   serverNow = () => client.serverNow();
+  catFlow = createCatPlayFlow({
+    cats,
+    remotes,
+    player,
+    online: () => client.online,
+    myId: () => myId,
+    myNickname: () => current.nickname,
+    serverNow: () => serverNow(),
+    send: (catId, kind) => client.send({ type: "cat-play", catId, kind }),
+    openMenu: (menu) => actionBar?.openCat(menu),
+    toast: (text) => toast(text),
+    leaving: () => dischargeUntil !== null,
+  });
+  remotes.setYarnSource((roomIndex) => cats.yarnIn(roomIndex));
   online = () => client.online;
 
   /** 나에게 온 평안과 선물, 같은 병실의 한마디를 화면 낭독기가 읽게 해요. 화면 모습은 그대로예요. */

@@ -7,7 +7,8 @@
  */
 
 /** hug는 서서 안기, hug-low는 누운 사람을 침대 옆에서 몸을 낮춰 안기예요. */
-export type Gesture = "pray" | "bow" | "hug" | "hug-low";
+/** pet은 고양이를 쓰다듬기, tease는 낚싯대 흔들기, toss는 털실 굴리기예요. */
+export type Gesture = "pray" | "bow" | "hug" | "hug-low" | "pet" | "tease" | "toss";
 
 export interface Pose {
   /** 걸을 때 몸이 위아래로 움직이는 높이예요. */
@@ -115,6 +116,19 @@ const HUG_LEAN = 0.12;
 const HUG_LOW_LEAN = 0.34;
 const HUG_LOW_SINK = -0.12;
 
+/** 몸을 숙이고 한 손을 고양이 머리에 얹어 살살 움직여요. 뚱뚱한 고양이라 손이 낮게 내려가요. */
+const PET_LEAN = 0.3;
+const PET_SINK = -0.06;
+const PET_ARM_SWING = 1.35;
+const PET_STROKE = 0.18;
+/** 한 손을 앞으로 들어 낚싯대를 흔들어요. */
+const TEASE_ARM_SWING = 1.5;
+const TEASE_ARM_LIFT = 0.06;
+const TEASE_WAVE = 0.22;
+/** 몸을 숙이며 한 손을 앞으로 내밀어 털실을 굴려요. */
+const TOSS_LEAN = 0.22;
+const TOSS_ARM_SWING = 1.2;
+
 interface GestureTiming {
   fadeIn: number;
   hold: number;
@@ -127,6 +141,9 @@ const GESTURE_TIMING: Record<Gesture, GestureTiming> = {
   // 꼭 안는 3초예요.
   hug: { fadeIn: 0.5, hold: 3, fadeOut: 0.6 },
   "hug-low": { fadeIn: 0.6, hold: 3, fadeOut: 0.6 },
+  pet: { fadeIn: 0.4, hold: 3.1, fadeOut: 0.5 },
+  tease: { fadeIn: 0.3, hold: 5.4, fadeOut: 0.5 },
+  toss: { fadeIn: 0.25, hold: 0.3, fadeOut: 0.5 },
 };
 
 /** 눕거나 일어나는 데 걸리는 시간이에요. */
@@ -227,6 +244,19 @@ export function composePose(out: Pose, input: PoseInput): Pose {
     out.armRightSwing = mix(out.armRightSwing, HUG_ARM_SWING, weight);
     out.armLeftLift = mix(out.armLeftLift, HUG_ARM_LIFT, weight);
     out.armRightLift = mix(out.armRightLift, HUG_ARM_LIFT, weight);
+  } else if (gesture === "pet") {
+    const weight = gestureWeight(gesture, gestureElapsed);
+    out.lean = mix(out.lean, PET_LEAN, weight);
+    out.bob = mix(out.bob, PET_SINK, weight);
+    out.armRightSwing = mix(out.armRightSwing, PET_ARM_SWING + Math.sin(gestureElapsed * 4) * PET_STROKE, weight);
+  } else if (gesture === "tease") {
+    const weight = gestureWeight(gesture, gestureElapsed);
+    out.armRightSwing = mix(out.armRightSwing, TEASE_ARM_SWING + Math.sin(gestureElapsed * 5) * TEASE_WAVE, weight);
+    out.armRightLift = mix(out.armRightLift, TEASE_ARM_LIFT, weight);
+  } else if (gesture === "toss") {
+    const weight = gestureWeight(gesture, gestureElapsed);
+    out.lean = mix(out.lean, TOSS_LEAN, weight);
+    out.armRightSwing = mix(out.armRightSwing, TOSS_ARM_SWING, weight);
   } else if (gesture === "bow") {
     const weight = gestureWeight(gesture, gestureElapsed);
     out.lean = mix(out.lean, BOW_LEAN, weight);

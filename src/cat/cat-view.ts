@@ -62,6 +62,9 @@ export function createCatView(coat: CatCoat): CatView {
       backLeft.rotation.x = pose.legBackLeft;
       backRight.rotation.x = pose.legBackRight;
       eyes.scale.y = pose.eyeOpen;
+      body.rotation.z = pose.bodyRoll;
+      body.rotation.y = pose.bodyYaw;
+      head.rotation.z = pose.headRoll;
     },
   };
 }

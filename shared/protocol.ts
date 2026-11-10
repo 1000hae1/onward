@@ -2,9 +2,10 @@ import { z } from "zod";
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
 import { APPLE_NOTE_MAX, APPLE_PHRASES, APPLE_SLOTS } from "./apple-limits.ts";
 import { BENCH_SEAT_COUNT } from "./ward-layout.ts";
+import { CAT_PLAY_KINDS, WARD_CAT_PATTERN } from "./cat-play-rules.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 9;
+export const PROTOCOL_VERSION = 10;
 /** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
@@ -50,6 +51,10 @@ const address = z.string().regex(ADDRESS_PATTERN);
 /** 안아 주기 요청 번호예요. 서버가 무작위로 만들어요. */
 const requestId = z.string().regex(/^[a-z0-9]{12}$/);
 const roomIndex = z.number().int().min(0).max(5);
+/** 고양이 번호예요. 병동 고양이는 w0~w5, 데리고 다니는 고양이는 주인의 공개 번호예요. */
+const catId = z.union([z.string().regex(WARD_CAT_PATTERN), publicId]);
+const catPlayKind = z.enum(CAT_PLAY_KINDS);
+const catSceneKind = z.enum([...CAT_PLAY_KINDS, "rub"]);
 const appleId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 /** 사과 한 알이에요. 주인에게는 모든 사과, 링크로 온 사람에게는 자기가 단 사과만 보내요. */
 export const appleCardSchema = z.object({
@@ -123,6 +128,8 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("hug-answer"), requestId, accept: z.boolean() }),
   /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
   z.object({ v, type: z.literal("discharge"), closeLink: z.boolean() }),
+  /** 고양이와 놀고 싶어요. 놀이는 이 한 번만 보내고, 움직임은 각 화면이 그려요. 판단은 서버가 해요. */
+  z.object({ v, type: z.literal("cat-play"), catId, kind: catPlayKind }),
   /** 내가 없는 동안 도착한 평안을 받았어요. upTo 시각까지 남겨진 것을 서버가 지워요. */
   z.object({ v, type: z.literal("inbox-ack"), upTo: z.number().finite() }),
 ]);
@@ -175,6 +182,23 @@ const catVisitSchema = z.object({
   at: z.number().finite(),
 });
 
+/** 고양이 놀이 한 번이에요. 시작 시각과 끝 시각, 시드만 있으면 모든 화면이 같은 장면을 그려요. */
+const catPlaySchema = z.object({
+  catId,
+  kind: catSceneKind,
+  /** 함께 노는 사람의 공개 번호예요. */
+  by: publicId,
+  at: z.number().finite(),
+  until: z.number().finite(),
+  seed: z.number().min(0).max(1),
+  /** 요청할 때 그 사람이 있던 자리예요. */
+  x: coordinate,
+  z: coordinate,
+  /** 꾹꾹이를 받는 침대예요. */
+  bed: bedId.nullable(),
+});
+export type CatPlayMessage = z.infer<typeof catPlaySchema>;
+
 const placedGiftSchema = z.object({
   stand: bedId,
   slot: z.number().int().min(0).max(1),
@@ -210,6 +234,12 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
     visit: catVisitSchema.nullable(),
     changedAt: z.number().finite(),
   }),
+  /** 누군가 고양이와 놀아요. 한 번만 보내고 움직임은 각 화면이 그려요. */
+  z.object({ kind: z.literal("cat-play"), play: catPlaySchema }),
+  /** 고양이가 until까지 쉬어요. */
+  z.object({ kind: z.literal("cat-rest"), catId, until: z.number().finite() }),
+  /** 꾹꾹이 뒤 곁에서 자던 고양이가 그 사람이 일어나서 until에 깨어나요. */
+  z.object({ kind: z.literal("cat-wake"), catId, until: z.number().finite() }),
   /** 두 동물이 안아요. bed는 안기는 사람이 누워 있는 침대예요. 서 있으면 null이에요. */
   z.object({ kind: z.literal("hug"), a: publicId, b: publicId, bed: bedId.nullable() }),
   /** 아침에 그날 처음 누가 병실에 들어와서 창문이 열려요. 병실마다 하루 한 번이에요. */
@@ -241,6 +271,12 @@ export const deniedReasonSchema = z.enum([
   "unavailable",
   /** 좋은 아침이에요: 아침이 아니에요. */
   "not-morning",
+  /** 고양이: 다른 분의 고양이는 쓰다듬기만 해요. */
+  "pet-only",
+  /** 고양이: 꾹꾹이는 누워 있을 때만이에요. */
+  "not-lying",
+  /** 고양이: 잠깐 쉬고 있어요. */
+  "resting",
 ]);
 export type DeniedReason = z.infer<typeof deniedReasonSchema>;
 
@@ -258,6 +294,10 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     /** 서버 시각이에요. 병동 고양이를 모두 같은 시계로 움직이려고 보내요. */
     serverNow: z.number().finite(),
     catVisits: z.array(catVisitSchema),
+    /** 고양이마다 지금 하고 있거나 방금 끝난 놀이예요. 놀이 도중에 들어와도 같은 장면을 봐요. */
+    catPlays: z.array(catPlaySchema),
+    /** 쉬고 있는 고양이예요. */
+    catRests: z.array(z.object({ catId, until: z.number().finite() })),
     /** 30초 안에 돌아와 침대와 자리를 그대로 받았는지예요. */
     restored: z.boolean(),
     /** 내가 없는 동안 도착한 평안이에요. 보내고 나면 서버에서 지워요. */
@@ -337,13 +377,17 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ v, type: z.literal("discharge-started"), until: z.number().finite() }),
   /** 지금까지 배웅해 준 사람 수예요. 퇴원하는 사람에게만 보내요. */
   z.object({ v, type: z.literal("farewell-count"), count: z.number().int().min(0) }),
+  /** 고양이가 다른 분과 놀고 있어요. 늦게 누른 사람에게만 보내요. */
+  z.object({ v, type: z.literal("cat-busy"), catId, nickname: z.string().max(64), scene: catSceneKind }),
+  /** 누군가 내 고양이를 쓰다듬어 줬어요. 주인에게만 보내요. */
+  z.object({ v, type: z.literal("cat-petted"), nickname: z.string().max(64) }),
   /** 보낸 메시지의 버전이 서버와 달라요. v에는 서버의 버전이 있어요. */
   z.object({ v, type: z.literal("version-mismatch") }),
   /** 선물과 불빛처럼 서버가 받지 않은 동작이에요. 요청 목록에는 없지만 안내 문구를 보여 주려고 더했어요. */
   z.object({
     v,
     type: z.literal("action-denied"),
-    action: z.enum(["bless", "bow", "gift", "lamp", "guestbook", "hug", "discharge"]),
+    action: z.enum(["bless", "bow", "gift", "lamp", "guestbook", "hug", "discharge", "cat"]),
     reason: deniedReasonSchema,
     /** 선물이면 어떤 선물이었는지예요. 오잎클로버 안내를 따로 보여 주려고요. */
     item: item.optional(),

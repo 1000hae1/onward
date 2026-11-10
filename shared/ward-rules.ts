@@ -67,6 +67,8 @@ export interface GuestRecord {
   joinedAt?: number;
   /** 이번에 들어와서 평안을 빈 횟수예요. 나갈 때 숫자로만 집계해요. */
   blessings?: number;
+  /** 최근 30초 동안 고양이 놀이를 청한 시각이에요. 연결마다 요청 횟수를 제한해요. */
+  catTaps?: number[];
 }
 
 /** 서명을 확인한 뒤의 hello예요. guestId는 토큰에서 꺼낸 값이에요. */

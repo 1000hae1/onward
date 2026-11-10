@@ -27,6 +27,8 @@ body {
   height: 100%;
   display: block;
   touch-action: none;
+  /* 고양이를 길게 누를 때 iOS의 길게 누르기 메뉴가 뜨지 않게 해요. */
+  -webkit-touch-callout: none;
 }
 
 #hud-main,

@@ -100,6 +100,10 @@ export interface WardClientHandlers {
   /** 퇴원을 받아 줬어요. until까지 배웅을 모아요(서버 시각). */
   onDischargeStarted(until: number): void;
   onFarewellCount(count: number): void;
+  /** 내가 누른 고양이가 다른 분과 놀고 있어요. */
+  onCatBusy(nickname: string, scene: Extract<ServerMessage, { type: "cat-busy" }>["scene"]): void;
+  /** 누군가 내 고양이를 쓰다듬어 줬어요. */
+  onCatPetted(nickname: string): void;
   /** 받은 메시지의 종류예요. ?debug=1 표시에만 써요. event는 "event:join"처럼 알려 줘요. */
   onMessageType?(kind: string): void;
 }
@@ -346,6 +350,12 @@ export function createWardClient(
         return;
       case "farewell-count":
         handlers.onFarewellCount(message.count);
+        return;
+      case "cat-busy":
+        handlers.onCatBusy(message.nickname, message.scene);
+        return;
+      case "cat-petted":
+        handlers.onCatPetted(message.nickname);
         return;
     }
   };

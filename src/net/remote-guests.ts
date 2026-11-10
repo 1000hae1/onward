@@ -30,6 +30,8 @@ import {
 } from "../avatar/pose";
 import type { Gesture, Pose } from "../avatar/pose";
 import { createCompanion } from "../cat/companion";
+import { PET_APPROACH_SECONDS } from "../cat/cat-play";
+import type { CatPlayMessage } from "../../shared/protocol";
 import type { Companion } from "../cat/companion";
 import { LIGHT_DELAY_SECONDS } from "../ui/action-bar";
 import { createHeadLabels } from "../ui/head-labels";
@@ -139,6 +141,19 @@ export interface RemoteGuests {
   guests(): Guest[];
   /** 누른 곳에 다른 동물이 있으면 그 사람이에요. 벽에 가리면 null이에요. */
   tap(origin: Vector3, reach: Vector3): Guest | null;
+  /** 누른 시선에 다른 사람이 데리고 다니는 고양이가 있으면 그 주인이에요. */
+  tapCat(origin: Vector3, reach: Vector3): { owner: Guest; x: number; z: number } | null;
+  /**
+   * 고양이 놀이를 그려요. 그 사람의 고양이면 그 고양이가 놀고, 노는 사람이 다른 사람이면 손동작을 해요.
+   * face는 노는 사람이 바라볼 고양이 자리예요.
+   */
+  catPlay(play: CatPlayMessage, face: Point | null, serverNow: number): void;
+  /** 곁에서 자던 그 사람의 고양이가 until에 깨어나요. */
+  catWake(catId: string, until: number): void;
+  /** 그 사람의 고양이 자리예요. */
+  catPosition(id: string): Point | null;
+  /** 병동 고양이 털실이 굴러가면 가까이 있던 고양이들도 같이 쫓아요. */
+  setYarnSource(source: ((roomIndex: number) => Point | null) | null): void;
   /** 걸어 다니는 자리예요. 누워 있으면 침대 곁 자리예요. */
   position(id: string): Point | null;
   /** 안아 주러 다가가요. 도착하면 상대를 보고 안아요. low면 침대 옆에서 몸을 낮춰요. */
@@ -302,6 +317,23 @@ export function createRemoteGuests(
     }
     remote.queued = action;
     applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
+  };
+
+  let yarnSource: ((roomIndex: number) => Point | null) | null = null;
+  /** 같이 털실을 쫓는 거리예요. */
+  const CHASE_REACH = 2.5;
+  const CAT_TAP_HALF = 0.22;
+  const CAT_TAP_HEIGHT = 0.46;
+
+  /** 고양이와 놀 때의 손동작이에요. 서 있을 때만 해요. 누워 있거나 앉아 있으면 고양이만 놀아요. */
+  const catGesture = (remote: Remote, gesture: Gesture, face: Point | null): void => {
+    if (remote.flow.kind !== "free" || isSeated(remote.seat)) return;
+    const act = (): void => {
+      if (face) remote.yawGoal = Math.atan2(face.x - remote.position.x, face.z - remote.position.z);
+      play(remote, gesture);
+    };
+    if (remote.path.length > 0) remote.afterWalk = act;
+    else act();
   };
 
   const play = (remote: Remote, gesture: Gesture): void => {
@@ -554,6 +586,13 @@ export function createRemoteGuests(
           // 멀리서 몸만 그릴 때는 곁의 고양이도 쉬어요.
           remote.companion.setVisible(visible && !simple);
         }
+        const moves = remote.companion.moves;
+        const room = remote.companion.enabled ? roomAt(moves.x, moves.z) : null;
+        const ball = room && yarnSource ? yarnSource(room.index) : null;
+        remote.companion.setChase(
+          ball && !remote.companion.playing && Math.hypot(ball.x - moves.x, ball.z - moves.z) < CHASE_REACH ? ball : null,
+        );
+        if (remote.companion.playing) remote.companion.setPlayHand(remote.position);
         remote.companion.update(
           dt,
           { walkX: remote.position.x, walkZ: remote.position.z, lyingBed: flow.kind === "lying" ? flow.bed : null },
@@ -660,6 +699,49 @@ export function createRemoteGuests(
           play(remote, "hug");
         },
       };
+    },
+    tapCat(origin, reach) {
+      const shown = [...remotes.values()].filter((remote) => remote.visible && !remote.simple && remote.companion.enabled);
+      const boxes = shown.map((remote) => {
+        const { x, z } = remote.companion.moves;
+        return { minX: x - CAT_TAP_HALF, maxX: x + CAT_TAP_HALF, minZ: z - CAT_TAP_HALF, maxZ: z + CAT_TAP_HALF, minY: 0, maxY: CAT_TAP_HEIGHT };
+      });
+      const picked = pickBox(origin, reach, boxes, WALL_BOXES);
+      if (picked === null) return null;
+      const remote = shown[picked];
+      remote.companion.moves.notice = 0;
+      return { owner: remote.guest, x: remote.companion.moves.x, z: remote.companion.moves.z };
+    },
+    catPlay(event, face, serverNow) {
+      const owner = remotes.get(event.catId);
+      if (owner && owner.companion.enabled && serverNow < event.until) {
+        owner.companion.startPlay(
+          { kind: event.kind, seed: event.seed, at: event.at, until: event.until, person: { x: event.x, z: event.z }, bed: event.bed },
+          serverNow - event.at,
+        );
+      }
+      const player = remotes.get(event.by);
+      // 이미 끝난 놀이(늦게 들어와 받은 놀이)면 손동작은 하지 않아요.
+      if (!player || serverNow - event.at > 2_000) return;
+      const catAt = face ?? (owner ? owner.companion.moves : null);
+      if (event.kind === "pet") {
+        // 고양이 곁으로 걸어온 뒤 쓰다듬어요. 걷는 소식은 따로 와요.
+        player.delayed = { left: Math.max(0, PET_APPROACH_SECONDS - 0.3), action: () => catGesture(player, "pet", catAt) };
+      } else if (event.kind === "yarn") {
+        catGesture(player, "toss", catAt);
+      } else if (event.kind === "wand") {
+        catGesture(player, "tease", catAt);
+      }
+    },
+    catWake(catId, until) {
+      remotes.get(catId)?.companion.wake(until);
+    },
+    catPosition(id) {
+      const remote = remotes.get(id);
+      return remote?.companion.enabled ? { x: remote.companion.moves.x, z: remote.companion.moves.z } : null;
+    },
+    setYarnSource(source) {
+      yarnSource = source;
     },
     tap(origin, reach) {
       const shown = [...remotes.values()].filter((remote) => remote.visible);

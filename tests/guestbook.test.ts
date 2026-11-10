@@ -106,6 +106,8 @@ test("snapshot과 모든 event 모양에는 사과를 담을 자리가 없어요
     seasonalGifts: false,
     serverNow: NOW,
     catVisits: [],
+    catPlays: [],
+    catRests: [],
     restored: false,
     inbox: [],
     stats: { visitors: 1, blessings: 0, lamps: 0 },
@@ -132,6 +134,9 @@ test("snapshot과 모든 event 모양에는 사과를 담을 자리가 없어요
     { kind: "stats", stats: { visitors: 1, blessings: 1, lamps: 0 } },
     { kind: "planter", room: 0, total: 3 },
     { kind: "discharge", id: guest.id },
+    { kind: "cat-play", play: { catId: "w0", kind: "pet", by: guest.id, at: 1, until: 2, seed: 0.5, x: 0, z: 0, bed: null } },
+    { kind: "cat-rest", catId: "w0", until: 2 },
+    { kind: "cat-wake", catId: guest.id, until: 2 },
   ];
   for (const event of events) {
     const message = parseMessage(serverMessageSchema, JSON.stringify({ v, type: "event", event }));

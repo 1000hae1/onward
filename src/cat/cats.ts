@@ -3,6 +3,10 @@ import type { Object3D } from "three";
 import type { LanternSink } from "../ward/lantern-rules";
 import { pickBox, turnToward } from "../ward/camera-view";
 import {
+  bedApproach,
+  bedCatSeat,
+  bedCatYaw,
+  BED_SURFACE_Y,
   BEDS,
   catSpots,
   doorSpots,
@@ -20,11 +24,16 @@ import { catNoseReach } from "./cat-kit";
 /** 코를 맞댈 때 두 고양이 몸통 사이의 거리예요. */
 const NOSE_GAP = catNoseReach("ward") + catNoseReach("companion");
 import { catFrameAt, CAT_GREET_SECONDS, CAT_WALK_SPEED, shouldGreet } from "./cat-path";
-import type { CatPoint, CatRoom, CatVisitPlan } from "./cat-path";
-import { createCatPose } from "./cat-pose";
+import type { CatPoint, CatResume, CatRoom, CatVisitPlan } from "./cat-path";
+import { createCatPose, restPlayPose } from "./cat-pose";
 import { createCatView } from "./cat-view";
-import { createCompanion, drawCat, ease, newMoves, STRIDE, TURN_RATE } from "./companion";
+import { applySceneFrame, createCompanion, drawCat, ease, newMoves, STRIDE, TURN_RATE } from "./companion";
 import type { Moves } from "./companion";
+import { petSpot, sceneFrame, sceneRest } from "./cat-play";
+import type { PlayScene, SceneFrame } from "./cat-play";
+import { createCatProps } from "./cat-props";
+import { wardCatId, wardCatRoom } from "../../shared/cat-play-rules";
+import type { CatPlayMessage } from "../../shared/protocol";
 
 const CAT_RADIUS = 0.14;
 const CAT_NAV_CELL = 0.2;
@@ -34,6 +43,12 @@ const CAT_TAP_HALF = 0.22;
 const CAT_TAP_HEIGHT = 0.46;
 /** 한 번에 이보다 멀리 옮겨지면 걸은 것이 아니라 자리를 맞춘 거예요. */
 const SNAP_DISTANCE = 1;
+/** 놀이가 이어질 때 놀던 자리에서 새 장면 자리까지 서둘러 걸어가는 빠르기예요. 이보다 멀면 바로 옮겨요. */
+const CATCH_UP_SPEED = 1.6;
+const CATCH_UP_MAX = 4;
+/** 데리고 다니는 고양이가 같이 털실을 쫓는 거리예요. */
+const CHASE_REACH = 2.5;
+const REST_POSE = restPlayPose();
 /** 반기러 나올 때는 조금 서둘러 걸어요. */
 const WELCOME_SPEED = CAT_WALK_SPEED * 1.6;
 /** 문 앞에 앉아 반기는 시간이에요. 그동안 천천히 두 번 눈을 깜빡여요. */
@@ -58,12 +73,33 @@ export interface CatWorld {
   isTaken(bed: number): boolean;
   /** 서버가 정한 찾아가기예요. */
   visitFor(roomIndex: number): CatVisitPlan | null;
+  /** 그 사람이 지금 있는 자리예요. 낚싯대를 사람 손에서 이어 그릴 때 써요. */
+  personAt(id: string): { x: number; z: number } | null;
 }
+
+/** 누른 고양이예요. 병동 고양이는 병실 번호가 있고, 내 고양이는 mine이에요. */
+export type CatTarget =
+  | { catId: string; kind: "ward"; room: number; x: number; z: number }
+  | { catId: string; kind: "mine"; x: number; z: number };
 
 export interface CatsHandle {
   update(dt: number, stillMotion: boolean): void;
-  /** 누른 시선에 고양이가 있으면 반응하고 true를 돌려줘요. */
-  tap(origin: Vector3, reach: Vector3): boolean;
+  /** 누른 시선에 고양이가 있으면 그 고양이를 돌려줘요. */
+  tap(origin: Vector3, reach: Vector3): CatTarget | null;
+  /** 서버가 알린 놀이예요. 내 고양이 놀이면 me가 그 고양이 번호예요. */
+  play(play: CatPlayMessage, me: string | null): void;
+  /** 곁에서 자던 고양이가 until에 깨어나요. */
+  wake(catId: string, until: number, me: string | null): void;
+  /** 들어올 때 받은 놀이로 바꿔요. 예전 놀이는 지워요. */
+  resetPlays(plays: readonly CatPlayMessage[], me: string | null): void;
+  /** 그 병실 고양이가 지금 굴리는 털실이에요. */
+  yarnIn(roomIndex: number): { x: number; z: number } | null;
+  /** 쓰다듬는 사람이 설 자리예요. 놀이를 받은 뒤 물어요. */
+  petSpot(catId: string, me: string | null): { x: number; z: number } | null;
+  /** 지금 노는 중인 고양이인지예요. */
+  isPlaying(catId: string, me: string | null): boolean;
+  /** 병동 고양이나 내 고양이가 지금 보이는 자리예요. */
+  catPosition(catId: string, me: string | null): { x: number; z: number } | null;
   setCompanion(enabled: boolean): void;
   /** 자주 온 사람을 반겨요. 그 사람과 가까운 문의 병동 고양이가 문 앞으로 나와 천천히 눈을 깜빡여요. 이 화면에서만 보여요. */
   welcome(near: { x: number; z: number }): void;
@@ -125,7 +161,23 @@ export function createCats(
     const view = createCatView("ward");
     view.root.visible = false;
     parent.add(view.root);
-    return { room, plan, view, moves: newMoves(0, 0, 0), y: 0, active: false, placed: false, sitting: false };
+    return {
+      room,
+      plan,
+      view,
+      moves: newMoves(0, 0, 0),
+      y: 0,
+      active: false,
+      placed: false,
+      sitting: false,
+      props: createCatProps(parent),
+      /** 지금 하고 있거나 마지막으로 한 놀이예요. */
+      scene: null as (PlayScene & { by: string }) | null,
+      /** 놀이가 끝난 뒤 제자리로 돌아가기예요. */
+      resume: null as CatResume | null,
+      /** 새 장면 자리까지 서둘러 걸어가는 중이에요. */
+      catchingUp: false,
+    };
   });
   type WardCat = (typeof wardCats)[number];
 
@@ -157,7 +209,7 @@ export function createCats(
       }
       if (welcoming.left <= 0) {
         // 돌아갈 자리는 지금 서버 시계로 정해진 자리예요.
-        const frame = catFrameAt(cat.plan, world.serverNow(), world.isTaken, world.visitFor(cat.room.index));
+        const frame = frameOf(cat, world.serverNow());
         const inside = doorSpots(cat.room).inside;
         const back = navOf(cat.room).findPath(inside, { x: frame.x, z: frame.z });
         welcoming = { ...welcoming, phase: "back", path: [inside, ...back, { x: frame.x, z: frame.z }] };
@@ -190,6 +242,62 @@ export function createCats(
     drawCat(cat.view, moves, cat.y, dt, pose);
   };
 
+  type Frame = { x: number; y: number; z: number; yaw: number; scene: SceneFrame | null; pose: "walk" | "sit" | "curl" | "hop" };
+
+  /** 서버 시각 time에 그 고양이가 있을 자리예요. 놀이 중이면 장면이에요. */
+  const frameOf = (cat: WardCat, time: number): Frame => {
+    const scene = cat.scene;
+    if (scene && time >= scene.at && time < scene.until) {
+      const frame = sceneFrame(scene, time);
+      return { x: frame.x, y: frame.y, z: frame.z, yaw: frame.yaw, scene: frame, pose: frame.walking ? "walk" : "sit" };
+    }
+    const frame = catFrameAt(cat.plan, time, world.isTaken, world.visitFor(cat.room.index), cat.resume);
+    return { ...frame, scene: null };
+  };
+
+  /** 놀이가 시작할 때의 자리예요. 놀이 기록 없이 계산해서, 늦게 들어온 사람도 같은 자리에서 시작해요. */
+  const sceneFor = (cat: WardCat, play: CatPlayMessage): PlayScene & { by: string } => {
+    const start = catFrameAt(cat.plan, play.at, world.isTaken, world.visitFor(cat.room.index));
+    let floor: CatPoint = { x: start.x, z: start.z };
+    if (start.y > 0 || start.pose === "hop") {
+      // 침대 위였으면 가장 가까운 침대 곁으로 내려와요.
+      let best = Infinity;
+      for (const index of cat.plan.beds) {
+        const seat = bedCatSeat(BEDS[index], false);
+        const foot = bedCatSeat(BEDS[index], true);
+        const distance = Math.min(Math.hypot(seat.x - start.x, seat.z - start.z), Math.hypot(foot.x - start.x, foot.z - start.z));
+        if (distance < best) {
+          best = distance;
+          floor = bedApproach(BEDS[index]);
+        }
+      }
+    }
+    const bed = play.bed === null ? null : BEDS[play.bed];
+    return {
+      kind: play.kind,
+      seed: play.seed,
+      at: play.at,
+      until: play.until,
+      start: { x: start.x, y: start.y, z: start.z, yaw: start.yaw },
+      floor,
+      person: { x: play.x, z: play.z },
+      bed: bed ? { approach: bedApproach(bed), seat: bedCatSeat(bed, true), yaw: bedCatYaw(bed), height: BED_SURFACE_Y } : null,
+      door: doorSpots(cat.room),
+      path: cat.plan.path,
+      by: play.by,
+    };
+  };
+
+  const resumeOf = (scene: PlayScene): CatResume => {
+    const rest = sceneRest(scene);
+    return { at: scene.until, from: rest.point, fromSeat: rest.seat };
+  };
+
+  const wardCatOf = (catId: string): WardCat | null => {
+    const room = wardCatRoom(catId);
+    return room === null ? null : (wardCats.find((cat) => cat.room.index === room) ?? null);
+  };
+
   const companion = createCompanion(parent);
   const setCompanion = (enabled: boolean): void => companion.setEnabled(enabled, owner);
 
@@ -201,9 +309,45 @@ export function createCats(
     cat.view.root.visible = cat.active;
     if (!cat.active) return;
 
-    // 자리는 서버 시각만으로 정해져요. 어느 화면에서 봐도 같은 자리예요.
-    const frame = catFrameAt(cat.plan, world.serverNow(), world.isTaken, world.visitFor(room.index));
-    const moved = Math.hypot(frame.x - moves.x, frame.z - moves.z);
+    // 자리는 서버 시각과 서버가 알린 놀이만으로 정해져요. 어느 화면에서 봐도 같은 자리예요.
+    const now = world.serverNow();
+    // 놀이가 끝나면 놀던 자리에서 원래 일정으로 돌아가요.
+    if (cat.scene && now >= cat.scene.until && !cat.resume) cat.resume = resumeOf(cat.scene);
+    const frame = frameOf(cat, now);
+    const playing = frame.scene !== null;
+    cat.props.show(frame.scene, playing && cat.scene?.kind === "wand" ? world.personAt(cat.scene.by) : null);
+
+    let moved = Math.hypot(frame.x - moves.x, frame.z - moves.z);
+    if (cat.catchingUp && cat.placed && moved < CATCH_UP_MAX && !stillMotion) {
+      // 놀던 자리에서 새 장면 자리까지 서둘러 걸어가요. 화면마다 조금 다를 수 있지만 금방 같은 자리에 와요.
+      const step = Math.min(moved, CATCH_UP_SPEED * dt);
+      if (moved > 0.03) {
+        const dx = (frame.x - moves.x) / moved;
+        const dz = (frame.z - moves.z) / moved;
+        moves.x += dx * step;
+        moves.z += dz * step;
+        moves.walkPhase += (step / STRIDE) * Math.PI * 2;
+        moves.yaw = turnToward(moves.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * TURN_RATE));
+        moves.walkWeight = ease(moves.walkWeight, 1, dt);
+        moves.sit = ease(moves.sit, 0, dt);
+        moves.curl = ease(moves.curl, 0, dt);
+        moves.play = REST_POSE;
+        cat.y = Math.max(frame.y, cat.y - dt * 2);
+        drawCat(cat.view, moves, cat.y, dt, pose);
+        return;
+      }
+    }
+    cat.catchingUp = false;
+    if (frame.scene) {
+      applySceneFrame(moves, frame.scene, dt, stillMotion);
+      cat.y = frame.y;
+      cat.placed = true;
+      cat.sitting = false;
+      drawCat(cat.view, moves, cat.y, dt, pose);
+      return;
+    }
+    moves.play = REST_POSE;
+    moved = Math.hypot(frame.x - moves.x, frame.z - moves.z);
     if (cat.placed && moved < SNAP_DISTANCE) moves.walkPhase += (moved / STRIDE) * Math.PI * 2;
     moves.x = frame.x;
     moves.z = frame.z;
@@ -224,7 +368,18 @@ export function createCats(
     if (!companion.enabled) return;
     const moves = companion.moves;
     const cat = wardCats.find((candidate) => candidate.active && roomAt(moves.x, moves.z)?.index === candidate.room.index);
+    // 병동 고양이가 털실을 쫓으면 가까이 있던 내 고양이도 같이 쫓아요.
+    const ball = cat ? yarnOf(cat) : null;
+    companion.setChase(
+      ball && !companion.playing && Math.hypot(ball.x - moves.x, ball.z - moves.z) < CHASE_REACH ? ball : null,
+    );
     if (!cat) return;
+    // 놀고 있는 고양이와는 코를 맞대지 않아요.
+    if (cat.scene && world.serverNow() < cat.scene.until) {
+      greetLeft = 0;
+      cat.moves.nose = ease(cat.moves.nose, 0, dt);
+      return;
+    }
 
     if (greetLeft > 0) {
       greetLeft -= dt;
@@ -249,6 +404,32 @@ export function createCats(
       lastGreet = seconds;
       greetLeft = CAT_GREET_SECONDS;
     }
+  };
+
+  /** 그 고양이가 지금 굴리는 털실이에요. */
+  const yarnOf = (cat: WardCat): { x: number; z: number } | null => {
+    const scene = cat.scene;
+    if (!scene || scene.kind !== "yarn") return null;
+    const now = world.serverNow();
+    if (now < scene.at || now >= scene.until) return null;
+    const frame = sceneFrame(scene, now);
+    return frame.yarn ? { x: frame.yarn.x, z: frame.yarn.z } : null;
+  };
+
+  const startWardPlay = (cat: WardCat, play: CatPlayMessage): void => {
+    const now = world.serverNow();
+    // 놀던 고양이면 새 장면 자리까지 걸어가요. 반기러 나왔던 고양이도 그만 놀이로 가요.
+    cat.catchingUp = cat.placed && cat.active;
+    if (welcoming?.cat === cat) welcoming = null;
+    cat.scene = sceneFor(cat, play);
+    cat.resume = now >= play.until ? resumeOf(cat.scene) : null;
+  };
+
+  const companionPlay = (play: CatPlayMessage): void => {
+    companion.startPlay(
+      { kind: play.kind, seed: play.seed, at: play.at, until: play.until, person: { x: play.x, z: play.z }, bed: play.bed },
+      world.serverNow() - play.at,
+    );
   };
 
   setCompanion(initialCompanion);
@@ -280,8 +461,11 @@ export function createCats(
       }
       if (!best) return;
       const cat = best;
+      // 놀고 있는 고양이는 놀이를 이어 가요.
+      const now = world.serverNow();
+      if (cat.scene && now < cat.scene.until) return;
       if (!cat.placed) {
-        const frame = catFrameAt(cat.plan, world.serverNow(), world.isTaken, world.visitFor(cat.room.index));
+        const frame = frameOf(cat, now);
         cat.moves.x = frame.x;
         cat.moves.z = frame.z;
         cat.placed = true;
@@ -311,10 +495,75 @@ export function createCats(
       }
       if (companion.view.root.visible) sink(companion, lanternPoint, companion.view.lanternWorld(lanternPoint));
     },
+    play(play, me) {
+      const cat = wardCatOf(play.catId);
+      if (cat) {
+        startWardPlay(cat, play);
+        return;
+      }
+      if (me !== null && play.catId === me && companion.enabled && world.serverNow() < play.until) companionPlay(play);
+    },
+    wake(catId, until, me) {
+      const cat = wardCatOf(catId);
+      if (cat?.scene) {
+        cat.scene = { ...cat.scene, until: Math.min(cat.scene.until, until) };
+        cat.resume = world.serverNow() >= cat.scene.until ? resumeOf(cat.scene) : null;
+        return;
+      }
+      if (me !== null && catId === me) companion.wake(until);
+    },
+    resetPlays(plays, me) {
+      for (const cat of wardCats) {
+        cat.scene = null;
+        cat.resume = null;
+        cat.catchingUp = false;
+      }
+      for (const play of plays) {
+        const cat = wardCatOf(play.catId);
+        if (cat) {
+          cat.scene = sceneFor(cat, play);
+          cat.resume = world.serverNow() >= play.until ? resumeOf(cat.scene) : null;
+        } else if (me !== null && play.catId === me && companion.enabled && world.serverNow() < play.until) {
+          companionPlay(play);
+        }
+      }
+    },
+    yarnIn(roomIndex) {
+      const cat = wardCats.find((candidate) => candidate.room.index === roomIndex);
+      return cat ? yarnOf(cat) : null;
+    },
+    petSpot(catId, me) {
+      const cat = wardCatOf(catId);
+      if (cat?.scene) return petSpot(cat.scene);
+      if (me !== null && catId === me && companion.enabled) {
+        const { x, z, yaw } = companion.moves;
+        // 내 고양이는 곁에 있어요. 고양이 앞쪽 조금 옆에 서요.
+        return { x: x + Math.sin(yaw + 0.6) * 0.42, z: z + Math.cos(yaw + 0.6) * 0.42 };
+      }
+      return null;
+    },
+    catPosition(catId, me) {
+      const cat = wardCatOf(catId);
+      if (cat) return cat.placed ? { x: cat.moves.x, z: cat.moves.z } : null;
+      return me !== null && catId === me && companion.enabled ? { x: companion.moves.x, z: companion.moves.z } : null;
+    },
+    isPlaying(catId, me) {
+      const cat = wardCatOf(catId);
+      const now = world.serverNow();
+      if (cat) return cat.scene !== null && now >= cat.scene.at && now < cat.scene.until;
+      return me !== null && catId === me && companion.playing;
+    },
     tap(origin, reach) {
-      const candidates: { moves: Moves; y: number }[] = [
-        ...wardCats.filter((cat) => cat.active).map((cat) => ({ moves: cat.moves, y: cat.y })),
-        ...(companion.enabled ? [{ moves: companion.moves, y: 0 }] : []),
+      const wardShown = wardCats.filter((cat) => cat.active);
+      const candidates: { moves: Moves; y: number; target: (me: Moves) => CatTarget }[] = [
+        ...wardShown.map((cat) => ({
+          moves: cat.moves,
+          y: cat.y,
+          target: (m: Moves): CatTarget => ({ catId: wardCatId(cat.room.index), kind: "ward", room: cat.room.index, x: m.x, z: m.z }),
+        })),
+        ...(companion.enabled
+          ? [{ moves: companion.moves, y: 0, target: (m: Moves): CatTarget => ({ catId: "", kind: "mine", x: m.x, z: m.z }) }]
+          : []),
       ];
       const boxes: WallBox[] = candidates.map(({ moves, y }) => ({
         minX: moves.x - CAT_TAP_HALF,
@@ -325,9 +574,10 @@ export function createCats(
         maxY: y + CAT_TAP_HEIGHT,
       }));
       const picked = pickBox(origin, reach, boxes, WALL_BOXES);
-      if (picked === null) return false;
-      candidates[picked].moves.notice = 0;
-      return true;
+      if (picked === null) return null;
+      const chosen = candidates[picked];
+      chosen.moves.notice = 0;
+      return chosen.target(chosen.moves);
     },
   };
 }

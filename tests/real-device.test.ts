@@ -64,6 +64,8 @@ function fullSnapshot(): string {
     seasonalGifts: true,
     serverNow: NOW,
     catVisits: [],
+    catPlays: [],
+    catRests: [],
     restored: false,
     inbox: Array.from({ length: 10 }, () => ({ nickname: "따뜻한 곰", animal: "bear", kind: "gift", item: 3, at: NOW })),
     stats: { visitors: 30, blessings: 100, lamps: 72 },

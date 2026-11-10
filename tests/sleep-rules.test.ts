@@ -103,6 +103,8 @@ test("새로 들어온 사람의 snapshot에 잠든 상태가 들어가요", () 
     seasonalGifts: true,
     serverNow: NOW,
     catVisits: [],
+    catPlays: [],
+    catRests: [],
     restored: false,
     inbox: [],
     stats: { visitors: 2, blessings: 0, lamps: 0 },

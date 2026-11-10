@@ -98,6 +98,7 @@ const VISITOR_ALLOWED = new Set([
   "walk-to",
   "sit",
   "stand",
+  "cat-play",
   "bless",
   "bow",
   "gift",

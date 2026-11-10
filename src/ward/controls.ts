@@ -120,6 +120,8 @@ const NURSE_STATION_SPOT = {
 };
 const TAP_MAX_MOVE_PX = 8;
 const TAP_MAX_MS = 450;
+/** 손가락으로 이만큼 누르고 있으면 길게 누른 거예요. */
+export const LONG_PRESS_MS = 500;
 const MARKER_SECONDS = 0.9;
 /** 누른 방향으로 살펴보는 거리예요. 앞마당 끝에서 건물 안쪽까지 닿아요. */
 const TAP_REACH = 80;
@@ -211,6 +213,8 @@ export interface PlayerControls {
   setLobbyListener(listener: (() => void) | null): void;
   /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
   setTapFilter(filter: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
+  /** 휴대폰에서 길게 누르면 불러요. true를 돌려주면 손을 뗄 때 탭으로 보지 않아요. */
+  setLongPress(handler: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
   /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
   whenUp(action: () => void): void;
   faceToward(x: number, z: number): void;
@@ -364,6 +368,7 @@ export function createPlayerControls(
   let inputEnabled = true;
   let bedPicker: ((bed: number) => void) | null = null;
   let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
+  let longPress: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
   let afterUp: (() => void) | null = null;
   /** walkToSpot으로 가는 중이면 도착해서 할 일이에요. */
   let afterWalk: (() => void) | null = null;
@@ -605,8 +610,8 @@ export function createPlayerControls(
     });
   };
 
-  const handleTap = (clientX: number, clientY: number): void => {
-    if (!inputEnabled) return;
+  /** 화면의 한 점에서 병실로 뻗는 시선이에요. */
+  const rayAt = (clientX: number, clientY: number): { origin: Vector3; direction: Vector3; reach: Vector3 } => {
     const rect = canvas.getBoundingClientRect();
     pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -614,8 +619,12 @@ export function createPlayerControls(
     );
     raycaster.setFromCamera(pointer, camera);
     const { origin, direction } = raycaster.ray;
+    return { origin, direction, reach: origin.clone().addScaledVector(direction, TAP_REACH) };
+  };
 
-    const reach = origin.clone().addScaledVector(direction, TAP_REACH);
+  const handleTap = (clientX: number, clientY: number): void => {
+    if (!inputEnabled) return;
+    const { origin, direction, reach } = rayAt(clientX, clientY);
     const bed = pickBox(origin, reach, BED_BOXES, WALL_BOXES);
     if (bedPicker) {
       if (bed !== null) bedPicker(bed);
@@ -646,6 +655,11 @@ export function createPlayerControls(
   const activePointers = new Set<number>();
   let dragging = false;
   let tapStart: { x: number; y: number; time: number; id: number } | null = null;
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelPress = (): void => {
+    if (pressTimer !== null) clearTimeout(pressTimer);
+    pressTimer = null;
+  };
 
   canvas.addEventListener("pointerdown", (event) => {
     activePointers.add(event.pointerId);
@@ -655,8 +669,28 @@ export function createPlayerControls(
       activePointers.size === 1 && event.button === 0
         ? { x: event.clientX, y: event.clientY, time: event.timeStamp, id: event.pointerId }
         : null;
+    cancelPress();
+    // 손가락으로 길게 누르면 바로 하는 동작이 있어요(고양이 쓰다듬기).
+    const start = tapStart;
+    if (start && event.pointerType === "touch" && longPress) {
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        if (tapStart !== start || !inputEnabled || !longPress) return;
+        const { origin, reach } = rayAt(start.x, start.y);
+        if (longPress(origin, reach)) tapStart = null;
+      }, LONG_PRESS_MS);
+    }
+  });
+  // 길게 누르는 동안 브라우저 메뉴가 뜨지 않게 해요.
+  canvas.addEventListener("contextmenu", (event) => {
+    if (longPress) event.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (pressTimer === null || !tapStart || tapStart.id !== event.pointerId) return;
+    if (Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y) > TAP_MAX_MOVE_PX) cancelPress();
   });
   canvas.addEventListener("pointerup", (event) => {
+    cancelPress();
     activePointers.delete(event.pointerId);
     if (activePointers.size === 0) dragging = false;
     const start = tapStart;
@@ -668,6 +702,7 @@ export function createPlayerControls(
     }
   });
   canvas.addEventListener("pointercancel", (event) => {
+    cancelPress();
     activePointers.delete(event.pointerId);
     if (activePointers.size === 0) dragging = false;
     tapStart = null;
@@ -758,6 +793,9 @@ export function createPlayerControls(
     chooseBed,
     setBedPicker(picker) {
       bedPicker = picker;
+    },
+    setLongPress(handler) {
+      longPress = handler;
     },
     setTapFilter(filter) {
       tapFilter = filter;
