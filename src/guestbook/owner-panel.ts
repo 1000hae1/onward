@@ -6,7 +6,7 @@ import { GUESTBOOK_LINK_NOTE, OWNER_HINT } from "../../shared/guestbook-rules";
 import type { AppleCard } from "../../shared/guestbook-rules";
 import type { ServerMessage } from "../../shared/protocol";
 import { copyText, guestbookUrl, loadMyLink, saveMyLink, shareLink } from "../net/guestbook-api";
-import { loadGuestbookFonts } from "./fonts";
+import { loadGuestbookFonts } from "../ui/fonts";
 import { createGuestbookHeader } from "./header";
 import { createTreeView } from "./tree-view";
 

@@ -34,6 +34,7 @@ import { buildFacilities } from "./ward/facilities";
 import { bedPlates, createBedPlatesView } from "./ward/bed-plates";
 import { createNurseGreeter } from "./ward/nurse-greeting";
 import { buildHospital } from "./ward/hospital";
+import { signLitFor } from "./ward/signboard-layout";
 import { buildLandscape } from "./ward/landscape";
 import { buildWard } from "./ward/room";
 import { buildSky } from "./ward/sky";
@@ -183,7 +184,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const softCircle = createSoftCircleTexture();
   const room = buildWard(scene, softCircle);
   const facilities = buildFacilities(scene);
-  const hospital = buildHospital(scene);
+  const hospital = buildHospital(scene, {
+    anisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
+  });
   const landscape = buildLandscape(scene, {
     forestTrees: phone ? 140 : 320,
     ridgeSegments: phone ? 96 : 160,
@@ -234,6 +237,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
   remotes.setQuality(quality);
   lanterns.setRealLights(quality === "normal");
+  /** 간판 별 반짝임과 빛 번짐은 보통 품질이고 움직임 줄이기가 아닐 때만 켜요. */
+  const syncSignboard = (): void => hospital.signboard.setLively(quality === "normal" && !reduceMotion.matches);
+  syncSignboard();
   /** 품질을 바꿔요. 안티에일리어싱만 빼고 바로 바뀌어요. */
   const applyQuality = (next: Quality): void => {
     quality = next;
@@ -241,9 +247,13 @@ export function startScene(canvas: HTMLCanvasElement): void {
     winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
     remotes.setQuality(quality);
     lanterns.setRealLights(quality === "normal");
+    syncSignboard();
   };
-  // 움직임 줄이기 설정을 바꾸면 눈의 양도 바로 따라가요.
-  reduceMotion.addEventListener("change", () => winter.setSnowAmount(snowFraction(quality, reduceMotion.matches)));
+  // 움직임 줄이기 설정을 바꾸면 눈의 양과 간판 반짝임도 바로 따라가요.
+  reduceMotion.addEventListener("change", () => {
+    winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
+    syncSignboard();
+  });
   const planters = createPlanters(scene);
   /** 내 침대 옆 작은 사과나무예요. 서버가 나에게만 알려 줄 때만 그려요. 다른 사람의 나무는 그릴 정보가 없어요. */
   const appleTree = createAppleTree(scene);
@@ -977,6 +987,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let nextChangeAt = nextSlotChange(displayNow());
   lighting.setSlot(slot, true);
   lanterns.setSlot(slot);
+  hospital.signboard.setLit(signLitFor(slot), true);
 
   /** 지금 누워 있는 사람 수예요. 나도 포함해요. */
   const sleepers = (): number => remotes.lyingCount() + (player.lyingBed !== null ? 1 : 0);
@@ -989,6 +1000,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     slot = next;
     lighting.setSlot(slot, reduceMotion.matches || !announce);
     lanterns.setSlot(slot);
+    hospital.signboard.setLit(signLitFor(slot), reduceMotion.matches || !announce);
     if (announce && slot === "night" && entered) notice?.show(lightsOutText(sleepers()));
   }
 
@@ -1173,6 +1185,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     sky.update(motionDt);
     lighting.setFocus(player.x, player.z);
     lighting.update(dt);
+    hospital.signboard.update(dt);
     // 등불은 모든 캐릭터가 자리를 잡은 뒤에 따라가요.
     for (const nurse of facilities.nurses) nurse.update(dt);
     lanterns.begin();

@@ -8,7 +8,7 @@ import type { GuestbookView } from "../../shared/protocol";
 import { fetchGuestbook, goVisit, postApple } from "../net/guestbook-api";
 import { checkNickname } from "../../shared/nickname";
 import { createAppleSheet } from "./apple-sheet";
-import { loadGuestbookFonts } from "./fonts";
+import { loadGuestbookFonts } from "../ui/fonts";
 import { createGuestbookHeader } from "./header";
 import { othersSlots } from "./tree-shape";
 import { createTreeView } from "./tree-view";

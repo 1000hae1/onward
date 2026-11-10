@@ -32,7 +32,7 @@ body {
 #hud-main,
 #hud-stats {
   display: block;
-  text-align: center;
+  text-align: left;
 }
 
 #hud-stats {
@@ -101,19 +101,21 @@ body {
   text-align: center;
 }
 
+/* 병원 간판과 겹치지 않게 왼쪽 위에 둬요. 오른쪽 위 설정 단추 자리는 비워요. */
 #hud {
   position: fixed;
   top: calc(env(safe-area-inset-top) + 0.75rem);
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(env(safe-area-inset-left) + 0.75rem);
+  max-width: calc(100vw - env(safe-area-inset-left) - 7rem);
+  box-sizing: border-box;
   padding: 0.4rem 0.95rem;
-  border-radius: 999px;
+  border-radius: 1.1rem;
   /* 밝은 낮 장면 위에서도 글자 대비가 4.5:1 이상이에요(tests/contrast.test.ts). */
   background: rgba(27, 36, 51, 0.8);
   color: #f6efe2;
   font-size: 0.9375rem;
   letter-spacing: 0.02em;
-  white-space: nowrap;
+  word-break: keep-all;
   pointer-events: none;
 }
 
