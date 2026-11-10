@@ -1,5 +1,5 @@
 /**
- * 주인만 보는 "내 사과나무" 화면이에요. 내 침대 메뉴에서 열어요.
+ * 주인만 보는 "내 사과나무" 화면이에요. 설정에서 열어요.
  * 내용은 병실 서버가 이 연결에만 보내 준 guestbook 메시지로 채워요.
  */
 import { GUESTBOOK_LINK_NOTE, OWNER_HINT } from "../../shared/guestbook-rules";

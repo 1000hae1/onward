@@ -850,6 +850,13 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     if (settingsRoot) {
       settings = createSettings(settingsRoot, {
         initial: chosen,
+        canUsePersonalActions: () => {
+          if (client.online && !visitingNow && dischargeUntil === null) return true;
+          toast("병동에 연결된 뒤 이용할 수 있어요.");
+          return false;
+        },
+        onOpenGuestbook: openOwnerGuestbook,
+        onDischarge: () => actionBar?.openDischarge(),
         view,
         onViewChange: (next) => {
           const choiceChanged = next.quality !== view.quality;
@@ -903,10 +910,6 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
           lamp: () => client.send({ type: "lamp" }),
-          openGuestbook: () => {
-            if (visitingNow) return;
-            openOwnerGuestbook();
-          },
           hug: (targetId) => {
             hugSentAt.set(targetId, Date.now());
             client.send({ type: "hug-request", targetId });

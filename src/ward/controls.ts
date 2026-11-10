@@ -156,6 +156,8 @@ export interface PlayerControls {
   setCameraLocked(locked: boolean): void;
   /** 길찾기 격자예요. 다른 사람의 걸음을 그릴 때 함께 써요. */
   readonly nav: NavGrid;
+  /** 고른 침대로 이동해요. 기존 확인 절차와 서버 점유 검사를 거쳐요. */
+  chooseBed(bed: number): void;
   /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
   setBedPicker(picker: ((bed: number) => void) | null): void;
   /**
@@ -420,6 +422,24 @@ export function createPlayerControls(
     applyStep(tapBed(flow, bed, { canLie, isFree: bedGate.isFree(bed) }, BED_TRANSITION_SECONDS));
   };
 
+  const chooseBed = (bed: number): void => {
+    afterUp = null;
+    afterWalk = null;
+    const token = ++askToken;
+    const canLie = outfit === "patient";
+    const moving = needsMoveConfirm(flow, bed, canLie);
+    const taken = net ? net.isBedTaken(bed) : !bedGate.isFree(bed);
+    if (moving && moveConfirm && !taken) {
+      // 누운 채로 다른 빈 침대를 눌렀어요. 옮길지 먼저 묻고, 그사이 다른 곳을 누르면 잊어요.
+      moveConfirm(bed, () => {
+        if (token !== askToken || !needsMoveConfirm(flow, bed, outfit === "patient")) return;
+        goToBed(bed, token, true);
+      });
+      return;
+    }
+    goToBed(bed, token, moving);
+  };
+
   const handleTap = (clientX: number, clientY: number): void => {
     if (!inputEnabled) return;
     const rect = canvas.getBoundingClientRect();
@@ -440,20 +460,9 @@ export function createPlayerControls(
     // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
     afterUp = null;
     afterWalk = null;
-    const token = ++askToken;
+    ++askToken;
     if (bed !== null) {
-      const canLie = outfit === "patient";
-      const moving = needsMoveConfirm(flow, bed, canLie);
-      const taken = net ? net.isBedTaken(bed) : !bedGate.isFree(bed);
-      if (moving && moveConfirm && !taken) {
-        // 누운 채로 다른 빈 침대를 눌렀어요. 옮길지 먼저 묻고, 그사이 다른 곳을 누르면 잊어요.
-        moveConfirm(bed, () => {
-          if (token !== askToken || !needsMoveConfirm(flow, bed, outfit === "patient")) return;
-          goToBed(bed, token, true);
-        });
-        return;
-      }
-      goToBed(bed, token, moving);
+      chooseBed(bed);
       return;
     }
 
@@ -550,6 +559,7 @@ export function createPlayerControls(
     setLobbyListener(listener) {
       lobbyListener = listener;
     },
+    chooseBed,
     setBedPicker(picker) {
       bedPicker = picker;
     },

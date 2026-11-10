@@ -6,6 +6,9 @@ import { FEEDBACK_FORM_URL } from "../config";
 
 export interface SettingsOptions {
   initial: Profile;
+  canUsePersonalActions(): boolean;
+  onOpenGuestbook(): void;
+  onDischarge(): void;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
   /** 가볍게 보기와 글자 크게예요. 이 기기에만 저장해요. */
@@ -93,6 +96,16 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
     qualityNote,
     createText("p", "글자 크게"),
     largeTextRow.element,
+    createButton("내 사과나무", () => {
+      if (!options.canUsePersonalActions()) return;
+      setOpen(false);
+      options.onOpenGuestbook();
+    }),
+    createButton("퇴원하기", () => {
+      if (!options.canUsePersonalActions()) return;
+      setOpen(false);
+      options.onDischarge();
+    }),
     feedbackLink(),
     (() => {
       const help = document.createElement("div");

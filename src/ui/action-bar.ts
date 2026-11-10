@@ -26,8 +26,6 @@ export interface ActionSink {
   blessPerson(id: string): void;
   /** 자리에 없는 사람에게 평안이나 선물을 남겨요. */
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
-  /** 주인만 보는 "내 사과나무"(방명록)를 열어요. */
-  openGuestbook(): void;
   /** 다른 동물에게 안아 주기를 요청해요. 서버가 거리와 횟수를 살펴요. */
   hug(id: string): void;
   /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
@@ -63,6 +61,7 @@ export interface ActionBarOptions {
 }
 
 export interface ActionBar {
+  openDischarge(): void;
   update(dt: number): void;
   showToast(text: string): void;
   /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
@@ -217,22 +216,31 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     else open();
   };
 
-  /** 내 침대 메뉴예요. 내 사과나무(방명록)는 나만 볼 수 있어요. */
+  /** 누운 상태를 유지한 채 옮길 침대를 골라요. */
   const renderBedMenu = (): void => {
-    const row = document.createElement("div");
-    row.className = "action-choices";
-    row.append(
-      createButton("내 사과나무", () => {
+    openSheet("bed", "내 침대", [createButton("침대 옮기기", () => {
+      openSheet("move-picker", "옮길 침대를 눌러 주세요.", []);
+      player.setBedPicker((bed) => {
+        if (bed === player.claimedBed) {
+          showToast("다른 침대를 골라 주세요.");
+          return;
+        }
         closeSheet();
-        sink.openGuestbook();
-      }),
-      createButton("퇴원하기", openDischarge),
-    );
-    openSheet("bed", "내 침대", [row]);
+        player.chooseBed(bed);
+      });
+    })]);
   };
 
   /** 퇴원을 한 번 더 묻는 단계예요. 방명록 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
   const openDischarge = (): void => {
+    if (!sink.online() || visiting()) {
+      showToast("병동에 연결된 뒤 이용할 수 있어요.");
+      return;
+    }
+    if (player.lyingBed === null) {
+      showToast("침대에 누운 뒤 퇴원할 수 있어요.");
+      return;
+    }
     const children: HTMLElement[] = [];
     let closeLink = false;
     if (guestbookActive()) {
@@ -390,6 +398,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   root.hidden = false;
 
   return {
+    openDischarge,
     showToast,
     confirmMove,
     openPerson,
