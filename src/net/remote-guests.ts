@@ -40,6 +40,7 @@ import type { Offerings } from "../ward/offerings";
 import { simpleAvatarAt } from "../ward/quality";
 import { rosterAction } from "./roster";
 import type { Quality } from "../ward/quality";
+import type { LanternSink } from "../ward/lantern-rules";
 
 const WALK_SPEED = 1.8;
 const BODY_TURN_RATE = 10;
@@ -104,6 +105,8 @@ export interface RemoteGuests {
   headSpot(id: string): Spot | null;
   /** 지금 침대에 누운 사람 수예요. 소등 안내에 써요. */
   lyingCount(): number;
+  /** 보이는 사람과 곁의 고양이마다 머리 위 등불 자리를 알려 줘요. */
+  lanterns(sink: LanternSink): void;
   /** 그 사람이 누워 있거나 눕는 중인 침대예요. 서 있으면 null이에요. */
   bedOf(id: string): number | null;
   /** 이 평안 주소의 사람이 지금 같은 병실에 있으면 그 사람의 공개 id예요. */
@@ -130,6 +133,7 @@ export function createRemoteGuests(
 ): RemoteGuests {
   const remotes = new Map<string, Remote>();
   const headPoint = new Vector3();
+  const lanternPoint = new Vector3();
 
   const handOf = (remote: Remote): Spot => ({
     x: remote.shownX + Math.sin(remote.yaw) * HAND_REACH,
@@ -444,6 +448,13 @@ export function createRemoteGuests(
     headSpot(id) {
       const remote = remotes.get(id);
       return remote ? { x: remote.shownX, y: HEAD_HEIGHT, z: remote.shownZ } : null;
+    },
+    lanterns(sink) {
+      for (const remote of remotes.values()) {
+        if (remote.visible) sink(remote, lanternPoint, remote.avatar.lanternWorld(lanternPoint));
+        const cat = remote.companion.view;
+        if (cat.root.visible) sink(remote.companion, lanternPoint, cat.lanternWorld(lanternPoint));
+      }
     },
     lyingCount() {
       let count = 0;

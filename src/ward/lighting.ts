@@ -9,7 +9,6 @@ import type {
 import type { HospitalHandles } from "./hospital";
 import type { LandscapeHandles } from "./landscape";
 import { lightSpots, NURSE_STATION, NURSE_STATION_CENTER_X } from "../../shared/ward-layout";
-import { setRimGlow } from "../avatar/rim-glow";
 import type { LampGlow } from "./room";
 import type { SkyHandles } from "./sky";
 import type { TimeSlot } from "./time-of-day";
@@ -55,9 +54,8 @@ const NUMBER_KEYS = [
   "sunGlowOpacity",
   "moonOpacity",
   "nurseLightIntensity",
-  "avatarRim",
-  "avatarFill",
   "bedGlow",
+  "exposure",
 ] as const;
 
 type ColorKey = (typeof COLOR_KEYS)[number];
@@ -122,9 +120,8 @@ const LOOKS: Record<TimeSlot, Look> = {
     nurseLight: "#fff3e0",
     nursePanel: "#fff6e0",
     nurseLightIntensity: 0.6,
-    avatarRim: 0,
-    avatarFill: 0,
     bedGlow: 0,
+    exposure: 1,
   }),
   evening: createLook({
     skyZenith: "#2f3068",
@@ -157,9 +154,9 @@ const LOOKS: Record<TimeSlot, Look> = {
     nurseLight: "#ffe2b8",
     nursePanel: "#ffe8c0",
     nurseLightIntensity: 6,
-    avatarRim: 0.32,
-    avatarFill: 0.06,
     bedGlow: 0.45,
+    // 어두워질수록 노출을 조금 올려 캐릭터 색이 회색으로 가라앉지 않게 해요.
+    exposure: 1.08,
   }),
   night: createLook({
     skyZenith: "#060a18",
@@ -193,9 +190,8 @@ const LOOKS: Record<TimeSlot, Look> = {
     nurseLight: "#ffd9a6",
     nursePanel: "#f3d6aa",
     nurseLightIntensity: 2.6,
-    avatarRim: 0.42,
-    avatarFill: 0.08,
     bedGlow: 1,
+    exposure: 1.18,
   }),
 };
 
@@ -211,6 +207,8 @@ export interface LightingTargets {
   hospital: HospitalHandles;
   landscape: LandscapeHandles;
   sky: SkyHandles;
+  /** 렌더러의 노출(toneMappingExposure)을 정해요. */
+  setExposure(exposure: number): void;
 }
 
 export interface Lighting {
@@ -287,7 +285,7 @@ export function createLighting(scene: Scene, targets: LightingTargets): Lighting
     nurseLight.color.copy(colors.nurseLight);
     nurseLight.intensity = numbers.nurseLightIntensity;
     targets.nurseLamp.color.copy(colors.nursePanel);
-    setRimGlow(numbers.avatarRim, numbers.avatarFill);
+    targets.setExposure(numbers.exposure);
     targets.lampGlow.setStrength(numbers.bedGlow);
 
     targets.ceiling.emissiveIntensity = numbers.ceilingGlow;

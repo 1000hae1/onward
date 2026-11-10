@@ -1,5 +1,5 @@
 import { CapsuleGeometry, MeshLambertMaterial, SphereGeometry } from "three";
-import { addRimGlow } from "../avatar/rim-glow";
+import { addLanternShading } from "../avatar/lantern-shading";
 import type { BufferGeometry } from "three";
 import { blobs, merged, paint, place } from "../avatar/shapes.ts";
 import type { BlobSpec, Vec3 } from "../avatar/species";
@@ -219,7 +219,7 @@ let material: MeshLambertMaterial | null = null;
 export function getCatMaterial(): MeshLambertMaterial {
   if (!material) {
     material = new MeshLambertMaterial({ vertexColors: true, emissive: "#14120f" });
-    addRimGlow(material);
+    addLanternShading(material);
   }
   return material;
 }

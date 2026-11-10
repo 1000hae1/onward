@@ -13,7 +13,7 @@ import {
   surfaceBlobs,
 } from "./egg.ts";
 import type { SurfaceBlob } from "./egg.ts";
-import { addRimGlow } from "./rim-glow";
+import { addLanternShading } from "./lantern-shading";
 import { blobs, merged, paint, place } from "./shapes.ts";
 import type { BlobSpec, Outfit, SpeciesSpec } from "./species";
 
@@ -211,8 +211,8 @@ export function getAvatarMaterial(): MeshStandardMaterial {
       metalness: 0,
       emissive: "#14120f",
     });
-    // 저녁과 밤에도 실루엣이 보이도록 은은한 테두리 빛을 더해요.
-    addRimGlow(sharedMaterial);
+    // 저녁과 밤에 머리 위 등불이 머리와 어깨를 비춰요.
+    addLanternShading(sharedMaterial);
   }
   return sharedMaterial;
 }

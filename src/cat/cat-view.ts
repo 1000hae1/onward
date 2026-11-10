@@ -1,4 +1,5 @@
 import { Group, Mesh } from "three";
+import type { Vector3 } from "three";
 import { CAT_BUILDS, catEyeAt, getCatKit, getCatMaterial } from "./cat-kit.ts";
 import type { CatCoat } from "./cat-kit.ts";
 import type { CatPose } from "./cat-pose";
@@ -8,7 +9,12 @@ export interface CatView {
   /** 발이 닿는 자리와 바라보는 방향이에요. */
   place(x: number, y: number, z: number, yaw: number): void;
   apply(pose: CatPose): void;
+  /** 머리 위 등불 자리를 target에 쓰고, 발이 닿은 높이를 돌려줘요. */
+  lanternWorld(target: Vector3): number;
 }
+
+/** 고양이 머리 가운데에서 등불까지의 높이예요. */
+const CAT_LANTERN_ABOVE = 0.34;
 
 /** 관절로 이어진 고양이 모양이에요. 그리는 횟수는 몸통, 머리, 눈, 다리 넷으로 7번이에요. */
 export function createCatView(coat: CatCoat): CatView {
@@ -41,6 +47,11 @@ export function createCatView(coat: CatCoat): CatView {
     place(x, y, z, yaw) {
       root.position.set(x, y, z);
       root.rotation.y = yaw;
+    },
+    lanternWorld(target) {
+      head.getWorldPosition(target);
+      target.y += CAT_LANTERN_ABOVE;
+      return root.position.y;
     },
     apply(pose) {
       body.position.y = build.bodyY - pose.bodyLower * build.lowerScale;

@@ -181,6 +181,8 @@ export interface PlayerControls {
   handSpot(): { x: number; y: number; z: number };
   /** 화면에 보이면 머리 자리를 target에 쓰고, 숨어 있으면 null을 돌려줘요. */
   headWorld(target: Vector3): Vector3 | null;
+  /** 머리 위 등불 자리를 target에 쓰고 발밑 높이를 돌려줘요. 아바타가 보이지 않으면 null이에요. */
+  lanternWorld(target: Vector3): number | null;
   /** 걸어 다니는 자리예요. 누워 있어도 침대 곁 자리예요. */
   readonly walkX: number;
   readonly walkZ: number;
@@ -612,6 +614,9 @@ export function createPlayerControls(
     },
     headWorld(target) {
       return avatar.root.visible ? avatar.headWorld(target) : null;
+    },
+    lanternWorld(target) {
+      return avatar.root.visible ? avatar.lanternWorld(target) : null;
     },
     get walkX() {
       return position.x;

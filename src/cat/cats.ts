@@ -1,4 +1,6 @@
-import type { Object3D, Vector3 } from "three";
+import { Vector3 } from "three";
+import type { Object3D } from "three";
+import type { LanternSink } from "../ward/lantern-rules";
 import { pickBox, turnToward } from "../ward/camera-view";
 import {
   BEDS,
@@ -65,6 +67,8 @@ export interface CatsHandle {
   setCompanion(enabled: boolean): void;
   /** 자주 온 사람을 반겨요. 그 사람과 가까운 문의 병동 고양이가 문 앞으로 나와 천천히 눈을 깜빡여요. 이 화면에서만 보여요. */
   welcome(near: { x: number; z: number }): void;
+  /** 보이는 고양이마다 머리 위 등불 자리를 알려 줘요. */
+  lanterns(sink: LanternSink): void;
 }
 
 /** 병실마다 사는 고양이와, 입장 때 고른 경우 함께 다니는 고양이예요. */
@@ -75,6 +79,7 @@ export function createCats(
   initialCompanion: boolean,
 ): CatsHandle {
   const pose = createCatPose();
+  const lanternPoint = new Vector3();
   let seconds = 0;
   let lastGreet: number | null = null;
   let greetLeft = 0;
@@ -298,6 +303,13 @@ export function createCats(
         return;
       }
       welcoming = { cat, phase: "go", path, left: 0, blinked: false };
+    },
+    lanterns(sink) {
+      for (const cat of wardCats) {
+        if (!cat.view.root.visible) continue;
+        sink(cat, lanternPoint, cat.view.lanternWorld(lanternPoint));
+      }
+      if (companion.view.root.visible) sink(companion, lanternPoint, companion.view.lanternWorld(lanternPoint));
     },
     tap(origin, reach) {
       const candidates: { moves: Moves; y: number }[] = [

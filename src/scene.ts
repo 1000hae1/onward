@@ -1,4 +1,4 @@
-import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { NeutralToneMapping, PerspectiveCamera, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from "three";
 import { nicknameMessage } from "../shared/nickname";
 import { PROTOCOL_VERSION, WARD_CAPACITY } from "../shared/protocol";
 import type { WardEvent } from "../shared/protocol";
@@ -72,6 +72,7 @@ import { bedHeadSpot, doorSpots, roomAt, ROOMS, windowLampSpot } from "../shared
 import { createPlanters } from "./ward/planter-view";
 import { createMorningWindows } from "./ward/morning-window";
 import { createWarmGlows } from "./ward/warm-glow";
+import { createHeadLanterns } from "./ward/head-lanterns";
 import { createMoments } from "./ui/moments";
 import { LIGHT_DELAY_SECONDS } from "./ui/action-bar";
 import { BED_TRANSITION_SECONDS } from "./avatar/pose";
@@ -91,6 +92,8 @@ import { blessedMeText, bowText, createAnnouncer, giftForMeText } from "./ui/ann
 import { blessingText, giftName } from "../shared/gestures";
 
 const MAX_FRAME_SECONDS = 0.05;
+/** 병아리 간호사 머리 꼭대기에서 등불까지의 높이예요. */
+const NURSE_LANTERN_ABOVE = 0.28;
 /** 수면 모드에서는 화면이 거의 검으니 초당 4번만 그려요. */
 const SLEEP_FRAME_SECONDS = 0.25;
 const SLEEP_MAX_FRAME_SECONDS = 0.3;
@@ -168,6 +171,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
   // 안티에일리어싱은 만들 때만 정할 수 있어요. 가볍게면 끄고 시작해요.
   const renderer = new WebGLRenderer({ canvas, antialias: quality === "normal", powerPreference: "low-power" });
   renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
+  // 색은 sRGB로 내보내요. 톤 매핑은 아주 밝은 곳만 눌러 주는 Neutral이라 낮 화면의 색은 거의 그대로이고,
+  // 밤에는 노출을 조금 올려도 색조와 채도가 흐려지지 않아요.
+  renderer.outputColorSpace = SRGBColorSpace;
+  renderer.toneMapping = NeutralToneMapping;
+  renderer.toneMappingExposure = 1;
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(PORTRAIT_FOV, 1, 0.12, 520);
@@ -200,7 +208,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
     hospital,
     landscape,
     sky,
+    setExposure: (exposure) => {
+      renderer.toneMappingExposure = exposure;
+    },
   });
+  /** 캐릭터마다 머리 위에 떠 있는 작은 등불이에요. */
+  const lanterns = createHeadLanterns(scene, softCircle);
+  const nurseLanternPoint = new Vector3();
+  const myLanternPoint = new Vector3();
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
   const savedProfile = loadProfile();
@@ -218,12 +233,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
   };
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
   remotes.setQuality(quality);
+  lanterns.setRealLights(quality === "normal");
   /** 품질을 바꿔요. 안티에일리어싱만 빼고 바로 바뀌어요. */
   const applyQuality = (next: Quality): void => {
     quality = next;
     renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
     winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
     remotes.setQuality(quality);
+    lanterns.setRealLights(quality === "normal");
   };
   // 움직임 줄이기 설정을 바꾸면 눈의 양도 바로 따라가요.
   reduceMotion.addEventListener("change", () => winter.setSnowAmount(snowFraction(quality, reduceMotion.matches)));
@@ -959,6 +976,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let slot = readSlot();
   let nextChangeAt = nextSlotChange(displayNow());
   lighting.setSlot(slot, true);
+  lanterns.setSlot(slot);
 
   /** 지금 누워 있는 사람 수예요. 나도 포함해요. */
   const sleepers = (): number => remotes.lyingCount() + (player.lyingBed !== null ? 1 : 0);
@@ -970,6 +988,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (next === slot) return;
     slot = next;
     lighting.setSlot(slot, reduceMotion.matches || !announce);
+    lanterns.setSlot(slot);
     if (announce && slot === "night" && entered) notice?.show(lightsOutText(sleepers()));
   }
 
@@ -1154,10 +1173,22 @@ export function startScene(canvas: HTMLCanvasElement): void {
     sky.update(motionDt);
     lighting.setFocus(player.x, player.z);
     lighting.update(dt);
+    // 등불은 모든 캐릭터가 자리를 잡은 뒤에 따라가요.
+    for (const nurse of facilities.nurses) nurse.update(dt);
+    lanterns.begin();
+    const myLanternGround = player.lanternWorld(myLanternPoint);
+    if (myLanternGround !== null) lanterns.add(player, myLanternPoint, myLanternGround);
+    remotes.lanterns(lanterns.add);
+    cats.lanterns(lanterns.add);
+    for (const nurse of facilities.nurses) {
+      nurse.headWorld(nurseLanternPoint);
+      nurseLanternPoint.y += NURSE_LANTERN_ABOVE;
+      lanterns.add(nurse, nurseLanternPoint, 0);
+    }
+    lanterns.update(dt, camera, reduceMotion.matches);
     renderer.render(scene, camera);
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
-    for (const nurse of facilities.nurses) nurse.update(dt);
     nurseLabel.update(dt, camera, greeter ? greeter.headWorld(nursePoint) : null);
     if (plates) {
       const mine = entered && !visitingNow ? { nickname: current.nickname, bed: player.claimedBed } : null;
