@@ -61,6 +61,7 @@ import { visitorDelivery, visitorMay, visitorSpot } from "../shared/visit-rules.
 import type { VerifiedHello, VisitRole } from "../shared/ward-rules.ts";
 import { checkHugAnswer, checkHugRequest, HUG_ANSWER_MS, HUG_REPEAT_MS, hugSpot, hugStillPossible } from "../shared/hug-rules.ts";
 import type { PendingHug } from "../shared/hug-rules.ts";
+import type { GuestbookStatus } from "./directory.ts";
 import { isMorningWindow, phraseAllowed, shouldOpenWindow } from "../shared/morning.ts";
 import { addPeace } from "../shared/planter.ts";
 import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
@@ -140,7 +141,7 @@ export class WardRoom extends DurableObject<Env> {
     // 마지막으로 알린 고양이 방문이에요. 바뀐 것만 알리려고 둬요.
     sql.exec(`CREATE TABLE IF NOT EXISTS cat_visits (
       room INTEGER PRIMARY KEY, bed INTEGER NOT NULL, at INTEGER NOT NULL)`);
-    // 이 객체가 맡은 병동 번호예요. 문병 링크 주인의 위치를 알릴 때 써요.
+    // 이 객체가 맡은 병동 번호예요. 방명록 링크 주인의 위치를 알릴 때 써요.
     sql.exec(`CREATE TABLE IF NOT EXISTS place (ward INTEGER NOT NULL, instance INTEGER NOT NULL)`);
     // 다음에 보관 기간을 정리할 시각이에요. alarm 하나를 재접속 유예와 함께 쓰려고 적어 둬요.
     sql.exec(`CREATE TABLE IF NOT EXISTS retention (due INTEGER NOT NULL)`);
@@ -436,7 +437,7 @@ export class WardRoom extends DurableObject<Env> {
     };
   }
 
-  /** 문병 링크의 주인이 이 병동에 있으면 그 기록이에요. 잠시 끊긴 주인도 자리를 지키고 있어요. */
+  /** 방명록 링크의 주인이 이 병동에 있으면 그 기록이에요. 잠시 끊긴 주인도 자리를 지키고 있어요. */
   private ownerHere(owner: string): { record: GuestRecord; ws: WebSocket | null } | null {
     const joined = this.joined().find((entry) => entry.record.key === owner);
     if (joined) return { record: joined.record, ws: joined.ws };
@@ -615,7 +616,7 @@ export class WardRoom extends DurableObject<Env> {
     // 퇴원하던 연결이 남아 있으면 이어받지 않고 새로 들어와요.
     const previous = (returning?.record ?? stillOpen)?.discharge ? null : (returning?.record ?? stillOpen);
 
-    // 문병 링크로 왔으면 directory에서 확인해요. 30초 안에 돌아온 문병객은 이미 받은 역할을 그대로 써요.
+    // 방명록 링크로 왔으면 directory에서 확인해요. 30초 안에 돌아온 문병객은 이미 받은 역할을 그대로 써요.
     let visit: { role: VisitRole; spot: { x: number; z: number } } | null = null;
     if (hello.visitToken && !previous?.visit) {
       // 닉네임이 맞지 않으면 링크를 세지 않고 먼저 돌려보내요.
@@ -710,6 +711,7 @@ export class WardRoom extends DurableObject<Env> {
     };
     let inbox: SendableCard[] = [];
     let welcomeBack = false;
+    let tree: { active: boolean; count: number } | null = null;
     if (!admission.restored || !record.address) {
       const place = record.visit
         ? null
@@ -718,6 +720,11 @@ export class WardRoom extends DurableObject<Env> {
       record = { ...record, address: entered.address, linked: entered.linked, visitDays: entered.visitDays };
       inbox = entered.inbox.filter(isCard);
       welcomeBack = entered.welcomeBack;
+      // 문병객에게는 사과나무를 그리지 않아요(자기 나무도 병실에서는 문병 중이라 감춰요).
+      tree = record.visit ? null : entered.tree;
+    } else if (!record.visit) {
+      // 30초 안에 다시 이은 주인이에요. 화면을 새로 열었을 수 있어서 나무만 다시 알려 줘요.
+      tree = await directory.treeOf(key);
     }
     const role = record.visit ?? null;
     const owner = role ? this.ownerHere(role.owner) : null;
@@ -746,6 +753,8 @@ export class WardRoom extends DurableObject<Env> {
       morningRooms: this.morningRooms(now),
       planters: this.planterTotals(),
     });
+    // 내 침대 옆 작은 사과나무예요. 이 연결에만 보내요. 다른 사람에게 가는 snapshot·event에는 사과가 없어요.
+    if (tree) this.send(ws, { v: PROTOCOL_VERSION, type: "my-tree", active: tree.active, count: tree.count });
     if (admission.restored) {
       // 다른 사람에게는 자리를 비운 적이 없던 것처럼 보여요. 모습이 바뀌었을 때만 알려요.
       this.broadcast({ kind: "update", guest: toPublic(record) }, ws);
@@ -957,16 +966,17 @@ export class WardRoom extends DurableObject<Env> {
         else deny(action, result === "once-a-day" ? "once-a-day" : "no-target");
         return;
       }
-      case "visit-link": {
-        if (!actionReady(record, "link", nowMs)) return deny("visit-link", "too-fast");
+      case "guestbook": {
+        // 내 방명록이에요. 답은 이 연결(주인)에게만 보내요. 문병객은 visitorMay에서 이미 걸러졌어요.
+        if (!actionReady(record, "link", nowMs)) return deny("guestbook", "too-fast");
         const key = record.key ?? (await hashGuest(record.guestId));
         const directory = this.directory();
         let token: string | null = null;
         let linked = record.linked ?? false;
         if (message.action === "create") {
-          // 내 침대로 오는 링크라서 침대에 누워 있을 때만 만들 수 있어요.
-          if (record.bed === null) return deny("visit-link", "no-bed");
-          token = await directory.createVisitLink(
+          // 문병객이 주인 침대 곁으로 오므로 침대에 누워 있을 때만 만들 수 있어요.
+          if (record.bed === null) return deny("guestbook", "no-bed");
+          token = await directory.createGuestbookLink(
             key,
             { nickname: publicNickname(record), animal: record.animal, address: record.address },
             { ward: attachment.ward, instance: attachment.instance, bed: record.bed },
@@ -974,13 +984,21 @@ export class WardRoom extends DurableObject<Env> {
           );
           linked = true;
         } else if (message.action === "off") {
-          await directory.disableVisitLink(key);
+          await directory.disableGuestbookLink(key);
           linked = false;
         }
-        const status = await directory.visitLinkStatus(key);
+        const status = await directory.guestbookStatus(key);
         linked = linked && status.active;
         save({ ...record, key, linked, lastAction: { ...record.lastAction, link: nowMs } });
-        this.send(ws, { v: PROTOCOL_VERSION, type: "visit-link", token, active: status.active, visits: status.visits });
+        this.sendGuestbook(ws, token, status);
+        return;
+      }
+      case "hide-apple": {
+        // 자기 나무의 사과만 지울 수 있어요. 다른 사람의 사과 번호를 보내도 directory가 owner로 걸러요.
+        if (!actionReady(record, "link", nowMs)) return deny("guestbook", "too-fast");
+        const key = record.key ?? (await hashGuest(record.guestId));
+        save({ ...record, key, lastAction: { ...record.lastAction, link: nowMs } });
+        this.sendGuestbook(ws, null, await this.directory().hideApple(key, message.appleId));
         return;
       }
       case "report": {
@@ -1101,7 +1119,7 @@ export class WardRoom extends DurableObject<Env> {
         save(next);
         const key = record.key ?? (await hashGuest(record.guestId));
         const directory = this.directory();
-        if (message.closeLink) await directory.disableVisitLink(key);
+        if (message.closeLink) await directory.disableGuestbookLink(key);
         await directory.markDischarged(key, nowMs);
         this.send(ws, { v: PROTOCOL_VERSION, type: "discharge-started", until: nowMs + FAREWELL_MS });
         // 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
@@ -1150,6 +1168,11 @@ export class WardRoom extends DurableObject<Env> {
         return;
       }
     }
+  }
+
+  /** 내 방명록을 주인 한 사람의 연결에만 보내요. broadcast로는 보내지 않아요. */
+  private sendGuestbook(ws: WebSocket, token: string | null, status: GuestbookStatus): void {
+    this.send(ws, { v: PROTOCOL_VERSION, type: "guestbook", token, active: status.active, count: status.count, apples: status.apples });
   }
 
   /** 문병객이 주인 침대로 보냈는데 주인이 이 병동에 없으면 주인에게 전해요. */

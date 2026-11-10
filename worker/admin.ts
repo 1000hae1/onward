@@ -1,4 +1,4 @@
-import { adminBlockSchema, adminGuestActionSchema, PROTOCOL_VERSION } from "../shared/protocol.ts";
+import { adminBlockSchema, adminGuestActionSchema, adminHideAppleSchema, PROTOCOL_VERSION } from "../shared/protocol.ts";
 import { checkAdminKey } from "./security.ts";
 import { readMetricsDays } from "../shared/metrics-rules.ts";
 
@@ -64,9 +64,17 @@ export async function handleAdmin(request: Request, env: Env, url: URL, ipHash: 
     return reply({ ...(await directory.adminBlock({ guestHash, ipHash: target }, reason, now)) });
   }
 
+  // 사과 하나를 지워요. audit_log에 사유와 사과 번호만 남겨요.
+  if (url.pathname === "/admin/hide-apple") {
+    const parsed = adminHideAppleSchema.safeParse(body);
+    if (!parsed.success) return reply({ error: "bad_request" }, 400);
+    const result = await directory.adminHideApple(parsed.data.appleId, parsed.data.reason, now);
+    return reply({ ...result }, result.ok ? 200 : 404);
+  }
+
   const guestActions: Record<string, "reset" | "revoke" | "clear"> = {
     "/admin/reset-nickname": "reset",
-    "/admin/revoke-visit-link": "revoke",
+    "/admin/revoke-guestbook-link": "revoke",
     "/admin/clear-flag": "clear",
   };
   const action = guestActions[url.pathname];
@@ -78,7 +86,7 @@ export async function handleAdmin(request: Request, env: Env, url: URL, ipHash: 
     action === "reset"
       ? await directory.adminResetNickname(guestHash, reason, now)
       : action === "revoke"
-        ? await directory.adminRevokeVisitLink(guestHash, reason, now)
+        ? await directory.adminRevokeGuestbookLink(guestHash, reason, now)
         : await directory.adminClearFlag(guestHash, reason, now);
   return reply({ ...result }, result.ok ? 200 : 404);
 }

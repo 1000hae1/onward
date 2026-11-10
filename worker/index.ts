@@ -1,5 +1,13 @@
-import { healthResponseSchema, PROTOCOL_VERSION, statsResponseSchema, visitPreviewSchema } from "../shared/protocol.ts";
-import type { StatsResponse, VisitPreview } from "../shared/protocol.ts";
+import {
+  applePostResultSchema,
+  applePostSchema,
+  guestbookViewSchema,
+  healthResponseSchema,
+  PROTOCOL_VERSION,
+  statsResponseSchema,
+} from "../shared/protocol.ts";
+import type { ApplePostResult, GuestbookView, StatsResponse } from "../shared/protocol.ts";
+import { WRITER_KEY_PATTERN } from "../shared/guestbook-rules.ts";
 
 import { statsTimestamp } from "../shared/presence-rules.ts";
 import { handleAdmin } from "./admin.ts";
@@ -13,7 +21,7 @@ export { WardRoom } from "./ward-room";
 
 const MAX_WARD = 99;
 const MAX_INSTANCE = 20;
-/** 문병 링크의 답은 저장하거나 검색에 걸리지 않게 해요. */
+/** 방명록 링크의 답은 저장하거나 검색에 걸리지 않게 해요. */
 const PRIVATE_HEADERS = {
   "Cache-Control": "no-store",
   "Referrer-Policy": "no-referrer",
@@ -53,6 +61,65 @@ async function statsResponse(url: URL, env: Env, ctx: ExecutionContext): Promise
   return response;
 }
 
+/** 사과 달기 본문은 이보다 길면 읽지 않아요. */
+const MAX_APPLE_BODY = 2048;
+/** 이 브라우저가 단 사과를 알아보는 열쇠를 담는 헤더예요. */
+const WRITER_HEADER = "X-Apple-Writer";
+const CLOSED_VIEW: GuestbookView = { v: PROTOCOL_VERSION, open: false };
+
+/** 같은 사이트의 화면에서 온 요청인지예요. 다른 사이트가 사과를 대신 달지 못하게 해요. */
+function sameOrigin(request: Request, url: URL): boolean {
+  const origin = request.headers.get("Origin");
+  return origin === null || origin === url.origin;
+}
+
+async function readAppleBody(request: Request): Promise<unknown> {
+  const length = Number(request.headers.get("Content-Length") ?? "0");
+  if (length > MAX_APPLE_BODY) return null;
+  const text = await request.text();
+  if (text.length > MAX_APPLE_BODY) return null;
+  try {
+    return JSON.parse(text) as unknown;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * 방명록 링크로 온 사람의 API예요. 토큰이 있어야 하고, 꺼진 링크는 닫힌 것으로 답해요.
+ * GET /api/guestbook/{토큰}: 주인 닉네임, 사과 개수, 이 브라우저가 단 사과만
+ * POST /api/guestbook/{토큰}/apples: 사과 달기
+ * 병실 안에서는 이 길로 다른 사람의 나무를 열 수 없어요. 토큰을 아는 사람(주인이 링크를 보낸 사람)만 써요.
+ */
+async function guestbookResponse(request: Request, url: URL, env: Env): Promise<Response> {
+  const match = /^\/api\/guestbook\/([A-Za-z0-9_-]{22})(\/apples)?$/.exec(url.pathname);
+  if (!match) return Response.json(CLOSED_VIEW, { status: 404, headers: PRIVATE_HEADERS });
+  const [, token, apples] = match;
+  const directory = env.DIRECTORY.getByName("directory");
+
+  if (!apples && request.method === "GET") {
+    const header = request.headers.get(WRITER_HEADER);
+    const writer = header && WRITER_KEY_PATTERN.test(header) ? header : null;
+    const result = await directory.viewGuestbook(token, writer);
+    const parsed = guestbookViewSchema.safeParse({ v: PROTOCOL_VERSION, ...result });
+    return Response.json(parsed.success ? parsed.data : CLOSED_VIEW, { headers: PRIVATE_HEADERS });
+  }
+
+  if (apples && request.method === "POST") {
+    if (!sameOrigin(request, url)) return Response.json({ error: "forbidden" }, { status: 403, headers: PRIVATE_HEADERS });
+    const body = applePostSchema.safeParse(await readAppleBody(request));
+    if (!body.success) return Response.json({ error: "bad_request" }, { status: 400, headers: PRIVATE_HEADERS });
+    const { writer, name, phrase, note } = body.data;
+    const result = await directory.addApple(token, writer, { name, phrase, note: note ?? null }, Date.now());
+    const parsed = applePostResultSchema.safeParse({ v: PROTOCOL_VERSION, ...result });
+    const reply: ApplePostResult = parsed.success ? parsed.data : { v: PROTOCOL_VERSION, result: "closed" };
+    const status = reply.result === "saved" ? 201 : reply.result === "limit" ? 429 : reply.result === "invalid" ? 422 : 403;
+    return Response.json(reply, { status, headers: PRIVATE_HEADERS });
+  }
+
+  return new Response(null, { status: 405, headers: { ...PRIVATE_HEADERS, Allow: apples ? "POST" : "GET" } });
+}
+
 /** 1부터 max까지의 정수만 받아요. */
 function readNumber(value: string | null, max: number): number | null {
   if (value === null || !/^\d{1,3}$/.test(value)) return null;
@@ -64,7 +131,7 @@ function readNumber(value: string | null, max: number): number | null {
 function routeOf(pathname: string): LogRoute {
   if (pathname === "/api/stats") return "api/stats";
   if (pathname === "/api/health") return "api/health";
-  if (pathname.startsWith("/api/visit/")) return "api/visit";
+  if (pathname.startsWith("/api/guestbook/")) return "api/guestbook";
   if (pathname === "/ws") return "ws";
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return "admin";
   return "not-found";
@@ -102,17 +169,7 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
     return new Response(null, { status: 405, headers: { Allow: "GET, OPTIONS" } });
   }
 
-  // 문병 링크를 확인해요. 토큰을 가진 사람에게만 주인 닉네임과 들어갈 병동을 알려 줘요.
-  const visit = /^\/api\/visit\/([A-Za-z0-9_-]{22})$/.exec(url.pathname);
-  if (visit && request.method === "GET") {
-    const result = await env.DIRECTORY.getByName("directory").previewVisit(visit[1]);
-    const parsed = visitPreviewSchema.safeParse({ v: PROTOCOL_VERSION, ...result });
-    const body: VisitPreview = parsed.success ? parsed.data : { v: PROTOCOL_VERSION, open: false };
-    return Response.json(body, { headers: PRIVATE_HEADERS });
-  }
-  if (url.pathname.startsWith("/api/visit/")) {
-    return Response.json({ v: PROTOCOL_VERSION, open: false } satisfies VisitPreview, { headers: PRIVATE_HEADERS });
-  }
+  if (url.pathname.startsWith("/api/guestbook/")) return guestbookResponse(request, url, env);
 
   if (url.pathname === "/ws") {
     if (request.headers.get("Upgrade") !== "websocket") {

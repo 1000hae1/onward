@@ -9,7 +9,7 @@ import type { Guest, HelloMessage } from "./protocol.ts";
 import { publicNickname } from "./safety-rules.ts";
 import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
-/** 문병 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
+/** 방명록 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
 export interface VisitRole {
   /** 주인의 guestId 해시예요. */
   owner: string;
@@ -39,9 +39,9 @@ export interface GuestRecord {
   lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "report" | "hug" | "discharge", number>>;
   /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
   key?: string;
-  /** 문병 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
+  /** 방명록 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
   visit?: VisitRole;
-  /** 켜진 문병 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
+  /** 켜진 방명록 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
   linked?: boolean;
   /** 서로 다른 세 사람이 신고해서 닉네임을 가리고 운영자 확인을 기다려요. */
   hidden?: boolean;

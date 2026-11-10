@@ -91,7 +91,9 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
       help.append(
         createText("p", "마음이 많이 힘들 때는 109(자살예방상담전화, 24시간)에 전화해 주세요."),
         link("109에 전화하기", "tel:109", false),
-        link("개인정보 처리방침", "/privacy", true),
+        // 개인정보 처리방침은 잠시 내려 두었어요. 페이지는 docs/disabled/privacy.html에 있어요.
+        // 다시 켜려면 그 파일을 public/privacy.html로 옮기고 아래 줄의 주석을 풀어 주세요.
+        // link("개인정보 처리방침", "/privacy", true),
         link("만든 사람과 출처", "/credits", true),
       );
       return help;

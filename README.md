@@ -57,7 +57,7 @@ curl -s "$ONWARD/admin/metrics?days=30" -H "Authorization: Bearer $ADMIN_KEY"
 
 답의 `metrics[]`는 최근 날짜부터예요. 하루 입장 수(`entries`), 서로 다른 사람 수(`uniqueGuests`),
 다시 온 사람 비율(`returningRate`), 평균 머문 시간(`avgStayMinutes`), 평안 빌기 수(`blessings`),
-문병 링크로 들어온 수(`visitEntries`)만 있어요. 사람을 알 수 있는 값은 없어요.
+방명록 링크로 문병 온 수(`visitEntries`)만 있어요. 사람을 알 수 있는 값은 없어요.
 
 ### 최근 신고 보기
 
@@ -73,11 +73,11 @@ curl -s "$ONWARD/admin/reports?limit=50" -H "Authorization: Bearer $ADMIN_KEY"
 ```sh
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
 
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
+  -d '{"v":6,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
 ```
 
 막힌 사람에게는 "지금은 들어올 수 없어요"만 보여요. 지금 병실에 있으면 바로 내보내요. 차단은 30일 뒤에 풀려요.
@@ -87,36 +87,48 @@ curl -s -X POST "$ONWARD/admin/block" \
 ```sh
 curl -s -X POST "$ONWARD/admin/reset-nickname" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
 ```
 
 가림도 함께 풀려요. 같은 닉네임으로 다시 바꾸면 서버가 또 자동 닉네임으로 바꿔요. 신고된 적이 있는 사람에게만 할 수 있어요.
 
-### 문병 링크 끄기
+### 방명록 링크 끄기
 
 ```sh
-curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
+curl -s -X POST "$ONWARD/admin/revoke-guestbook-link" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
 ```
+
+사과 달기와 문병이 모두 막혀요. 이미 달린 사과는 그대로예요.
+
+### 사과 숨기기
+
+```sh
+curl -s -X POST "$ONWARD/admin/hide-apple" \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"v":6,"appleId":123,"reason":"주인이 불편하다고 알려 왔어요"}'
+```
+
+사과를 바로 지우고 audit_log에 사과 번호와 사유만 남겨요. 사과 번호는 주인 화면의 WS 메시지(`guestbook`의 `apples[].id`)에 있어요.
 
 ### 가림 풀기 (살펴보니 문제가 없을 때)
 
 ```sh
 curl -s -X POST "$ONWARD/admin/clear-flag" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
 ```
 
 ### 답의 모양
 
 | 상태 | 본문 |
 | --- | --- |
-| 200 | `{"v":5,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
-| 400 | `{"v":5,"error":"bad_request"}` |
-| 401 | `{"v":5,"error":"unauthorized"}` |
-| 404 | `{"v":5,"ok":false,"error":"unknown_guest"}` 또는 `{"v":5,"error":"not_found"}` |
-| 429 | `{"v":5,"error":"too_many"}` |
+| 200 | `{"v":6,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
+| 400 | `{"v":6,"error":"bad_request"}` |
+| 401 | `{"v":6,"error":"unauthorized"}` |
+| 404 | `{"v":6,"ok":false,"error":"unknown_guest"}` 또는 `{"v":6,"error":"not_found"}` |
+| 429 | `{"v":6,"error":"too_many"}` |
 
 ## 안전장치 요약
 

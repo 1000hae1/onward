@@ -1,10 +1,8 @@
 import { BLESSINGS, blessingText, GIFTS } from "../../shared/gestures";
 import { giftAllowedNow } from "../../shared/ward-rules";
-import { visitCountText } from "../../shared/visit-rules";
 import { REPORT_REASON_TEXT } from "../../shared/safety-rules";
 import { MORNING_PHRASE } from "../../shared/morning";
 import { DISCHARGE_CONFIRM_TEXT } from "../../shared/discharge-rules";
-import { loadMyLink, saveMyLink, shareVisit, visitUrl } from "../net/visit-link";
 import { bedHeadSpot, BEDS, roomAt } from "../../shared/ward-layout";
 import { gestureDuration } from "../avatar/pose";
 import type { PlayerControls } from "../ward/controls";
@@ -29,21 +27,14 @@ export interface ActionSink {
   blessPerson(id: string): void;
   /** 자리에 없는 사람에게 평안이나 선물을 남겨요. */
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
-  /** 내 문병 링크를 만들거나 끄거나 상태를 물어요. 답은 showVisitLink로 와요. */
-  visitLink(action: "create" | "off" | "info"): void;
+  /** 주인만 보는 "내 사과나무"(방명록)를 열어요. */
+  openGuestbook(): void;
   /** 다른 동물을 신고해요. 사유는 번호예요. 답은 화면 안내로 와요. */
   report(id: string, reason: number): void;
   /** 다른 동물에게 안아 주기를 요청해요. 서버가 거리와 횟수를 살펴요. */
   hug(id: string): void;
-  /** 오늘 퇴원해요. closeLink면 문병 링크도 함께 꺼요. */
+  /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
   discharge(closeLink: boolean): void;
-}
-
-/** 서버가 알려 준 내 문병 링크예요. token은 새로 만든 그때만 있어요. */
-export interface VisitLinkStatus {
-  token: string | null;
-  active: boolean;
-  visits: number;
 }
 
 /** 오늘 같은 병실에서 만난 사람이에요. present는 지금 같은 병실에 있으면 그 사람의 머리 자리예요. */
@@ -66,8 +57,10 @@ export interface ActionBarOptions {
   stillMotion(): boolean;
   /** 오늘 만난 사람들이에요. 서버에 닿지 않을 때는 빈 목록이에요. */
   people(): PersonChoice[];
-  /** 문병 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
+  /** 방명록 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
   visiting(): boolean;
+  /** 켜진 방명록 링크가 있는지예요. 퇴원할 때 함께 끌지 물어봐요. */
+  guestbookActive(): boolean;
   /** 한국 시간 06:30~09:00이면 "좋은 아침이에요"를 보여 줘요. 서버도 시간을 다시 살펴요. */
   morning(): boolean;
 }
@@ -75,7 +68,6 @@ export interface ActionBarOptions {
 export interface ActionBar {
   update(dt: number): void;
   showToast(text: string): void;
-  showVisitLink(status: VisitLinkStatus): void;
   /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
   openPerson(person: { id: string; nickname: string; hug: HugMenuState }): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
@@ -90,7 +82,7 @@ export const MOVE_NO_TEXT = "그대로 있을게요";
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
-  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, morning } = options;
+  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, guestbookActive, morning } = options;
 
   const sheet = document.createElement("div");
   sheet.className = "ward-panel action-sheet";
@@ -228,74 +220,25 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     else open();
   };
 
-  /** 내 문병 링크의 지금 상태예요. 메뉴를 열 때 서버에 물어서 채워요. */
-  let link: { active: boolean; visits: number } | null = null;
-  let linkNote = "";
-  /** 공유 창도 복사도 안 되면 링크를 직접 보여 줘요. */
-  let manualLink: string | null = null;
-
-  const share = (token: string): void => {
-    void shareVisit(token).then((result) => {
-      if (result === "copied") showToast("링크를 복사했어요. 보내고 싶은 분께 붙여 넣어 주세요.");
-      else if (result === "shared") showToast("링크를 보냈어요.");
-      else if (result === "failed") {
-        manualLink = visitUrl(token);
-        renderBedMenu();
-      }
-    });
-  };
-
+  /** 내 침대 메뉴예요. 내 사과나무(방명록)는 나만 볼 수 있어요. */
   const renderBedMenu = (): void => {
-    if (sheetName !== "bed") return;
-    const children: HTMLElement[] = [];
-    if (link === null) {
-      children.push(createText("p", "확인하는 중이에요."));
-    } else {
-      children.push(createText("p", link.active ? visitCountText(link.visits) : "지금은 켜진 문병 링크가 없어요."));
-      if (linkNote) children.push(createText("p", linkNote));
-      const token = loadMyLink();
-      const row = document.createElement("div");
-      row.className = "action-choices";
-      if (link.active && token) {
-        row.append(
-          createButton("내 침대로 문병 오기", () => share(token)),
-          createButton("새로 만들기", () => sink.visitLink("create")),
-          createButton("링크 끄기", () => sink.visitLink("off")),
-        );
-      } else if (link.active) {
-        // 다른 기기에서 만들었거나 저장소가 지워져서 이 기기에는 링크 원본이 없어요.
-        children.push(createText("p", "이 기기에는 링크가 없어요. 새로 만들면 예전 링크는 열리지 않아요."));
-        row.append(
-          createButton("새로 만들기", () => sink.visitLink("create")),
-          createButton("링크 끄기", () => sink.visitLink("off")),
-        );
-      } else {
-        row.append(createButton("내 침대로 문병 오기", () => sink.visitLink("create")));
-      }
-      children.push(row);
-      const leave = document.createElement("div");
-      leave.className = "action-choices";
-      leave.append(createButton("퇴원하기", openDischarge));
-      children.push(leave);
-      if (manualLink) {
-        const input = document.createElement("input");
-        input.type = "text";
-        input.readOnly = true;
-        input.value = manualLink;
-        input.className = "visit-link-text";
-        input.setAttribute("aria-label", "문병 링크");
-        input.addEventListener("focus", () => input.select());
-        children.push(createText("p", "아래 링크를 길게 눌러 복사해 주세요."), input);
-      }
-    }
-    openSheet("bed", "내 침대", children);
+    const row = document.createElement("div");
+    row.className = "action-choices";
+    row.append(
+      createButton("내 사과나무", () => {
+        closeSheet();
+        sink.openGuestbook();
+      }),
+      createButton("퇴원하기", openDischarge),
+    );
+    openSheet("bed", "내 침대", [row]);
   };
 
-  /** 퇴원을 한 번 더 묻는 단계예요. 문병 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
+  /** 퇴원을 한 번 더 묻는 단계예요. 방명록 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
   const openDischarge = (): void => {
     const children: HTMLElement[] = [];
     let closeLink = false;
-    if (link?.active) {
+    if (guestbookActive()) {
       const label = document.createElement("label");
       label.className = "action-check";
       const box = document.createElement("input");
@@ -305,7 +248,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         closeLink = box.checked;
       });
       const text = document.createElement("span");
-      text.textContent = "문병 링크도 함께 끌게요";
+      text.textContent = "방명록 링크도 함께 끌게요";
       label.append(box, text);
       children.push(label);
     }
@@ -355,14 +298,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
 
   const bedButton = createButton(
     "내 침대",
-    toggleable("bed", () => {
-      link = null;
-      linkNote = "";
-      manualLink = null;
-      openSheet("bed", "내 침대", []);
-      renderBedMenu();
-      sink.visitLink("info");
-    }),
+    toggleable("bed", renderBedMenu),
   );
   bedButton.hidden = true;
   const lamp = lampButton();
@@ -473,19 +409,6 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   return {
     showToast,
     confirmMove,
-    showVisitLink(status) {
-      if (status.token) {
-        saveMyLink(status.token);
-        // 공유 창은 누른 순간에만 열 수 있어서, 서버 답을 받은 뒤에는 한 번 더 눌러 보내요.
-        linkNote = link?.active ? "새 링크를 만들었어요. 예전 링크는 이제 열리지 않아요." : "링크가 준비됐어요. 눌러서 보내 주세요.";
-      } else if (!status.active) {
-        if (link?.active) linkNote = "링크를 껐어요. 이제 이 링크로는 들어올 수 없어요.";
-        saveMyLink(null);
-      }
-      manualLink = null;
-      link = { active: status.active, visits: status.visits };
-      renderBedMenu();
-    },
     openPerson,
     setHidden(hidden) {
       if (hidden) closeSheet();

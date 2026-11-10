@@ -175,7 +175,7 @@ export interface PlayerControls {
    * 다 도착하면 then을 불러요. 누르면 다른 곳으로 가니 then도 잊어요.
    */
   walkToSpot(x: number, z: number, then: () => void, tellServer?: boolean): void;
-  /** 문병 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
+  /** 방명록 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
   placeAt(x: number, z: number, faceX: number, faceZ: number): void;
   /** 빛과 선물이 떠나는 손 앞 자리예요. */
   handSpot(): { x: number; y: number; z: number };

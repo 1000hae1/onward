@@ -137,7 +137,7 @@ export const KEEP = {
   limit: DAY_MS,
   /** 운영자 작업 기록 */
   audit: 365 * DAY_MS,
-  /** 문병 링크로 들어온 시각이에요. 한 시간만 세요. */
+  /** 방명록 링크로 들어온 시각이에요. 한 시간만 세요. */
   visitAttempt: HOUR_MS,
 } as const;
 
@@ -145,7 +145,7 @@ export const KEEP = {
  * 보관 기간이 있는 표예요.
  * - at: column이 밀리초 시각이고, 그보다 keepMs가 지나면 지워요.
  * - day: column이 한국 날짜이고, 오늘이 아니면 지워요.
- * where가 있으면 그 줄만 따져요(예: 꺼진 문병 링크).
+ * where가 있으면 그 줄만 따져요(예: 꺼진 방명록 링크).
  */
 export type RetentionRule =
   | { table: string; kind: "at"; column: string; keepMs: number; where?: string }

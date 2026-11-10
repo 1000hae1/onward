@@ -1,12 +1,12 @@
 /**
- * 문병 링크의 판단이에요. 화면과 Durable Object가 함께 쓰는 순수 함수이고,
+ * 문병의 판단이에요. 문병은 방명록 링크(/guestbook/{토큰})로 온 사람만 할 수 있어요. 화면과 Durable Object가 함께 쓰는 순수 함수이고,
  * directory와 병실 서버는 저장과 전송만 하고 무엇을 허락할지는 여기서 정해요.
  */
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
 import { bedApproach, BEDS } from "./ward-layout.ts";
 import { clampToWalkable } from "./ward-rules.ts";
 
-/** 링크 토큰이에요. 평안 주소처럼 128비트 무작위 값을 URL에 써도 되는 글자 22자로 적어요. */
+/** 방명록 링크 토큰이에요. 평안 주소처럼 128비트 무작위 값을 URL에 써도 되는 글자 22자로 적어요. */
 export const VISIT_TOKEN_PATTERN = ADDRESS_PATTERN;
 /** 한 링크로 동시에 들어와 있을 수 있는 문병객 수예요. */
 export const MAX_VISITORS_PER_LINK = 3;
@@ -16,7 +16,7 @@ export const HOUR_MS = 3_600_000;
 /** 들어와 있는 문병객 기록이 이보다 오래되면 나간 것으로 봐요. 병실 서버가 나감을 알리지 못했을 때를 위해서예요. */
 export const VISIT_SESSION_MS = 12 * HOUR_MS;
 
-/** directory의 visit_link 한 줄이에요. 토큰 원본은 없고 해시만 있어요. */
+/** directory의 guestbook_link 한 줄이에요. 토큰 원본은 없고 해시만 있어요. */
 export interface VisitLinkRow {
   tokenHash: string;
   /** 주인의 guestId 해시예요. */
@@ -90,7 +90,7 @@ export function checkVisit(
 }
 
 /**
- * 문병객이 보낼 수 있는 메시지예요. 침대에 눕기, 불빛, 자리에 없는 사람에게 남기기, 링크 만들기, 퇴원은 받지 않아요.
+ * 문병객이 보낼 수 있는 메시지예요. 침대에 눕기, 불빛, 자리에 없는 사람에게 남기기, 방명록(링크·사과), 퇴원은 받지 않아요.
  * 안아 주기는 받아요. 누구를 안을 수 있는지(주인만)는 hug-rules가 정해요.
  */
 const VISITOR_ALLOWED = new Set(["hello", "walk-to", "bless", "bow", "gift", "report", "hug-request", "hug-answer", "inbox-ack"]);
@@ -116,8 +116,6 @@ export function visitorDelivery(visitBed: number, ownerPresent: boolean, targetB
   return !ownerPresent && targetBed === visitBed ? "owner-inbox" : "room";
 }
 
-export { readVisitPath } from "./visit-path.ts";
-
 /** 입장 화면의 제목이에요. */
 export function visitTitle(ownerNickname: string): string {
   return `${ownerNickname}님에게 문병 왔어요`;
@@ -127,10 +125,5 @@ export function visitorArrivedText(nickname: string): string {
   return `${nickname}님이 문병 왔어요`;
 }
 
-export function visitCountText(visits: number): string {
-  return visits === 0 ? "아직 문병 온 분이 없어요." : `지금까지 ${visits}번 문병 왔어요.`;
-}
-
-export const VISIT_SHARE_TEXT = "온기병동에 문병 와 줄래요?";
-export const VISIT_CLOSED_TEXT = "이 문병 링크는 더 이상 열리지 않아요. 병동에 들러 다른 분들의 평안을 빌어 주세요";
+export const VISIT_CLOSED_TEXT = "이 방명록 링크는 더 이상 열리지 않아요. 병동에 들러 다른 분들의 평안을 빌어 주세요";
 export const VISIT_BUSY_TEXT = "지금은 문병객이 많아요. 조금 뒤에 다시 와 주세요";

@@ -41,7 +41,7 @@ export interface MetricsView {
   /** 그날 나간 사람들의 평균 머문 시간(분)이에요. */
   avgStayMinutes: number | null;
   blessings: number;
-  /** 문병 링크로 들어온 횟수예요. */
+  /** 방명록 링크로 들어온 횟수예요. */
   visitEntries: number;
 }
 

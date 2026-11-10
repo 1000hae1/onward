@@ -29,7 +29,7 @@ import {
 import type { GuestRecord } from "../shared/ward-rules.ts";
 
 const hello = (over: Partial<VerifiedHello> = {}): VerifiedHello => ({
-  v: 5,
+  v: 6,
   type: "hello",
   guestId: "guest-aaaa-0001",
   animal: "otter",
@@ -56,20 +56,20 @@ const record = (id: string, over: Partial<GuestRecord> = {}): GuestRecord => ({
 });
 
 test("메시지는 v=5이고 형식이 맞을 때만 읽어요", () => {
-  const good = JSON.stringify({ v: 5, type: "walk-to", x: 1, z: 2 });
-  assert.deepEqual(parseMessage(clientMessageSchema, good), { v: 5, type: "walk-to", x: 1, z: 2 });
+  const good = JSON.stringify({ v: 6, type: "walk-to", x: 1, z: 2 });
+  assert.deepEqual(parseMessage(clientMessageSchema, good), { v: 6, type: "walk-to", x: 1, z: 2 });
   for (const bad of [
     // 예전 버전(v1) 메시지는 읽지 않아요.
     JSON.stringify({ v: 1, type: "walk-to", x: 1, z: 2 }),
     JSON.stringify({ type: "walk-to", x: 1, z: 2 }),
-    JSON.stringify({ v: 5, type: "walk-to", x: "1", z: 2 }),
-    JSON.stringify({ v: 5, type: "fly" }),
-    JSON.stringify({ v: 5, type: "bow", phrase: 6 }),
+    JSON.stringify({ v: 6, type: "walk-to", x: "1", z: 2 }),
+    JSON.stringify({ v: 6, type: "fly" }),
+    JSON.stringify({ v: 6, type: "bow", phrase: 6 }),
     // 예전 버전(v3) 메시지도 읽지 않아요.
     JSON.stringify({ v: 4, type: "walk-to", x: 1, z: 2 }),
-    JSON.stringify({ v: 5, type: "gift", item: 0 }),
-    JSON.stringify({ v: 5, type: "gift", item: 0, bedId: 1, targetId: "abcd1234" }),
-    JSON.stringify({ v: 5, type: "lie-down", bedId: 36 }),
+    JSON.stringify({ v: 6, type: "gift", item: 0 }),
+    JSON.stringify({ v: 6, type: "gift", item: 0, bedId: 1, targetId: "abcd1234" }),
+    JSON.stringify({ v: 6, type: "lie-down", bedId: 36 }),
     "{",
     "ping",
     "x".repeat(5000),
@@ -80,15 +80,15 @@ test("메시지는 v=5이고 형식이 맞을 때만 읽어요", () => {
 });
 
 test("bless와 gift는 사람이나 침대 가운데 하나만 받아요", () => {
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 5, type: "bless", bedId: 3 })));
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 5, type: "bless", targetId: "abcd1234" })));
-  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 5, type: "bless" })), null);
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless", bedId: 3 })));
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless", targetId: "abcd1234" })));
+  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless" })), null);
 });
 
 test("서버 메시지도 같은 방법으로 검사해요", () => {
-  const event = JSON.stringify({ v: 5, type: "event", event: { kind: "bow", id: "abcd1234", phrase: 2 } });
+  const event = JSON.stringify({ v: 6, type: "event", event: { kind: "bow", id: "abcd1234", phrase: 2 } });
   assert.ok(parseMessage(serverMessageSchema, event));
-  assert.equal(parseMessage(serverMessageSchema, JSON.stringify({ v: 5, type: "event", event: { kind: "bow", id: "x", phrase: 2 } })), null);
+  assert.equal(parseMessage(serverMessageSchema, JSON.stringify({ v: 6, type: "event", event: { kind: "bow", id: "x", phrase: 2 } })), null);
 });
 
 test("닉네임이 규칙에 어긋나면 들어오지 못해요", () => {

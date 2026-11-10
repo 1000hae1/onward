@@ -1,0 +1,465 @@
+/* 방명록(시안 A '그림책 사과나무')이에요. 휴대폰 세로가 기준이에요. */
+.gb-screen {
+  --gb-bg: #fbf6ec;
+  --gb-ink: #3d2e1f;
+  --gb-ink-2: #5e4e3a;
+  --gb-ink-3: #6e5e4a;
+  --gb-line: #d9cdb8;
+  --gb-primary: #c24e3a;
+  --gb-primary-press: #a8412f;
+  --gb-link: #7a4a2a;
+  --gb-chip-bg: #fbe7e2;
+  --gb-chip-ink: #8e2f22;
+  --gb-title: "Gowun Batang", "Nanum Myeongjo", serif;
+  --gb-body: "Gowun Dodum", "Apple SD Gothic Neo", "Noto Sans KR", sans-serif;
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--gb-bg);
+  color: var(--gb-ink);
+  font-family: var(--gb-body);
+  -webkit-text-size-adjust: 100%;
+}
+.gb-screen[hidden] {
+  display: none;
+}
+.gb-inner {
+  box-sizing: border-box;
+  max-width: 440px;
+  min-height: 100%;
+  margin: 0 auto;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.gb-screen button {
+  font-family: inherit;
+  min-height: 44px;
+  min-width: 44px;
+  cursor: pointer;
+}
+.gb-screen :focus-visible {
+  outline: 3px solid var(--gb-link);
+  outline-offset: 2px;
+}
+.gb-topbar {
+  display: flex;
+  justify-content: flex-end;
+  margin-bottom: -8px;
+}
+.gb-text-button {
+  border: 0;
+  background: transparent;
+  color: var(--gb-link);
+  font-size: 15px;
+  padding: 0 10px;
+}
+
+/* 머리글 */
+.gb-header {
+  text-align: center;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 4px;
+}
+.gb-eyebrow {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gb-ink-3);
+  letter-spacing: 0.02em;
+}
+.gb-title {
+  margin: 0;
+  font-family: var(--gb-title);
+  font-weight: 700;
+  font-size: 26px;
+  line-height: 1.3;
+  color: var(--gb-ink);
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.gb-count {
+  margin: 0;
+  font-size: 15px;
+  color: var(--gb-ink-2);
+}
+
+/* 내 방명록 링크 카드 */
+.gb-link-card {
+  background: #fff;
+  border-radius: 16px;
+  box-shadow: 0 4px 18px rgba(61, 46, 31, 0.08);
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.gb-link-card h3 {
+  margin: 0;
+  font-family: var(--gb-title);
+  font-weight: 700;
+  font-size: 17px;
+}
+.gb-link-url {
+  margin: 0;
+  padding: 10px 12px;
+  border: 1px solid var(--gb-line);
+  border-radius: 12px;
+  background: var(--gb-bg);
+  font-size: 14px;
+  line-height: 1.45;
+  color: var(--gb-ink);
+  word-break: break-all;
+  user-select: all;
+  -webkit-user-select: all;
+}
+.gb-link-row {
+  display: flex;
+  gap: 8px;
+}
+.gb-link-row > button {
+  flex: 1;
+}
+.gb-small {
+  margin: 0;
+  font-size: 13px;
+  color: var(--gb-ink-3);
+}
+.gb-secondary {
+  border: 1px solid var(--gb-line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--gb-ink);
+  font-size: 15px;
+  padding: 0 12px;
+}
+.gb-secondary[aria-live] {
+  transition: background 0.2s;
+}
+
+/* 나무 */
+.gb-tree {
+  position: relative;
+  width: 100%;
+  max-width: 340px;
+  aspect-ratio: 340 / 400;
+  margin: 0 auto;
+}
+.gb-tree > svg {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+}
+.gb-apple {
+  position: absolute;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  display: grid;
+  place-items: center;
+  -webkit-tap-highlight-color: transparent;
+}
+.gb-apple svg {
+  width: 30px;
+  height: 30px;
+  overflow: visible;
+}
+.gb-apple .gb-ring {
+  opacity: 0;
+}
+.gb-apple.is-open .gb-ring {
+  opacity: 1;
+}
+.gb-apple .gb-bud {
+  opacity: 0;
+}
+.gb-apple.is-new .gb-fruit {
+  transform-origin: 15px 17px;
+  animation: gb-fruit 0.6s ease-out both;
+}
+.gb-apple.is-new .gb-bud {
+  transform-origin: 15px 17px;
+  animation: gb-bud 0.6s ease-out both;
+}
+@keyframes gb-bud {
+  0% {
+    opacity: 1;
+    transform: scale(0.6);
+  }
+  45% {
+    opacity: 1;
+    transform: scale(1);
+  }
+  60%,
+  100% {
+    opacity: 0;
+    transform: scale(1.1);
+  }
+}
+@keyframes gb-fruit {
+  0%,
+  40% {
+    opacity: 0;
+    transform: scale(0.2);
+  }
+  80% {
+    opacity: 1;
+    transform: scale(1.12);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+/* 사과 카드 */
+.gb-card {
+  position: absolute;
+  z-index: 3;
+  box-sizing: border-box;
+  width: min(260px, 90%);
+  padding: 14px 16px;
+  border-radius: 16px;
+  background: #fff;
+  box-shadow: 0 8px 28px rgba(61, 46, 31, 0.16);
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  text-align: left;
+}
+.gb-card[hidden] {
+  display: none;
+}
+.gb-card:focus {
+  outline: none;
+}
+.gb-card-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+.gb-card-name {
+  margin: 0;
+  font-weight: 700;
+  font-size: 16px;
+  color: var(--gb-ink);
+  overflow-wrap: anywhere;
+}
+.gb-card-date {
+  font-size: 13px;
+  color: var(--gb-ink-3);
+  white-space: nowrap;
+}
+.gb-chip-static {
+  align-self: flex-start;
+  margin: 0;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--gb-chip-bg);
+  color: var(--gb-chip-ink);
+  font-size: 14px;
+}
+.gb-card-note {
+  margin: 0;
+  font-size: 15px;
+  line-height: 1.55;
+  color: var(--gb-ink-2);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+.gb-card .gb-text-button {
+  align-self: flex-end;
+  font-size: 14px;
+  padding: 0 4px;
+}
+.gb-hint {
+  margin: -4px 0 0;
+  text-align: center;
+  font-size: 14px;
+  color: var(--gb-ink-3);
+}
+
+/* 링크로 온 사람의 아래쪽 버튼 */
+.gb-actions {
+  margin-top: auto;
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 6px;
+}
+.gb-primary {
+  height: 54px;
+  border: 0;
+  border-radius: 16px;
+  background: var(--gb-primary);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+}
+.gb-primary:active {
+  background: var(--gb-primary-press);
+}
+.gb-primary:disabled {
+  opacity: 0.6;
+  cursor: default;
+}
+.gb-go {
+  align-self: center;
+  border: 0;
+  background: transparent;
+  color: var(--gb-link);
+  font-size: 15px;
+  text-decoration: none;
+  padding: 0 12px;
+  display: inline-flex;
+  align-items: center;
+  min-height: 44px;
+}
+.gb-message {
+  margin: 24px 0 0;
+  text-align: center;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--gb-ink-2);
+}
+
+/* 사과 달기 시트 */
+.gb-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  background: rgba(61, 46, 31, 0.32);
+}
+.gb-sheet {
+  position: fixed;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  z-index: 71;
+  box-sizing: border-box;
+  max-width: 440px;
+  max-height: 92vh;
+  margin: 0 auto;
+  overflow-y: auto;
+  padding: 10px 16px max(20px, env(safe-area-inset-bottom));
+  border-radius: 28px 28px 0 0;
+  background: var(--gb-bg);
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  animation: gb-sheet-in 0.24s ease-out;
+}
+.gb-sheet[hidden],
+.gb-backdrop[hidden] {
+  display: none;
+}
+@keyframes gb-sheet-in {
+  from {
+    transform: translateY(24px);
+    opacity: 0;
+  }
+}
+.gb-handle {
+  width: 40px;
+  height: 5px;
+  margin: 0 auto 2px;
+  border-radius: 999px;
+  background: var(--gb-line);
+}
+.gb-sheet h2 {
+  margin: 0;
+  font-family: var(--gb-title);
+  font-weight: 700;
+  font-size: 20px;
+  text-align: center;
+}
+.gb-field {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 15px;
+  color: var(--gb-ink-2);
+}
+.gb-field input,
+.gb-field textarea {
+  box-sizing: border-box;
+  width: 100%;
+  border: 1px solid var(--gb-line);
+  border-radius: 12px;
+  background: #fff;
+  color: var(--gb-ink);
+  font-family: inherit;
+  font-size: 16px;
+  padding: 0 12px;
+}
+.gb-field input {
+  height: 44px;
+}
+.gb-field textarea {
+  min-height: 84px;
+  padding: 10px 12px;
+  line-height: 1.5;
+  resize: none;
+}
+.gb-counter {
+  align-self: flex-end;
+  font-size: 13px;
+  color: var(--gb-ink-3);
+}
+.gb-chips {
+  border: 0;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.gb-chips legend {
+  padding: 0;
+  margin-bottom: 6px;
+  font-size: 15px;
+  color: var(--gb-ink-2);
+}
+.gb-chip {
+  border: 1px solid var(--gb-line);
+  border-radius: 999px;
+  background: #fff;
+  color: var(--gb-ink);
+  font-size: 15px;
+  padding: 0 14px;
+}
+.gb-chip[aria-pressed="true"] {
+  border: 2px solid var(--gb-primary-press);
+  padding: 0 13px;
+  background: var(--gb-chip-bg);
+  color: var(--gb-chip-ink);
+}
+.gb-error {
+  margin: 0;
+  min-height: 1.2em;
+  font-size: 14px;
+  color: #a8412f;
+}
+.gb-sheet-close {
+  position: absolute;
+  top: 6px;
+  right: 8px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .gb-apple.is-new .gb-fruit,
+  .gb-apple.is-new .gb-bud,
+  .gb-sheet {
+    animation: none;
+  }
+}

@@ -75,9 +75,12 @@ export interface WardClientHandlers {
   onLeftBlessings(message: Extract<ServerMessage, { type: "left-blessings" }>): void;
   onLeftSaved(): void;
   onStatus(status: ConnectionStatus, instance: number): void;
-  /** 문병 링크로 들어오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
+  /** 방명록 링크로 문병 오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
   onVisitDenied(reason: "closed" | "busy"): void;
-  onVisitLink(status: Extract<ServerMessage, { type: "visit-link" }>): void;
+  /** 내 방명록이에요. 서버가 이 연결(주인)에게만 보내요. */
+  onGuestbook(message: Extract<ServerMessage, { type: "guestbook" }>): void;
+  /** 내 침대 옆 작은 사과나무를 그릴지예요. 들어올 때 주인에게만 와요. */
+  onMyTree(tree: { active: boolean; count: number }): void;
   onVisitorArrived(nickname: string): void;
   /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
   onNicknameReset(nickname: string): void;
@@ -103,7 +106,7 @@ export interface WardClient {
   send(message: DistributiveOmit<ClientMessage, "v">): void;
   /** 침대를 달라고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
   askBed(bed: number): Promise<boolean>;
-  /** 문병 링크로 들어갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
+  /** 방명록 링크로 문병 갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
   setVisit(visit: { token: string; ward: number; instance: number } | null): void;
   readonly ward: number;
   /** 오래 입력이 없을 때 연결을 닫아요. 다시 잇지 않고 resume을 기다려요. */
@@ -129,7 +132,7 @@ export function createWardClient(
   let profile: Profile | null = null;
   let instance = params.instance;
   let ward = params.ward;
-  /** 문병 링크 토큰이에요. 서버가 받거나 거절하면 지워서 다시 이을 때 보내지 않아요. */
+  /** 방명록 링크 토큰이에요. 서버가 받거나 거절하면 지워서 다시 이을 때 보내지 않아요. */
   let visitToken: string | null = null;
   let overflow = 0;
   let retry = 0;
@@ -239,8 +242,11 @@ export function createWardClient(
         if (message.reason === "closed") visitToken = null;
         handlers.onVisitDenied(message.reason);
         return;
-      case "visit-link":
-        handlers.onVisitLink(message);
+      case "guestbook":
+        handlers.onGuestbook(message);
+        return;
+      case "my-tree":
+        handlers.onMyTree({ active: message.active, count: message.count });
         return;
       case "visitor-arrived":
         handlers.onVisitorArrived(message.nickname);

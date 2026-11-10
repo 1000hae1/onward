@@ -1,8 +1,9 @@
 import { z } from "zod";
 import { ADDRESS_PATTERN } from "./left-blessings.ts";
+import { APPLE_NOTE_MAX, APPLE_PHRASES, APPLE_SLOTS } from "./apple-limits.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 5;
+export const PROTOCOL_VERSION = 6;
 /** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
@@ -45,6 +46,17 @@ const address = z.string().regex(ADDRESS_PATTERN);
 /** 안아 주기 요청 번호예요. 서버가 무작위로 만들어요. */
 const requestId = z.string().regex(/^[a-z0-9]{12}$/);
 const roomIndex = z.number().int().min(0).max(5);
+const appleId = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
+/** 사과 한 알이에요. 주인에게는 모든 사과, 링크로 온 사람에게는 자기가 단 사과만 보내요. */
+export const appleCardSchema = z.object({
+  id: appleId,
+  slot: z.number().int().min(0).max(APPLE_SLOTS - 1),
+  name: z.string().max(64),
+  phrase: z.number().int().min(0).max(APPLE_PHRASES.length - 1),
+  note: z.string().max(APPLE_NOTE_MAX * 2).nullable(),
+  at: z.number().finite(),
+});
+export type AppleCardMessage = z.infer<typeof appleCardSchema>;
 export const animalSchema = z.enum(["rabbit", "bear", "penguin", "otter", "deer"]);
 export const outfitSchema = z.enum(["patient", "visitor"]);
 
@@ -62,7 +74,7 @@ export const clientMessageSchema = z.union([
     outfit: outfitSchema,
     nickname: z.string().max(64),
     withCat: z.boolean(),
-    /** 문병 링크로 들어올 때만 담아요. 서버가 directory에서 확인해요. */
+    /** 방명록 링크에서 [병실에 문병 가기]로 들어올 때만 담아요. 방명록 링크 토큰이에요. 서버가 directory에서 확인해요. */
     visitToken: address.optional(),
     /** 설정의 "안아 주기 요청 받지 않기"예요. */
     hugsOff: z.boolean().optional(),
@@ -82,8 +94,10 @@ export const clientMessageSchema = z.union([
   z
     .object({ v, type: z.literal("leave-for"), address, kind: z.enum(["bless", "gift"]), item: item.optional() })
     .refine((value) => (value.kind === "gift") === (value.item !== undefined)),
-  /** 내 침대로 오는 문병 링크를 만들거나(create), 끄거나(off), 지금 상태를 물어요(info). */
-  z.object({ v, type: z.literal("visit-link"), action: z.enum(["create", "off", "info"]) }),
+  /** 내 방명록(사과나무)을 열어 보거나(info), 링크를 새로 만들거나(create), 꺼요(off). 답은 나에게만 와요. */
+  z.object({ v, type: z.literal("guestbook"), action: z.enum(["create", "off", "info"]) }),
+  /** 내 나무의 사과 하나를 숨겨요. 서버에서 바로 지워요. */
+  z.object({ v, type: z.literal("hide-apple"), appleId }),
   /** 다른 동물을 신고해요. 사유는 번호로만 보내요(0 닉네임 · 1 반복 행동 · 2 기타). */
   z.object({ v, type: z.literal("report"), targetId: publicId, reason: z.number().int().min(0).max(2) }),
   /** 수면 모드를 켜거나 껐어요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
@@ -92,7 +106,7 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("hug-request"), targetId: publicId }),
   /** 받은 안아 주기 요청에 답해요. */
   z.object({ v, type: z.literal("hug-answer"), requestId, accept: z.boolean() }),
-  /** 오늘 퇴원해요. closeLink면 문병 링크도 함께 꺼요. */
+  /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
   z.object({ v, type: z.literal("discharge"), closeLink: z.boolean() }),
   /** 내가 없는 동안 도착한 평안을 받았어요. upTo 시각까지 남겨진 것을 서버가 지워요. */
   z.object({ v, type: z.literal("inbox-ack"), upTo: z.number().finite() }),
@@ -185,7 +199,7 @@ export const deniedReasonSchema = z.enum([
   "no-target",
   "too-fast",
   "once-a-day",
-  /** 문병 링크는 침대에 누운 뒤 만들 수 있어요. */
+  /** 방명록 링크는 침대에 누운 뒤 만들 수 있어요. */
   "no-bed",
   /** 안아 주기: 2m보다 멀어요. */
   "too-far",
@@ -217,7 +231,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     /** 내가 없는 동안 도착한 평안이에요. 보내고 나면 서버에서 지워요. */
     inbox: z.array(blessingCardSchema),
     stats: statsSchema,
-    /** 문병 링크로 들어왔으면 누구에게 왔는지예요. 주인 닉네임은 링크를 가진 사람에게만 보내요. */
+    /** 방명록 링크로 문병 왔으면 누구에게 왔는지예요. 주인 닉네임은 링크를 가진 사람에게만 보내요. 사과는 담지 않아요. */
     visit: z
       .object({ ownerNickname: z.string().max(64), ownerPresent: z.boolean(), bed: bedId })
       .nullable(),
@@ -244,15 +258,21 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     problem: z.enum(["short", "long", "digits", "url", "email", "banned"]),
   }),
   z.object({ v, type: z.literal("room-full"), capacity: z.number().int(), next: z.number().int().min(1) }),
-  /** 내 문병 링크의 상태예요. token은 새로 만든 그 순간에만 주인에게 보내요. 서버에는 해시만 있어요. */
+  /**
+   * 내 방명록이에요. 주인의 연결에만 보내요. token은 링크를 새로 만든 그 순간에만 보내요. 서버에는 해시만 있어요.
+   * apples는 나무에 보이는 최근 40개, count는 1년 안에 열린 모든 사과 수예요.
+   */
   z.object({
     v,
-    type: z.literal("visit-link"),
+    type: z.literal("guestbook"),
     token: address.nullable(),
     active: z.boolean(),
-    visits: z.number().int().min(0),
+    count: z.number().int().min(0),
+    apples: z.array(appleCardSchema).max(APPLE_SLOTS),
   }),
-  /** 문병 링크로 들어오지 못했어요. closed면 일반 입장으로 이어 가고, busy면 들어가지 않아요. */
+  /** 내 침대 옆에 작은 사과나무를 그릴지예요. 들어올 때 주인의 연결에만 보내요. */
+  z.object({ v, type: z.literal("my-tree"), active: z.boolean(), count: z.number().int().min(0) }),
+  /** 방명록 링크로 문병 오지 못했어요. closed면 일반 입장으로 이어 가고, busy면 들어가지 않아요. */
   z.object({ v, type: z.literal("visit-denied"), reason: z.enum(["closed", "busy"]) }),
   /** 내 침대로 문병객이 왔어요. 주인의 연결에만 보내요. */
   z.object({ v, type: z.literal("visitor-arrived"), id: publicId, nickname: z.string().max(64) }),
@@ -279,7 +299,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     v,
     type: z.literal("action-denied"),
-    action: z.enum(["bless", "bow", "gift", "lamp", "visit-link", "report", "hug", "discharge"]),
+    action: z.enum(["bless", "bow", "gift", "lamp", "guestbook", "report", "hug", "discharge"]),
     reason: deniedReasonSchema,
     /** 선물이면 어떤 선물이었는지예요. 오잎클로버 안내를 따로 보여 주려고요. */
     item: item.optional(),
@@ -303,19 +323,51 @@ export function parseMessage<T>(schema: z.ZodType<T>, raw: unknown, maxChars = M
   return result.success ? result.data : null;
 }
 
-/** /api/visit/{토큰}의 답이에요. 열리는 링크면 주인 닉네임과 동물, 들어갈 병동을 알려 줘요. */
-export const visitPreviewSchema = z.union([
-  z.object({
+/**
+ * GET /api/guestbook/{토큰}의 답이에요. 토큰을 가진 사람에게만 열려요.
+ * 사과는 개수와, 이 브라우저가 단 사과(mine)만 담아요. 다른 사람이 단 사과의 이름·날짜·글은 담지 않아요.
+ * ward와 instance는 [병실에 문병 가기]로 들어갈 병동이에요.
+ */
+export const guestbookViewSchema = z.union([
+  z.strictObject({
     v,
     open: z.literal(true),
     ownerNickname: z.string().max(64),
     ownerAnimal: animalSchema,
     ward: z.number().int().min(1).max(99),
     instance: z.number().int().min(1).max(20),
+    count: z.number().int().min(0),
+    mine: z.array(appleCardSchema).max(APPLE_SLOTS),
   }),
-  z.object({ v, open: z.literal(false) }),
+  z.strictObject({ v, open: z.literal(false) }),
 ]);
-export type VisitPreview = z.infer<typeof visitPreviewSchema>;
+export type GuestbookView = z.infer<typeof guestbookViewSchema>;
+
+/** POST /api/guestbook/{토큰}/apples 의 본문이에요. 글자는 서버가 다시 살펴요. writer는 이 브라우저의 무작위 열쇠예요. */
+export const applePostSchema = z.strictObject({
+  v,
+  writer: address,
+  name: z.string().max(64),
+  phrase: z.number().int().min(0).max(APPLE_PHRASES.length - 1),
+  note: z.string().max(APPLE_NOTE_MAX * 4).nullable().optional(),
+});
+export type ApplePost = z.infer<typeof applePostSchema>;
+
+export const applePostResultSchema = z.discriminatedUnion("result", [
+  z.object({ v, result: z.literal("saved"), apple: appleCardSchema, count: z.number().int().min(0) }),
+  /** 링크가 없거나 꺼졌어요. */
+  z.object({ v, result: z.literal("closed") }),
+  /** 같은 링크로 1시간에 10개를 넘었어요. */
+  z.object({ v, result: z.literal("limit") }),
+  /** 이름이나 짧은 글이 규칙에 맞지 않아요. */
+  z.object({
+    v,
+    result: z.literal("invalid"),
+    field: z.enum(["name", "phrase", "note"]),
+    problem: z.enum(["short", "long", "digits", "url", "email", "banned"]).optional(),
+  }),
+]);
+export type ApplePostResult = z.infer<typeof applePostResultSchema>;
 
 /* ───────────── 운영자 API ───────────── */
 
@@ -329,6 +381,10 @@ export const adminBlockSchema = z
   .refine((value) => (value.guestHash === undefined) !== (value.ipHash === undefined));
 export type AdminBlock = z.infer<typeof adminBlockSchema>;
 
-/** 한 사람(guestId 해시)에게 하는 작업이에요. 닉네임 되돌리기, 문병 링크 끄기, 가림 풀기에 써요. */
+/** 한 사람(guestId 해시)에게 하는 작업이에요. 닉네임 되돌리기, 방명록 링크 끄기, 가림 풀기에 써요. */
 export const adminGuestActionSchema = z.object({ v, guestHash: hash64, reason: adminReason });
 export type AdminGuestAction = z.infer<typeof adminGuestActionSchema>;
+
+/** 사과 하나를 숨겨요(지워요). 사과 번호는 주인이 알려 준 번호예요. */
+export const adminHideAppleSchema = z.object({ v, appleId, reason: adminReason });
+export type AdminHideApple = z.infer<typeof adminHideAppleSchema>;

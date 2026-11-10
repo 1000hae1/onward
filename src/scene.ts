@@ -57,7 +57,9 @@ import { createNotice } from "./ui/notice";
 import { createSleepMode } from "./ui/sleep-mode";
 import { readClockShiftMs, readDebugFlag } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
-import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
+import { fetchGuestbook, forgetVisitToken, takeVisitToken } from "./net/guestbook-api";
+import type { GuestbookMessage, OwnerGuestbook } from "./guestbook/owner-panel";
+import { createAppleTree } from "./ward/apple-tree-view";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
 import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugMenuState, hugOfferText, hugSpot } from "../shared/hug-rules";
@@ -234,6 +236,33 @@ export function startScene(canvas: HTMLCanvasElement): void {
   // 움직임 줄이기 설정을 바꾸면 눈의 양도 바로 따라가요.
   reduceMotion.addEventListener("change", () => winter.setSnowAmount(snowFraction(quality, reduceMotion.matches)));
   const planters = createPlanters(scene);
+  /** 내 침대 옆 작은 사과나무예요. 서버가 나에게만 알려 줄 때만 그려요. 다른 사람의 나무는 그릴 정보가 없어요. */
+  const appleTree = createAppleTree(scene);
+  /** 켜진 방명록 링크가 있는지와 사과 수예요. 나만 알아요. */
+  let myTree: { active: boolean; count: number } | null = null;
+  let ownerGuestbook: OwnerGuestbook | null = null;
+  /** 아직 화면을 불러오는 중에 온 방명록이에요. 불러오면 바로 채워요. */
+  let pendingGuestbook: GuestbookMessage | null = null;
+  /** 방명록 화면은 처음 열 때 따로 불러와요. 방명록 링크 화면과 Three.js를 나눠 두려고요. */
+  const openOwnerGuestbook = (): void => {
+    if (ownerGuestbook) {
+      ownerGuestbook.open();
+      return;
+    }
+    const root = element("guestbook");
+    if (!root) return;
+    void import("./guestbook/owner-panel").then(({ createOwnerGuestbook }) => {
+      ownerGuestbook ??= createOwnerGuestbook(root, {
+        nickname: () => current.nickname,
+        request: (action) => client.send({ type: "guestbook", action }),
+        hide: (appleId) => client.send({ type: "hide-apple", appleId }),
+        onClose: () => undefined,
+      });
+      if (pendingGuestbook) ownerGuestbook.update(pendingGuestbook);
+      pendingGuestbook = null;
+      ownerGuestbook.open();
+    });
+  };
   const morningWindows = createMorningWindows(scene);
   /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
   const morningPreview = parseTimeOverride(window.location.search) === "morning";
@@ -336,7 +365,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let entered = false;
 
   const params = readWardParams(window.location.search);
-  /** 문병 링크로 따라 들어온 토큰이에요. 링크를 미리 확인한 뒤에 입장 화면을 열어요. */
+  /** 방명록에서 [병실에 문병 가기]로 넘어온 토큰이에요. 링크를 미리 확인한 뒤에 입장 화면을 열어요. */
   const visitToken = takeVisitToken();
   /** 링크가 열려서 문병 온 주인의 닉네임이에요. 일반 입장이면 null이에요. */
   let visitOwner: string | null = null;
@@ -638,8 +667,15 @@ export function startScene(canvas: HTMLCanvasElement): void {
       visitOwner = null;
       notice?.show(VISIT_CLOSED_TEXT, 8);
     },
-    onVisitLink(status) {
-      actionBar?.showVisitLink(status);
+    onGuestbook(message) {
+      myTree = { active: message.active, count: message.count };
+      appleTree.setTree(myTree);
+      if (ownerGuestbook) ownerGuestbook.update(message);
+      else pendingGuestbook = message;
+    },
+    onMyTree(tree) {
+      myTree = tree;
+      appleTree.setTree(tree);
     },
     onVisitorArrived(nickname) {
       notice?.show(visitorArrivedText(nickname));
@@ -833,6 +869,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         labels,
         stillMotion,
         visiting: () => visitingNow,
+        guestbookActive: () => myTree?.active ?? false,
         people: () =>
           client.online
             ? metList.people.map((person) => {
@@ -854,7 +891,10 @@ export function startScene(canvas: HTMLCanvasElement): void {
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
           lamp: () => client.send({ type: "lamp" }),
-          visitLink: (action) => client.send({ type: "visit-link", action }),
+          openGuestbook: () => {
+            if (visitingNow) return;
+            openOwnerGuestbook();
+          },
           report: (targetId, reason) => client.send({ type: "report", targetId, reason }),
           hug: (targetId) => {
             hugSentAt.set(targetId, Date.now());
@@ -883,7 +923,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     });
   };
 
-  /** 문병 링크로 왔으면 제목이 바뀌고 옷은 평상복이에요. */
+  /** 방명록 링크로 왔으면 제목이 바뀌고 옷은 평상복이에요. */
   const visitEntry = (): { title?: string; lockOutfit?: "visitor" } =>
     visitOwner ? { title: visitTitle(visitOwner), lockOutfit: "visitor" } : {};
 
@@ -908,7 +948,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   if (visitToken) {
     // 링크를 먼저 확인해요. 열리면 주인이 있는 병동으로 가고, 아니면 일반 입장으로 안내해요.
-    void previewVisit(visitToken).then((preview) => {
+    void fetchGuestbook(visitToken).then((preview) => {
       if (preview?.open) {
         visitOwner = preview.ownerNickname;
         client.setVisit({ token: visitToken, ward: preview.ward, instance: preview.instance });
@@ -1092,6 +1132,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
     planters.update(dt, reduceMotion.matches);
+    appleTree.setBed(visitingNow ? null : player.lyingBed);
     morningWindows.update(dt, reduceMotion.matches);
     glows.update(dt, reduceMotion.matches);
     moments?.update(dt);

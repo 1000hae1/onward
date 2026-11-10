@@ -208,6 +208,15 @@ export const NIGHTSTANDS: readonly Placement[] = BEDS.map((bed) => {
   return placeInRoom(ROOMS[bed.roomIndex], sign * NIGHTSTAND_LOCAL_X, z + NIGHTSTAND_OFFSET_Z);
 });
 
+/**
+ * 방명록 주인 화면에만 그리는 작은 사과나무 자리예요. 침대 발치 쪽, 문병객이 서는 곁과 반대편이에요.
+ * 다른 사람 화면에는 그리지 않아서 걸어 다니는 길에는 넣지 않아요.
+ */
+export function appleTreeSpot(bed: BedPlacement): Placement {
+  const { sign, z } = bedLocal(bed.index);
+  return placeInRoom(ROOMS[bed.roomIndex], sign * 1.55, z - 0.82);
+}
+
 /** 침대마다 머리맡 벽에 수면등이 있어요. */
 export const SLEEP_LAMPS: readonly Placement[] = BEDS.map((bed) => {
   const { sign, z } = bedLocal(bed.index);

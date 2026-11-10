@@ -13,9 +13,9 @@ export interface EntryOptions {
   onEnter(profile: Profile): void;
   /** 서버가 닉네임을 받지 않아 다시 열 때 보여 줄 안내예요. */
   message?: string;
-  /** 문병 링크로 왔으면 "따뜻한 곰님에게 문병 왔어요"처럼 바뀌어요. */
+  /** 방명록 링크로 왔으면 "따뜻한 곰님에게 문병 왔어요"처럼 바뀌어요. */
   title?: string;
-  /** 문병 링크로 왔으면 옷은 고르지 않고 평상복이에요. */
+  /** 방명록 링크로 왔으면 옷은 고르지 않고 평상복이에요. */
   lockOutfit?: Outfit;
   /** 이 기기에 저장된 모습과 게스트 토큰이 있으면 "돌아왔네요"로 맞아요. */
   returning?: boolean;
@@ -97,11 +97,6 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     catQuestion,
     catRow.element,
     enter,
-    (() => {
-      const note = createText("p", "온기병동은 의료 서비스가 아니에요. 진료나 상담이 필요하면 의료진과 이야기해 주세요.");
-      note.className = "entry-note";
-      return note;
-    })(),
   );
   root.append(form);
 
