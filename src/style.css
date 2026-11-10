@@ -703,3 +703,71 @@ a:focus-visible,
   cursor: pointer;
   pointer-events: auto;
 }
+
+/* 휴대폰에서는 병동을 위에 남기고, 키보드가 열리면 보이는 영역 안에서 스크롤해요. */
+@media (max-width: 899px), (orientation: portrait) {
+  #entry {
+    bottom: calc(var(--entry-keyboard-inset, 0px) + env(safe-area-inset-bottom) + 0.5rem);
+    max-height: calc(var(--entry-visible-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3.5rem);
+    overscroll-behavior: contain;
+    scroll-padding-block: 0.75rem;
+  }
+
+  #entry .entry-form {
+    gap: 0.375rem;
+    padding: 0.75rem;
+  }
+
+  #entry .picture-choice img {
+    max-width: 4.75rem;
+  }
+
+  #entry .entry-message:empty {
+    display: none;
+  }
+
+  #entry .entry-note {
+    line-height: 1.35;
+  }
+}
+
+#entry .entry-drag-handle {
+  display: none;
+}
+
+@media (max-width: 899px), (orientation: portrait) {
+  #entry .entry-drag-handle {
+    display: grid;
+    place-items: center;
+    gap: 0.2rem;
+    flex: none;
+    min-height: 2.75rem;
+    padding: 0;
+    margin-block: -0.5rem -0.25rem;
+    width: 100%;
+    background: transparent;
+    color: #f6efe2;
+    font-size: 0.75rem;
+    touch-action: none;
+  }
+
+  #entry .entry-drag-handle::before {
+    content: "";
+    width: 2.5rem;
+    height: 0.25rem;
+    border-radius: 1rem;
+    background: #f6efe2;
+    opacity: 0.7;
+  }
+
+  #entry.entry-collapsed {
+    max-height: min(15rem, calc(var(--entry-visible-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3.5rem));
+  }
+
+  #entry.entry-collapsed .entry-drag-handle {
+    position: sticky;
+    top: -0.25rem;
+    z-index: 1;
+    background: #30343b;
+  }
+}

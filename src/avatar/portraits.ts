@@ -1,4 +1,4 @@
-import { Box3, Sphere, Vector3, DirectionalLight, HemisphereLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
+import { Box3, Vector3, DirectionalLight, HemisphereLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
 import { createAvatar } from "./avatar";
 import { createPose } from "./pose";
 import { SPECIES } from "./species";
@@ -52,10 +52,24 @@ function renderAll(): Map<string, string> {
       bounds.union(new Box3().setFromObject(avatar.root));
     }
   }
-  const sphere = bounds.getBoundingSphere(new Sphere());
-  const distance = sphere.radius * 1.08 / Math.sin(camera.fov * Math.PI / 360);
-  camera.position.copy(sphere.center).add(new Vector3(0.45, 0.32, 1.85).normalize().multiplyScalar(distance));
-  camera.lookAt(sphere.center);
+  const center = bounds.getCenter(new Vector3());
+  const direction = new Vector3(0.45, 0.32, 1.85).normalize();
+  camera.position.copy(center).add(direction);
+  camera.lookAt(center);
+  const inverseRotation = camera.quaternion.clone().invert();
+  const tangent = Math.tan(camera.fov * Math.PI / 360);
+  let distance = 0;
+  // 구 대신 카메라 방향의 경계 상자를 맞춰 불필요한 여백을 줄여요.
+  for (const x of [bounds.min.x, bounds.max.x]) {
+    for (const y of [bounds.min.y, bounds.max.y]) {
+      for (const z of [bounds.min.z, bounds.max.z]) {
+        const point = new Vector3(x, y, z).sub(center).applyQuaternion(inverseRotation);
+        distance = Math.max(distance, point.z + Math.max(Math.abs(point.x), Math.abs(point.y)) * 1.06 / tangent);
+      }
+    }
+  }
+  camera.position.copy(center).addScaledVector(direction, distance);
+  camera.lookAt(center);
 
   for (const spec of SPECIES) {
     for (const outfit of OUTFITS) {

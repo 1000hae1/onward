@@ -98,7 +98,56 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     catRow.element,
     enter,
   );
+  let collapsed = false;
+  const setCollapsed = (next: boolean): void => {
+    collapsed = next;
+    root.classList.toggle("entry-collapsed", collapsed);
+    handle.setAttribute("aria-label", collapsed ? "입장 패널 높이 늘리기" : "입장 패널 높이 줄이기");
+
+    if (collapsed && document.activeElement === input) input.blur();
+    root.scrollTop = 0;
+  };
+  const handle = createButton("", () => {
+    if (suppressClick) { suppressClick = false; return; }
+    setCollapsed(!collapsed);
+  });
+  handle.className = "entry-drag-handle";
+  handle.setAttribute("aria-label", "입장 패널 높이 줄이기");
+  form.id = "entry-options";
+  handle.setAttribute("aria-controls", form.id);
+  let drag: { id: number; y: number } | null = null;
+  let suppressClick = false;
+  handle.addEventListener("pointerdown", (event) => {
+    if (!event.isPrimary || event.button !== 0) return;
+    suppressClick = false;
+    drag = { id: event.pointerId, y: event.clientY };
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener("pointerup", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const distance = event.clientY - drag.y;
+    drag = null;
+    if (Math.abs(distance) >= 25) {
+      suppressClick = true;
+      setCollapsed(distance > 0);
+    }
+  });
+  handle.addEventListener("pointercancel", () => { drag = null; });
+  root.classList.remove("entry-collapsed");
+  form.prepend(handle);
   root.append(form);
+
+  const viewport = window.visualViewport;
+  const fitViewport = (): void => {
+    if (!viewport) return;
+    root.style.setProperty("--entry-visible-height", `${viewport.height}px`);
+    root.style.setProperty("--entry-keyboard-inset", `${Math.max(0, window.innerHeight - viewport.height - viewport.offsetTop)}px`);
+    if (document.activeElement === input) input.scrollIntoView({ block: "nearest" });
+  };
+  viewport?.addEventListener("resize", fitViewport);
+  viewport?.addEventListener("scroll", fitViewport);
+  fitViewport();
+
 
   function render(): void {
     speciesRow.select(profile.species);
@@ -120,6 +169,8 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     event.preventDefault();
     const checked = checkNickname(profile.nickname);
     if (!checked.ok) return;
+    viewport?.removeEventListener("resize", fitViewport);
+    viewport?.removeEventListener("scroll", fitViewport);
     root.hidden = true;
     root.replaceChildren();
     options.onEnter({ ...profile, nickname: checked.value });
