@@ -3,6 +3,7 @@ import {
   addLatest,
   dailyKey,
   encodeAddress,
+  FIVE_LEAF_ITEM,
   fiveLeafAllowed,
   INBOX_PER_GUEST,
   KEEP_MS,
@@ -530,6 +531,8 @@ export class Directory extends DurableObject<Env> {
     visitDays: number;
     welcomeBack: boolean;
     tree: { active: boolean; count: number } | null;
+    /** 오잎클로버를 오늘(한국 날짜) 이미 놓았는지예요. 선물 고르기 창에서 버튼을 흐리게 하려고요. */
+    fiveLeafUsed: boolean;
   }> {
     this.tidy(nowMs);
     const address = encodeAddress(crypto.getRandomValues(new Uint8Array(16)));
@@ -574,7 +577,8 @@ export class Directory extends DurableObject<Env> {
     const active = this.linksOf(owner).some((row) => !row.off);
     const count = this.appleCount(owner);
     await this.keepTidy();
-    return { address, inbox, linked, visitDays, welcomeBack, tree: active || count > 0 ? { active, count } : null };
+    const fiveLeafUsed = !fiveLeafAllowed(this.dailyGiftDay(owner, FIVE_LEAF_ITEM), koreanDay(new Date(nowMs)));
+    return { address, inbox, linked, visitDays, welcomeBack, tree: active || count > 0 ? { active, count } : null, fiveLeafUsed };
   }
 
   /** 화면이 받았다고 알린 평안을 지워요. upTo 시각까지 남겨진 것만이에요. 그사이 새로 온 것은 남아요. */
@@ -654,12 +658,19 @@ export class Directory extends DurableObject<Env> {
     return "saved";
   }
 
+  /** 하루 한 번만 놓을 수 있는 선물을 마지막으로 놓은 한국 날짜예요. 놓은 적이 없으면 null이에요. */
+  private dailyGiftDay(guest: string, item: number): string | null {
+    return (
+      this.ctx.storage.sql
+        .exec<{ day: string }>("SELECT day FROM gift_daily WHERE guest = ? AND item = ?", guest, item)
+        .toArray()[0]?.day ?? null
+    );
+  }
+
   /** 하루 한 번만 놓을 수 있는 선물을 오늘 처음 놓는지 보고, 처음이면 적어 둬요. */
   async useDailyGift(guest: string, item: number, day: string): Promise<boolean> {
     const sql = this.ctx.storage.sql;
-    const last = sql
-      .exec<{ day: string }>("SELECT day FROM gift_daily WHERE guest = ? AND item = ?", guest, item)
-      .toArray()[0]?.day ?? null;
+    const last = this.dailyGiftDay(guest, item);
     if (!fiveLeafAllowed(last, day)) return false;
     sql.exec("INSERT OR REPLACE INTO gift_daily (guest, item, day) VALUES (?, ?, ?)", guest, item, day);
     await this.keepTidy();

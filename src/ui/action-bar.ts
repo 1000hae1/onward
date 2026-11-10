@@ -9,6 +9,8 @@ import type { Offerings } from "../ward/offerings";
 import type { HeadLabels } from "./head-labels";
 import { createButton, createEmojiButton, createText } from "./widgets";
 import { SOLO_ONLY_TEXT } from "../../shared/offering-rules";
+import { FIVE_LEAF_ITEM } from "../../shared/left-blessings";
+import { giftIcon } from "./icons/gift-icons";
 import type { HugMenuState } from "../../shared/hug-rules";
 
 /** 손을 모은 뒤 빛이 떠나기까지 기다리는 시간이에요. */
@@ -58,7 +60,12 @@ export interface ActionBarOptions {
   guestbookActive(): boolean;
   /** 한국 시간 06:30~09:00이면 "좋은 아침이에요"를 보여 줘요. 서버도 시간을 다시 살펴요. */
   morning(): boolean;
+  /** 오잎클로버를 오늘 이미 놓았는지예요. 화면에서 버튼을 흐리게 할 뿐이고, 정하는 것은 서버예요. */
+  fiveLeafUsed(): boolean;
 }
+
+/** 오잎클로버를 오늘 이미 놓았을 때 버튼 아래에 작게 적는 말이에요. */
+export const FIVE_LEAF_USED_NOTE = "내일 다시";
 
 export interface ActionBar {
   openDischarge(): void;
@@ -83,7 +90,7 @@ export const CLAIM_NO_TEXT = "다른 곳 볼게요";
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
-  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, guestbookActive, morning } = options;
+  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, guestbookActive, morning, fiveLeafUsed } = options;
 
   const sheet = document.createElement("div");
   sheet.className = "ward-panel action-sheet";
@@ -211,16 +218,38 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     ]);
   };
 
-  const choiceList = (
-    labelsOf: readonly string[],
-    onPick: (id: number) => void,
-    enabled: (id: number) => boolean = () => true,
-  ): HTMLElement => {
+  const choiceList = (labelsOf: readonly string[], onPick: (id: number) => void): HTMLElement => {
     const list = document.createElement("div");
     list.className = "action-choices";
     labelsOf.forEach((label, id) => {
-      const button = createButton(label, () => onPick(id));
-      button.disabled = !enabled(id);
+      list.append(createButton(label, () => onPick(id)));
+    });
+    return list;
+  };
+
+  /** 선물 고르기 버튼이에요. 아이콘은 위, 이름은 아래예요. 아이콘은 aria-hidden이라 낭독기는 이름만 읽어요. */
+  const giftChoices = (now: Date, onPick: (id: number) => void): HTMLElement => {
+    const list = document.createElement("div");
+    list.className = "action-choices gift-choices";
+    const usedFiveLeaf = fiveLeafUsed();
+    GIFTS.forEach((name, id) => {
+      const button = createButton("", () => onPick(id));
+      button.className = "gift-choice";
+      const icon = giftIcon(id);
+      if (icon) button.append(icon);
+      const label = document.createElement("span");
+      label.className = "gift-label";
+      label.textContent = name;
+      button.append(label);
+      const used = id === FIVE_LEAF_ITEM && usedFiveLeaf;
+      if (used) {
+        const note = document.createElement("span");
+        note.className = "gift-note";
+        note.textContent = FIVE_LEAF_USED_NOTE;
+        button.append(note);
+      }
+      // 겨울이 아니면 귤·홍시·호빵은 서버가 받지 않아서 흐리게 둬요.
+      button.disabled = used || !giftAllowedNow(id, now);
       list.append(button);
     });
     return list;
@@ -367,8 +396,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         const now = new Date();
         const seasonal = GIFTS.some((_, id) => !giftAllowedNow(id, now));
         openSheet("gift", seasonal ? "어떤 선물을 놓을까요? 귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요." : "어떤 선물을 놓을까요?", [
-          choiceList(
-            GIFTS,
+          giftChoices(
+            now,
             (gift) => {
               pickTarget(
                 "gift",
@@ -386,7 +415,6 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
                 },
               );
             },
-            (gift) => giftAllowedNow(gift, now),
           ),
         ]);
       }),

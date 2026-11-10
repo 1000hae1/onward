@@ -19,6 +19,7 @@ import { bedGuide, bedGuideText } from "../shared/bed-rules";
 import { NO_STORAGE_TEXT } from "./ui/entry-text";
 import { createButton } from "./ui/widgets";
 import { followTopStack } from "./ui/top-stack";
+import { createFiveLeafMemory } from "./net/five-leaf";
 import { lampPlacedText, lampSlotPosition } from "../shared/offering-rules";
 import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
@@ -311,6 +312,17 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   let lastLying: number | null = null;
   // 서버 시계는 아래에서 연결을 만든 뒤 이어 줘요.
   let serverNow = (): number => Date.now();
+  /** 오잎클로버를 오늘 놓았는지예요. 서버가 알려 준 대로만 고쳐요. */
+  const fiveLeaf = createFiveLeafMemory((() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })());
+  const today = (): string => koreanDay(new Date(serverNow()));
+  /** 자리에 없는 분께 오잎클로버를 남기는 중이면 true예요. left-saved가 오면 오늘 놓은 것으로 적어요. */
+  let leavingFiveLeaf = false;
   let online = (): boolean => false;
   const cats = createCats(
     scene,
@@ -576,6 +588,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       // 자주 온 분이면 병동 고양이가 문 앞으로 나와 반겨요. 이 화면에서만 보여요.
       if (snapshot.greet) cats.welcome({ x: player.walkX, z: player.walkZ });
       if (snapshot.welcomeBack) notice?.show(WELCOME_BACK_TEXT, 5);
+      if (snapshot.fiveLeafUsed === true) fiveLeaf.mark(today());
+      else if (snapshot.fiveLeafUsed === false) fiveLeaf.clear();
       // 다시 이어졌으면 지금 잠들어 있는지를 서버에 다시 알려요. 같으면 서버는 아무것도 하지 않아요.
       client.send({ type: "sleep", sleeping: sleep?.sleeping ?? false });
       setBanner(null);
@@ -605,6 +619,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     onEvent(event: WardEvent) {
       announce(event);
       if (event.kind === "gift") {
+        if (event.id === myId && event.gift.item === FIVE_LEAF_ITEM) fiveLeaf.mark(today());
         const from = remotes.handSpot(event.id) ?? player.handSpot();
         offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion());
         return;
@@ -676,7 +691,9 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         toast(HUG_DENIED_TEXT[denied.reason as HugDenied]);
         return;
       }
+      if (denied.action === "gift") leavingFiveLeaf = false;
       if (denied.reason === "gift-limit" && denied.item === FIVE_LEAF_ITEM) {
+        fiveLeaf.mark(today());
         toast("오잎클로버는 내일 다시 놓을 수 있어요.");
         return;
       }
@@ -686,6 +703,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       pendingLeft = { bedId: message.bedId, cards: message.cards, at: performance.now() };
     },
     onLeftSaved() {
+      if (leavingFiveLeaf) fiveLeaf.mark(today());
+      leavingFiveLeaf = false;
       toast("남겨두었어요. 다음에 들어오시면 전해져요.");
     },
     onVisitDenied(reason) {
@@ -957,8 +976,10 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         sink: {
           online: () => client.online,
           blessPerson: (targetId) => client.send({ type: "bless", targetId }),
-          leaveFor: (address, kind, item) =>
-            client.send(item === undefined ? { type: "leave-for", address, kind } : { type: "leave-for", address, kind, item }),
+          leaveFor: (address, kind, item) => {
+            leavingFiveLeaf = item === FIVE_LEAF_ITEM;
+            client.send(item === undefined ? { type: "leave-for", address, kind } : { type: "leave-for", address, kind, item });
+          },
           bless: (bedId) => client.send({ type: "bless", bedId }),
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
@@ -970,6 +991,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
           discharge: (closeLink) => client.send({ type: "discharge", closeLink }),
         },
         morning: () => isMorningWindow(serverNow()),
+        fiveLeafUsed: () => fiveLeaf.used(today()),
       });
     }
   };

@@ -704,6 +704,8 @@ export class WardRoom extends DurableObject<Env> {
     };
     let inbox: SendableCard[] = [];
     let welcomeBack = false;
+    /** 30초 안에 다시 이어 directory를 부르지 않았으면 모르니 null이에요. 화면은 알던 값을 그대로 써요. */
+    let fiveLeafUsed: boolean | null = null;
     let tree: { active: boolean; count: number } | null = null;
     if (!admission.restored || !record.address) {
       const place = record.visit
@@ -713,6 +715,7 @@ export class WardRoom extends DurableObject<Env> {
       record = { ...record, address: entered.address, linked: entered.linked, visitDays: entered.visitDays };
       inbox = entered.inbox.filter(isCard);
       welcomeBack = entered.welcomeBack;
+      fiveLeafUsed = entered.fiveLeafUsed;
       // 문병객에게는 사과나무를 그리지 않아요(자기 나무도 병실에서는 문병 중이라 감춰요).
       tree = record.visit ? null : entered.tree;
     } else if (!record.visit) {
@@ -743,6 +746,7 @@ export class WardRoom extends DurableObject<Env> {
       visit: role ? { ownerNickname: role.ownerNickname, ownerPresent: owner !== null, bed: role.bed } : null,
       greet: !admission.restored && shouldGreet(record.visitDays ?? 0),
       welcomeBack,
+      fiveLeafUsed,
       morningRooms: this.morningRooms(now),
       planters: this.planterTotals(),
     });

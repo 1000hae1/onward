@@ -281,6 +281,63 @@ a:focus-visible,
   word-break: keep-all;
 }
 
+/* 선물 고르기 창이에요. 한 줄에 셋씩, 마지막 줄 둘은 가운데로 모여요. */
+#action-bar .gift-choices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+#action-bar .gift-choice {
+  flex: 0 0 calc((100% - 0.75rem) / 3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 4.75rem;
+  padding: 0.5rem 0.25rem;
+  line-height: 1.2;
+  word-break: keep-all;
+}
+
+/* 아이콘은 이모지든 SVG든 28px이에요. aria-hidden이라 낭독기는 이름만 읽어요. */
+.gift-icon {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 28px;
+  line-height: 28px;
+  text-align: center;
+}
+
+/* 오잎클로버는 오른쪽 위에 작은 반짝임이 겹쳐요. */
+.gift-icon-sparkle {
+  position: absolute;
+  top: -7px;
+  right: -10px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.gift-label {
+  font-size: 0.875rem;
+}
+
+.gift-note {
+  margin-top: -0.1rem;
+  font-size: 0.75rem;
+}
+
+/* 지금 고를 수 없는 버튼은 흐리게 보여요(제철이 아닌 선물, 오늘 이미 놓은 오잎클로버, 안아 주기). */
+#action-bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
 /* 이모지 버튼이에요. 이모지는 aria-hidden이라 낭독기는 글자만 읽어요. */
 .emoji-button {
   display: inline-flex;

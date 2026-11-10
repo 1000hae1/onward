@@ -254,6 +254,8 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
     greet: z.boolean(),
     /** 퇴원한 뒤 다시 들어왔어요. */
     welcomeBack: z.boolean(),
+    /** 오잎클로버를 오늘 이미 놓았는지예요. 받는 사람 자신에게만 가요. null이면 서버가 이번에 살피지 않았어요. */
+    fiveLeafUsed: z.boolean().nullable(),
     /** 오늘 아침 창문이 열린 병실이에요. */
     morningRooms: z.array(roomIndex),
     /** 병실마다 모인 평안의 누적 수예요. */

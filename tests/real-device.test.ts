@@ -68,6 +68,7 @@ function fullSnapshot(): string {
     visit: null,
     greet: false,
     welcomeBack: false,
+    fiveLeafUsed: null,
     morningRooms: [],
     planters: [0, 0, 0, 0, 0, 0],
   });

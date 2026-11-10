@@ -112,6 +112,7 @@ test("snapshot과 모든 event 모양에는 사과를 담을 자리가 없어요
     visit: { ownerNickname: "따뜻한 곰", ownerPresent: false, bed: 4 },
     greet: false,
     welcomeBack: false,
+    fiveLeafUsed: null,
     morningRooms: [],
     planters: [0, 0, 0, 0, 0, 0],
   };
