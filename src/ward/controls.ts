@@ -16,6 +16,8 @@ import { createAvatar } from "../avatar/avatar";
 import { AVATAR_HEIGHT, HAND_HEIGHT, HAND_REACH } from "../avatar/kit";
 import {
   advanceBreath,
+  SLEEP_BREATH_AMOUNT,
+  SLEEP_BREATH_SECONDS,
   BED_TRANSITION_SECONDS,
   composePose,
   createPose,
@@ -185,6 +187,8 @@ export interface PlayerControls {
   forceGetUp(): void;
   /** 수면 모드에서는 카메라를 지금 자리에 고정해요. 드래그와 확대를 받지 않아요. */
   setCameraLocked(locked: boolean): void;
+  /** 수면 모드예요. 눈을 감고 이불을 덮고 아주 느리게 숨쉬어요. 누워 있을 때만 그렇게 보여요. */
+  setAsleep(asleep: boolean): void;
   /** 길찾기 격자예요. 다른 사람의 걸음을 그릴 때 함께 써요. */
   readonly nav: NavGrid;
   /** 고른 침대로 이동해요. 기존 확인 절차와 서버 점유 검사를 거쳐요. */
@@ -353,6 +357,7 @@ export function createPlayerControls(
   let walkPhase = 0;
   let walkWeight = 0;
   let breathPhase = 0;
+  let asleep = false;
   let gesture: Gesture | null = null;
   let gestureElapsed = 0;
   let facingCamera = false;
@@ -725,6 +730,9 @@ export function createPlayerControls(
     setCameraLocked(locked) {
       controls.enabled = !locked;
     },
+    setAsleep(next) {
+      asleep = next;
+    },
     setMoveConfirm(ask) {
       moveConfirm = ask;
     },
@@ -928,7 +936,9 @@ export function createPlayerControls(
         if (gestureElapsed >= gestureDuration(gesture)) gesture = null;
       }
 
-      breathPhase = advanceBreath(breathPhase, dt, stillMotion);
+      const sleeping = asleep && flow.kind === "lying";
+      avatar.setAsleep(sleeping);
+      breathPhase = advanceBreath(breathPhase, dt, stillMotion, sleeping ? SLEEP_BREATH_SECONDS : undefined);
       composePose(pose, {
         walkPhase,
         breathPhase,
@@ -938,6 +948,7 @@ export function createPlayerControls(
         bedProgress: bedProgress(flow, BED_TRANSITION_SECONDS),
         seatProgress: seatProgress(seatFlow, BED_TRANSITION_SECONDS),
         carrying: outfit === "visitor",
+        breathAmount: sleeping ? SLEEP_BREATH_AMOUNT : 1,
       });
 
       // 침대에 오르내리는 동안에는 곁 자리와 침대 위 자리 사이를 옮겨 가요.

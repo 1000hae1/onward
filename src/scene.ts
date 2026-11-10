@@ -60,6 +60,7 @@ import type { NightRecord } from "../shared/daily";
 import type { WardStats } from "../shared/protocol";
 import { createNotice } from "./ui/notice";
 import { createSleepMode } from "./ui/sleep-mode";
+import { KEPT_QUIET_TEXT, SLEEPING_PERSON_TEXT, SLEPT_LONG_TEXT, sleptSummaryText } from "../shared/sleep-rules";
 import { readClockShiftMs, readDebugFlag } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
 import { fetchGuestbook, forgetVisitToken, takeVisitToken } from "./net/guestbook-api";
@@ -357,6 +358,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     actionBar.openPerson({
       id: guest.id,
       nickname: guest.nickname,
+      sleepingNote: remotes.isAsleep(guest.id) ? SLEEPING_PERSON_TEXT : null,
       hug: hugMenuState({
         online: client.online,
         leaving: dischargeUntil !== null,
@@ -634,7 +636,9 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       if (event.kind === "gift") {
         if (event.id === myId && event.gift.item === FIVE_LEAF_ITEM) fiveLeaf.mark(today());
         const from = remotes.handSpot(event.id) ?? player.handSpot();
-        offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion());
+        // 잠든 동안 내 머리맡에 온 선물은 날아오지 않고 조용히 놓여 있어요. 깨어나면 숫자로 알려 줘요.
+        const quiet = (sleep?.sleeping ?? false) && event.gift.stand === player.claimedBed;
+        offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion() || quiet);
         return;
       }
       if (event.kind === "lamp") {
@@ -720,6 +724,12 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       leavingFiveLeaf = false;
       toast("남겨두었어요. 다음에 들어오시면 전해져요.");
     },
+    onKeptQuiet() {
+      toast(KEPT_QUIET_TEXT);
+    },
+    onSleptSummary(people, gifts) {
+      notice?.show(sleptSummaryText(people, gifts), 8);
+    },
     onVisitDenied(reason) {
       if (reason === "busy") {
         // 들어가지 않았어요. 입장 화면에서 조금 뒤에 다시 눌러 들어올 수 있어요.
@@ -776,12 +786,14 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         if (status === "online") gate?.hide();
         return;
       }
-      if (status === "paused") {
+      if (status === "paused" || status === "rested") {
+        // 잠든 지 8시간이 지나 서버가 쉬게 했으면 수면 모드도 끝내요. 누르면 다시 이어요.
+        if (status === "rested") sleep?.wake();
         setHud(null);
         setStats(null);
         remotes.reset([], "");
         setBanner(null);
-        gate?.show("잠들었어요. 화면을 누르면 다시 병실로 돌아가요");
+        gate?.show(status === "rested" ? SLEPT_LONG_TEXT : "잠들었어요. 화면을 누르면 다시 병실로 돌아가요");
         return;
       }
       if (status === "blocked" || status === "limited") {
@@ -821,6 +833,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     if (!announcer || !myId) return;
     if (event.kind !== "bless" && event.kind !== "gift" && event.kind !== "bow") return;
     if (event.id === myId) return;
+    // 잠든 동안에는 읽지 않아요. 깨어나면 한 번에 알려 줘요.
+    if (sleep?.sleeping) return;
     const nickname = remotes.guests().find((guest) => guest.id === event.id)?.nickname;
     if (!nickname) return;
     const myBed = player.claimedBed;
@@ -1120,11 +1134,13 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
           buttonRoot: sleepRoot,
           overlay: sleepOverlay,
           onChange: (sleeping) => {
-            // 카메라는 내 침대를 비추는 자리에 고정하고, 서버로는 아무것도 보내지 않아요.
+            // 카메라는 내 침대를 비추는 자리에 고정해요. 내 모습도 남들이 보는 것처럼 눈을 감고 이불을 덮어요.
             player.setCameraLocked(sleeping);
+            player.setAsleep(sleeping);
+            labels?.setAsleep(sleeping);
             player.setInputEnabled(!sleeping);
             lastInputMs = Date.now();
-            // 잠든 동안에는 안아 주기 요청이 오지 않게 서버에 알려요.
+            // 서버가 같은 병동 사람들에게 한 번 알려요. 잠든 동안 안아 주기·목례·한마디는 오지 않고, 평안은 쌓여요.
             client.send({ type: "sleep", sleeping });
           },
         })
@@ -1281,7 +1297,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     for (const nurse of facilities.nurses) nurse.update(dt);
     lanterns.begin();
     const myLanternGround = player.lanternWorld(myLanternPoint);
-    if (myLanternGround !== null) lanterns.add(player, myLanternPoint, myLanternGround);
+    if (myLanternGround !== null) lanterns.add(player, myLanternPoint, myLanternGround, sleep?.sleeping ?? false);
     remotes.lanterns(lanterns.add);
     cats.lanterns(lanterns.add);
     for (const nurse of facilities.nurses) {

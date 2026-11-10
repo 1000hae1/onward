@@ -1,8 +1,11 @@
 import { BUILDING } from "../../shared/ward-layout";
 import type { TimeSlot } from "./time-of-day";
 
-/** 등불을 달 캐릭터를 하나씩 알려 줘요. key는 같은 캐릭터면 늘 같은 객체이고, at은 등불 자리, groundY는 발밑 높이예요. */
-export type LanternSink = (key: object, at: { x: number; y: number; z: number }, groundY: number) => void;
+/**
+ * 등불을 달 캐릭터를 하나씩 알려 줘요. key는 같은 캐릭터면 늘 같은 객체이고, at은 등불 자리, groundY는 발밑 높이예요.
+ * dim이면 잠든 사람이라 등불을 은은하게 꺼요.
+ */
+export type LanternSink = (key: object, at: { x: number; y: number; z: number }, groundY: number, dim?: boolean) => void;
 
 /**
  * 머리 위 작은 등불의 규칙이에요. 화면(head-lanterns.ts)은 이 결과만 따라요.
@@ -15,6 +18,8 @@ export type LanternSink = (key: object, at: { x: number; y: number; z: number },
 
 /** 켜지고 꺼지는 데 걸리는 시간이에요(초). */
 export const LANTERN_FADE_SECONDS = 1;
+/** 잠든 사람의 등불이 꺼지는 데 걸리는 시간이에요(초). 눈치채지 못할 만큼 천천히요. */
+export const SLEEP_FADE_SECONDS = 4;
 /** 진짜 조명을 다는 등불의 최대 개수예요. */
 export const MAX_REAL_LANTERN_LIGHTS = 4;
 

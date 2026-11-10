@@ -65,6 +65,8 @@ export interface PoseInput {
   seatProgress?: number;
   /** 한 손에 꽃다발을 들고 있으면 그 팔은 앞으로 든 채예요. */
   carrying: boolean;
+  /** 숨의 크기예요. 없으면 1이고, 잠들면 조금 작아져요. */
+  breathAmount?: number;
 }
 
 /** 걸음마다 좌우로 기우는 각도예요. 짧은 발로 뒤뚱뒤뚱 걸어요. */
@@ -78,6 +80,10 @@ const CARRY_ARM_SWING_RATIO = 0.2;
 
 /** 숨 한 번에 걸리는 시간이에요. */
 export const BREATH_SECONDS = 4.2;
+/** 잠들었을 때 숨 한 번에 걸리는 시간이에요. 아주 느려요. */
+export const SLEEP_BREATH_SECONDS = 7.5;
+/** 잠들었을 때 숨의 크기예요. 깨어 있을 때보다 조금 작아요. */
+export const SLEEP_BREATH_AMOUNT = 0.75;
 const BREATH_AMOUNT = 0.016;
 
 /** 꽃다발을 든 팔이 몸 앞쪽으로 돈 각도예요. */
@@ -162,9 +168,9 @@ export function smoothstep(from: number, to: number, value: number): number {
 const mix = (a: number, b: number, t: number): number => a + (b - a) * t;
 
 /** 숨 위상을 dt만큼 앞으로 보내요. 동작 줄이기를 켜면 0에 머물러요. */
-export function advanceBreath(phase: number, dt: number, still: boolean): number {
+export function advanceBreath(phase: number, dt: number, still: boolean, seconds = BREATH_SECONDS): number {
   if (still) return 0;
-  return (phase + (dt / BREATH_SECONDS) * Math.PI * 2) % (Math.PI * 2);
+  return (phase + (dt / seconds) * Math.PI * 2) % (Math.PI * 2);
 }
 
 export function gestureDuration(gesture: Gesture): number {
@@ -194,7 +200,7 @@ export function composePose(out: Pose, input: PoseInput): Pose {
   out.twist = stride * WADDLE_TWIST * w;
   out.bob = Math.abs(side) * WADDLE_BOB * w;
   out.lean = 0;
-  out.breathe = Math.sin(breathPhase) * BREATH_AMOUNT * (1 - w);
+  out.breathe = Math.sin(breathPhase) * BREATH_AMOUNT * (input.breathAmount ?? 1) * (1 - w);
   out.footLeftLift = Math.max(0, -side) * FOOT_LIFT * w;
   out.footRightLift = Math.max(0, side) * FOOT_LIFT * w;
   out.footLeftStep = stride * FOOT_STEP * w;

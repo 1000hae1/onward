@@ -24,6 +24,8 @@ import {
   composePose,
   createPose,
   gestureDuration,
+  SLEEP_BREATH_AMOUNT,
+  SLEEP_BREATH_SECONDS,
   STRIDE_LENGTH,
 } from "../avatar/pose";
 import type { Gesture, Pose } from "../avatar/pose";
@@ -123,6 +125,8 @@ export interface RemoteGuests {
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
   headSpot(id: string): Spot | null;
+  /** 그 사람이 지금 잠들어 있는지예요. */
+  isAsleep(id: string): boolean;
   /** 지금 침대에 누운 사람 수예요. 소등 안내에 써요. */
   lyingCount(): number;
   /** 보이는 사람과 곁의 고양이마다 머리 위 등불 자리를 알려 줘요. */
@@ -323,6 +327,9 @@ export function createRemoteGuests(
   let myId: string | null = null;
   let quality: Quality = "normal";
 
+  /** 침대에 다 누운 채 잠든 사람만 잠든 모습으로 그려요. 오르내리는 중에는 깨어 있는 모습이에요. */
+  const asleepNow = (remote: Remote): boolean => remote.guest.sleeping && remote.flow.kind === "lying";
+
   return {
     get count() {
       return remotes.size;
@@ -373,8 +380,11 @@ export function createRemoteGuests(
           }
           return;
         }
+        case "sleep":
+          remote.guest = { ...remote.guest, sleeping: event.sleeping, hugOk: event.hugOk };
+          return;
         case "sit":
-          remote.guest = { ...remote.guest, lying: false, bench: event.seat };
+          remote.guest = { ...remote.guest, lying: false, bench: event.seat, sleeping: false };
           remote.afterWalk = null;
           goToSeat(remote, event.seat);
           return;
@@ -384,7 +394,7 @@ export function createRemoteGuests(
           return;
         case "walk":
           // 걸어가면 침대나 벤치에서 내려오지만 침대는 그대로 그 사람 것이에요. 이름표도 그대로예요.
-          remote.guest = { ...remote.guest, lying: false, bench: null };
+          remote.guest = { ...remote.guest, lying: false, bench: null, sleeping: false };
           remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
@@ -397,7 +407,7 @@ export function createRemoteGuests(
           remote.guest = { ...remote.guest, bed: event.bedId, lying: false };
           return;
         case "bed-released":
-          remote.guest = { ...remote.guest, bed: null, lying: false };
+          remote.guest = { ...remote.guest, bed: null, lying: false, sleeping: false };
           if (remote.flow.kind === "heading") {
             remote.flow = FREE;
             remote.path = [];
@@ -406,7 +416,7 @@ export function createRemoteGuests(
           }
           return;
         case "get-up":
-          remote.guest = { ...remote.guest, lying: false };
+          remote.guest = { ...remote.guest, lying: false, sleeping: false };
           if (remote.flow.kind === "heading") {
             remote.flow = FREE;
             remote.path = [];
@@ -495,7 +505,11 @@ export function createRemoteGuests(
         }
 
         const progress = bedProgress(remote.flow, BED_TRANSITION_SECONDS);
-        remote.breathPhase = advanceBreath(remote.breathPhase, dt, stillMotion);
+        // 잠든 사람은 아주 느리고 조금 작게 숨쉬어요. 동작 줄이기를 켜면 숨쉬기는 멈춰요.
+        const asleep = asleepNow(remote);
+        remote.avatar.setAsleep(asleep);
+        remote.label.setAsleep(asleep);
+        remote.breathPhase = advanceBreath(remote.breathPhase, dt, stillMotion, asleep ? SLEEP_BREATH_SECONDS : undefined);
         composePose(remote.pose, {
           walkPhase: remote.walkPhase,
           breathPhase: remote.breathPhase,
@@ -505,6 +519,7 @@ export function createRemoteGuests(
           bedProgress: progress,
           seatProgress: seatProgress(remote.seat, BED_TRANSITION_SECONDS),
           carrying: remote.guest.outfit === "visitor",
+          breathAmount: asleep ? SLEEP_BREATH_AMOUNT : 1,
         });
 
         let x = remote.position.x;
@@ -589,10 +604,14 @@ export function createRemoteGuests(
     },
     lanterns(sink) {
       for (const remote of remotes.values()) {
-        if (remote.visible) sink(remote, lanternPoint, remote.avatar.lanternWorld(lanternPoint));
+        if (remote.visible) sink(remote, lanternPoint, remote.avatar.lanternWorld(lanternPoint), asleepNow(remote));
         const cat = remote.companion.view;
         if (cat.root.visible) sink(remote.companion, lanternPoint, cat.lanternWorld(lanternPoint));
       }
+    },
+    isAsleep(id) {
+      const remote = remotes.get(id);
+      return remote ? remote.guest.sleeping : false;
     },
     lyingCount() {
       let count = 0;

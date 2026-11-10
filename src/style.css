@@ -477,6 +477,59 @@ a:focus-visible,
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
+/* 잠든 사람의 이름표 옆 작은 달이에요. 글자는 CSS가 붙여서 닉네임과 섞이지 않아요. */
+.head-name.asleep::after {
+  content: " 🌙";
+  font-size: 0.75em;
+}
+
+/* 잠든 사람 머리 위로 작은 z 두 개가 엇갈려 천천히 떠올랐다 사라져요. */
+.head-zz {
+  position: relative;
+  height: 1.4rem;
+  width: 2rem;
+}
+
+.head-zz span {
+  position: absolute;
+  bottom: 0;
+  left: 0.3rem;
+  color: #f4ead8;
+  font-size: 0.8rem;
+  font-style: italic;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  animation: head-zz-rise 5s ease-in-out infinite;
+}
+
+.head-zz span:nth-child(2) {
+  left: 1rem;
+  font-size: 0.65rem;
+  animation-delay: 2.5s;
+}
+
+@keyframes head-zz-rise {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0.3rem);
+  }
+  30% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0.35rem, -1rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 움직이지 않고 흐리게 떠 있어요. */
+  .head-zz span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .head-bubble {
   padding: 0.35rem 0.75rem;
   border-radius: 1rem;

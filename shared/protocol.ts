@@ -4,7 +4,7 @@ import { APPLE_NOTE_MAX, APPLE_PHRASES, APPLE_SLOTS } from "./apple-limits.ts";
 import { BENCH_SEAT_COUNT } from "./ward-layout.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 8;
+export const PROTOCOL_VERSION = 9;
 /** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
@@ -115,7 +115,7 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("guestbook"), action: z.enum(["create", "off", "info"]) }),
   /** 내 나무의 사과 하나를 숨겨요. 서버에서 바로 지워요. */
   z.object({ v, type: z.literal("hide-apple"), appleId }),
-  /** 수면 모드를 켜거나 껐어요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
+  /** 잠들거나(true) 깨어났어요(false). 침대에 누워 있을 때만 잠들 수 있고, 판단은 서버가 해요. */
   z.object({ v, type: z.literal("sleep"), sleeping: z.boolean() }),
   /** 다른 동물을 안아 주고 싶어요. 서버가 거리·횟수·설정을 살펴요. */
   z.object({ v, type: z.literal("hug-request"), targetId: publicId }),
@@ -146,6 +146,8 @@ export const guestSchema = z.object({
   address,
   /** 지금 안아 주기 요청을 받을 수 있는지예요. 잠들었는지, 설정으로 껐는지는 나누지 않아요. */
   hugOk: z.boolean(),
+  /** 잠들어 있는지예요. 눈을 감고 이불을 덮은 모습으로 그려요. */
+  sleeping: z.boolean(),
 });
 export type Guest = z.infer<typeof guestSchema>;
 
@@ -216,6 +218,8 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("planter"), room: roomIndex, total: z.number().int().min(0) }),
   /** 같은 병실의 누군가 퇴원해요. 같은 병실 사람에게만 보내요. */
   z.object({ kind: z.literal("discharge"), id: publicId }),
+  /** 누군가 잠들었거나 깨어났어요. 바뀔 때 한 번만 보내요. hugOk도 함께 바뀌어요. */
+  z.object({ kind: z.literal("sleep"), id: publicId, sleeping: z.boolean(), hugOk: z.boolean() }),
 ]);
 export type WardEvent = z.infer<typeof wardEventSchema>;
 
@@ -278,6 +282,15 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ v, type: z.literal("left-blessings"), bedId, cards: z.array(blessingCardSchema) }),
   /** 자리에 없는 사람에게 남긴 평안이 잘 저장됐어요. */
   z.object({ v, type: z.literal("left-saved") }),
+  /** 잠든 분께 보낸 평안이나 선물을 깨지 않게 쌓아 뒀어요. 보낸 사람에게만 가요. */
+  z.object({ v, type: z.literal("kept-quiet") }),
+  /** 자는 동안 평안을 빌어 준 사람 수와 놓인 선물 수예요. 깨어난 사람에게만, 숫자로만 가요. */
+  z.object({
+    v,
+    type: z.literal("slept-summary"),
+    people: z.number().int().min(1),
+    gifts: z.number().int().min(0),
+  }),
   z.object({ v, type: z.literal("event"), event: wardEventSchema }),
   z.object({ v, type: z.literal("position-corrected"), x: coordinate, z: coordinate }),
   z.object({ v, type: z.literal("bed-granted"), bedId }),

@@ -23,6 +23,7 @@ import {
   fadeLook,
   isOutdoors,
   lanternBob,
+  SLEEP_FADE_SECONDS,
   lanternWanted,
   MAX_REAL_LANTERN_LIGHTS,
   pickRealLights,
@@ -62,6 +63,8 @@ interface Lantern {
   phase: number;
   /** 이번 프레임에 그 캐릭터가 보였는지예요. 보이지 않으면 꺼져 가다 사라져요. */
   seen: boolean;
+  /** 잠든 사람의 등불이에요. 은은하게 꺼 둬요. */
+  dim: boolean;
 }
 
 export interface HeadLanterns {
@@ -169,10 +172,10 @@ export function createHeadLanterns(parent: Object3D, softCircle: Texture): HeadL
   const candidates: LightCandidate[] = [];
   const shade = lanternShadeSlots();
 
-  const add: LanternSink = (key, at, groundY) => {
+  const add: LanternSink = (key, at, groundY, dim = false) => {
     let lantern = lanterns.get(key);
     if (!lantern) {
-      lantern = { x: 0, y: 0, z: 0, groundY: 0, shownY: 0, fade: 0, phase: Math.random() * Math.PI * 2, seen: false };
+      lantern = { x: 0, y: 0, z: 0, groundY: 0, shownY: 0, fade: 0, phase: Math.random() * Math.PI * 2, seen: false, dim: false };
       lanterns.set(key, lantern);
     }
     lantern.x = at.x;
@@ -180,6 +183,7 @@ export function createHeadLanterns(parent: Object3D, softCircle: Texture): HeadL
     lantern.z = at.z;
     lantern.groundY = groundY;
     lantern.seen = true;
+    lantern.dim = dim;
   };
 
   return {
@@ -207,8 +211,9 @@ export function createHeadLanterns(parent: Object3D, softCircle: Texture): HeadL
       active.length = 0;
       for (const [key, lantern] of lanterns) {
         // 보이지 않게 된 캐릭터(떠난 사람, 멀어진 고양이)의 등불은 그 자리에서 꺼져요.
-        const wanted = lantern.seen && lanternWanted(slot, isOutdoors(lantern.x, lantern.z));
-        lantern.fade = stepFade(lantern.fade, wanted, dt);
+        // 잠든 사람의 등불은 평소보다 천천히 꺼져요.
+        const wanted = lantern.seen && !lantern.dim && lanternWanted(slot, isOutdoors(lantern.x, lantern.z));
+        lantern.fade = stepFade(lantern.fade, wanted, dt, lantern.dim ? SLEEP_FADE_SECONDS : undefined);
         if (lantern.fade <= 0) {
           if (!lantern.seen) lanterns.delete(key);
           continue;

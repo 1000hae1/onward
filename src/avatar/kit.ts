@@ -34,6 +34,14 @@ export interface AvatarKit {
   foot: BufferGeometry;
 }
 
+/** 잠들었을 때만 얹는 부품이에요. 깨어 있을 때는 그리지 않아서 평소 그리는 횟수는 그대로예요. */
+export interface SleepKit {
+  /** 눈 위에 덮는 눈꺼풀과 감은 눈 선이에요. 몸과 함께 숨쉬도록 몸 쪽에 붙여요. */
+  lids: BufferGeometry;
+  /** 어깨까지 덮는 이불이에요. 누운 몸과 함께 기울어요. */
+  blanket: BufferGeometry;
+}
+
 /** 아바타의 키예요. 이름표는 이 높이 위에 떠요. */
 export const AVATAR_HEIGHT = EGG_BASE_Y + EGG_HEIGHT;
 /** 얼굴 가운데 높이예요. 이름표와 날아오는 빛이 이 점을 기준으로 해요. */
@@ -160,6 +168,49 @@ function bouquet(): BufferGeometry[] {
     { shape: "ball", color: "#e99aa3", at: [-0.025, 0.152, 0.025], size: [0.026, 0.024, 0.026], small: true },
   ];
   return blobs(wrap);
+}
+
+const BLANKET = "#f3ead9";
+const BLANKET_FOLD = "#fbf7ef";
+/** 이불이 몸보다 큰 비율이에요. 팔 뭉치까지 덮어요. */
+const BLANKET_SHELL = 1.2;
+/** 이불이 덮는 꼭대기예요. 어깨 높이라 얼굴은 보여요. */
+const BLANKET_TOP = 1.72;
+
+/** 눈이 놓인 무늬의 색이에요. 무늬 위에 눈이 있으면 그 색, 아니면 털색이에요. */
+function lidColor(spec: SpeciesSpec): string {
+  const [theta, phi] = spec.eye;
+  const under = spec.patches.filter(
+    (patch) => Math.abs(theta - patch.at[0]) < patch.radius[0] && Math.abs(Math.abs(phi) - Math.abs(patch.at[1])) < patch.radius[1],
+  );
+  return under.at(-1)?.color ?? spec.fur;
+}
+
+function buildLids(spec: SpeciesSpec): BufferGeometry {
+  const lift = spec.eyeLift ?? 0.002;
+  // 눈을 털색으로 덮고, 그 위에 아래로 살짝 처진 가는 선을 그어 감은 눈을 그려요.
+  const lids = mirroredPatches({ at: spec.eye, radius: [0.09, 0.125], color: lidColor(spec), bulge: 0.004, lift: lift + 0.0015, rings: 1, segments: 12 });
+  const lines = mirroredPatches({ at: [spec.eye[0] - 0.03, spec.eye[1]], radius: [0.016, 0.1], color: EYE_COLOR, bulge: 0.002, lift: lift + 0.004, rings: 1, segments: 10 });
+  return merged([...lids, ...lines].map(eggPatch));
+}
+
+function buildBlanket(): BufferGeometry {
+  return merged([
+    eggBand([0, 0.6, 1.2, BLANKET_TOP - 0.06], BLANKET_SHELL, BLANKET),
+    // 이불 끝을 한 번 접은 자리예요. 조금 더 도톰하고 밝아요.
+    eggBand([BLANKET_TOP - 0.08, BLANKET_TOP - 0.02, BLANKET_TOP], [BLANKET_SHELL + 0.03, BLANKET_SHELL + 0.035, 1.02], BLANKET_FOLD),
+  ]);
+}
+
+const sleepKits = new Map<string, SleepKit>();
+let sharedBlanket: BufferGeometry | null = null;
+
+/** 동물마다 한 번만 만들어요. 이불은 모두 같아요. */
+export function getSleepKit(spec: SpeciesSpec): SleepKit {
+  return cached(sleepKits, spec.id, () => {
+    sharedBlanket ??= buildBlanket();
+    return { lids: buildLids(spec), blanket: sharedBlanket };
+  });
 }
 
 const clothes = new Map<Outfit, BufferGeometry>();

@@ -48,6 +48,7 @@ const guest = (index: number): Guest => ({
   bench: null,
   address: "A".repeat(22),
   hugOk: true,
+  sleeping: true,
 });
 
 /** 정원 30명에 잠시 끊긴 사람 6명까지 든, 가장 큰 snapshot이에요. */

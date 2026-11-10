@@ -90,7 +90,7 @@ test("다른 사람에게 보이는 손님 정보에는 사과 관련 값이 없
   // 링크가 켜져 있고 사과가 많은 주인이어도 다른 사람에게는 같은 모양이에요.
   const owner = toPublic(record(1, { linked: true }));
   assert.equal(carriesAppleData(owner), false);
-  assert.deepEqual(Object.keys(owner).sort(), ["address", "animal", "bed", "bench", "hugOk", "id", "lying", "nickname", "outfit", "withCat", "x", "z"]);
+  assert.deepEqual(Object.keys(owner).sort(), ["address", "animal", "bed", "bench", "hugOk", "id", "lying", "nickname", "outfit", "sleeping", "withCat", "x", "z"]);
 });
 
 test("snapshot과 모든 event 모양에는 사과를 담을 자리가 없어요", () => {

@@ -1,6 +1,6 @@
 import { Group, Mesh, Object3D } from "three";
 import type { Vector3 } from "three";
-import { ARM_REACH, ARM_Y, AVATAR_HEIGHT, FOOT_X, getAvatarKit, getAvatarMaterial, HEAD_CENTER_Y } from "./kit";
+import { ARM_REACH, ARM_Y, AVATAR_HEIGHT, FOOT_X, getAvatarKit, getAvatarMaterial, getSleepKit, HEAD_CENTER_Y } from "./kit";
 import type { Pose } from "./pose";
 import { speciesById, speciesScale } from "./species";
 import type { AvatarChoice } from "./species";
@@ -50,6 +50,8 @@ export interface Avatar {
   lanternWorld(target: Vector3): number;
   /** 멀리 있을 때 팔과 발을 빼고 몸만 그려요. 그리는 횟수가 다섯 번에서 한 번으로 줄어요. */
   setSimple(simple: boolean): void;
+  /** 잠든 모습이에요. 눈을 감고 어깨까지 이불을 덮어요. 팔과 발은 이불 속에 있어요. */
+  setAsleep(asleep: boolean): void;
 }
 
 /**
@@ -66,6 +68,21 @@ export function createAvatar(choice: AvatarChoice): Avatar {
   const armRight = new Mesh(kit.armRight, material);
   const footLeft = new Mesh(kit.foot, material);
   const footRight = new Mesh(kit.foot, material);
+  let species = choice.species;
+  const sleepKit = getSleepKit(speciesById(species));
+  const lids = new Mesh(sleepKit.lids, material);
+  const blanket = new Mesh(sleepKit.blanket, material);
+  lids.visible = false;
+  blanket.visible = false;
+  let simple = false;
+  let asleep = false;
+  const syncLimbs = (): void => {
+    const shown = !simple && !asleep;
+    armLeft.visible = shown;
+    armRight.visible = shown;
+    footLeft.visible = shown;
+    footRight.visible = shown;
+  };
 
   const root = new Group();
   const base = new Group();
@@ -80,7 +97,8 @@ export function createAvatar(choice: AvatarChoice): Avatar {
   root.add(base);
   base.add(shell, footLeft, footRight);
   shell.add(squash);
-  squash.add(body, armPivotLeft, armPivotRight, head);
+  // 눈꺼풀과 이불도 몸과 함께 숨쉬어요.
+  squash.add(body, armPivotLeft, armPivotRight, head, lids, blanket);
   armPivotLeft.add(armLeft);
   armPivotRight.add(armRight);
 
@@ -111,6 +129,10 @@ export function createAvatar(choice: AvatarChoice): Avatar {
       armRight.geometry = look.armRight;
       footLeft.geometry = look.foot;
       footRight.geometry = look.foot;
+      if (next.species !== species) {
+        species = next.species;
+        lids.geometry = getSleepKit(speciesById(species)).lids;
+      }
     },
     place(x, z, yaw) {
       root.position.x = x;
@@ -129,11 +151,16 @@ export function createAvatar(choice: AvatarChoice): Avatar {
       target.z += Math.cos(root.rotation.y) * LANTERN_FORWARD;
       return root.position.y + standY;
     },
-    setSimple(simple) {
-      armLeft.visible = !simple;
-      armRight.visible = !simple;
-      footLeft.visible = !simple;
-      footRight.visible = !simple;
+    setSimple(next) {
+      simple = next;
+      syncLimbs();
+    },
+    setAsleep(next) {
+      if (asleep === next) return;
+      asleep = next;
+      lids.visible = next;
+      blanket.visible = next;
+      syncLimbs();
     },
     apply(pose) {
       standY = pose.bedLift * BED_STAND_Y + pose.seatLift * SEAT_SIT_Y;

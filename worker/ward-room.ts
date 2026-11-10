@@ -70,6 +70,19 @@ import { claimBed, isLying, lieDown, releaseBed, seatOnEntry, standUp } from "..
 import { leaveSeat, seatOf, takeSeat } from "../shared/bench-rules.ts";
 import { headcount, shouldReport } from "../shared/presence-rules.ts";
 import { departureOf, MAX_DEPARTURES_PER_REPORT } from "../shared/metrics-rules.ts";
+import {
+  keepForSleeper,
+  KEPT_KEEP_MS,
+  nextSleepDeadline,
+  readKept,
+  settleSleep,
+  sleepChange,
+  sleeperFor,
+  SLEEP_LIMIT_MS,
+  sleptTooLong,
+  wakeSummary,
+  withheldFromSleeper,
+} from "../shared/sleep-rules.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
@@ -84,6 +97,8 @@ const DENIED_CODE = 4003;
 const ENTRY_FAILED_CODE = 1011;
 /** 메시지를 너무 빨리 계속 보냈어요. */
 const TOO_MANY_CODE = 4008;
+/** 잠든 지 8시간이 지나 연결을 쉬어요. 화면은 누를 때까지 다시 잇지 않아요. */
+const SLEPT_LONG_CODE = 4009;
 /** Worker가 IP 해시를 담아 보내는 내부 헤더예요. Worker가 항상 덮어써서 화면이 바꿀 수 없어요. */
 export const IP_HASH_HEADER = "X-Onward-Ip-Hash";
 /** IP 해시가 없을 때 요청 제한을 셀 자리예요. Worker를 거치면 생기지 않아요. */
@@ -100,6 +115,7 @@ const RETENTION: readonly RetentionRule[] = [
   { table: "morning_open", kind: "day", column: "day" },
   { table: "hug_sent", kind: "at", column: "at", keepMs: HUG_REPEAT_MS },
   { table: "hug_pending", kind: "at", column: "at", keepMs: HUG_ANSWER_MS },
+  { table: "sleep_kept", kind: "at", column: "at", keepMs: KEPT_KEEP_MS },
 ];
 const MAX_INSTANCE = 20;
 type DeniedAction = Extract<ServerMessage, { type: "action-denied" }>["action"];
@@ -163,6 +179,9 @@ export class WardRoom extends DurableObject<Env> {
     // 정말 나간 사람의 머문 시간과 평안 빌기 수예요. 누구인지는 적지 않아요. 다음 인원 보고에 실어 보내고 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS departures (
       id INTEGER PRIMARY KEY AUTOINCREMENT, stay_ms INTEGER NOT NULL, blessings INTEGER NOT NULL)`);
+    // 잠든 사람(guestId 해시) 몫으로 쌓아 둔 평안과 선물이에요. 보낸 사람도 해시로만 두고, 깨어나면 숫자만 전하고 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS sleep_kept (
+      target TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -259,6 +278,10 @@ export class WardRoom extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     const now = Date.now();
+    // 잠든 지 8시간이 지난 연결은 닫아요. 그 뒤로는 끊긴 사람처럼 30초 동안 자리를 맡아 둬요.
+    for (const { ws, record } of this.joined()) {
+      if (sleptTooLong(record, now)) await this.restAfterLongSleep(ws, record);
+    }
     const { expired, nextAlarm } = expireAway(this.awayGuests(), now);
     const before = this.lastVisits();
     for (const guest of expired) {
@@ -272,12 +295,58 @@ export class WardRoom extends DurableObject<Env> {
       due = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
       this.setRetentionDue(due);
     }
-    const next = earlierAlarm(nextAlarm, due);
+    const next = earlierAlarm(earlierAlarm(nextAlarm, due), this.sleepDeadline());
     if (next !== null) await this.ctx.storage.setAlarm(next);
     if (expired.length > 0) {
       this.refreshCatVisits(before);
       await this.syncPresence(now);
     }
+  }
+
+  /** 지금 잠든 사람 가운데 가장 먼저 8시간이 되는 시각이에요. */
+  private sleepDeadline(): number | null {
+    return nextSleepDeadline(this.joined().map((entry) => entry.record));
+  }
+
+  /** 잠든 사람의 8시간 alarm을 맞춰요. 더 이른 alarm이 있으면 그대로 둬요. */
+  private async keepSleepAlarm(record: GuestRecord): Promise<void> {
+    if (!record.sleeping || record.sleptAt === undefined) return;
+    const wanted = alarmToSet(await this.ctx.storage.getAlarm(), record.sleptAt + SLEEP_LIMIT_MS);
+    if (wanted !== null) await this.ctx.storage.setAlarm(wanted);
+  }
+
+  /**
+   * 잠든 지 8시간이 지났어요. 깨운 것으로 알리고 연결을 닫아요. 쌓아 둔 평안은 다음에 들어올 때 전해요.
+   * 닫는 연결에 요약을 보내면 화면이 보여 주지 못하고 지나가서 여기서는 보내지 않아요.
+   */
+  private async restAfterLongSleep(ws: WebSocket, record: GuestRecord): Promise<void> {
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (!attachment?.joined) return;
+    const next = sleepChange(record, false, Date.now()) ?? record;
+    ws.serializeAttachment({ ...attachment, record: next } satisfies Attachment);
+    this.broadcast({ kind: "sleep", id: next.id, sleeping: false, hugOk: hugAvailable(next) }, ws);
+    await this.disconnect(ws, SLEPT_LONG_CODE, "slept-long");
+  }
+
+  /** 잠든 사람 몫으로 평안이나 선물을 쌓아요. */
+  private async keepFor(target: string, sender: GuestRecord, kind: "bless" | "gift", nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const senderKey = sender.key ?? (await hashGuest(sender.guestId));
+    const row = sql.exec<{ data: string }>("SELECT data FROM sleep_kept WHERE target = ?", target).toArray()[0];
+    const next = keepForSleeper(readKept(row?.data), senderKey, kind);
+    sql.exec("INSERT OR REPLACE INTO sleep_kept (target, data, at) VALUES (?, ?, ?)", target, JSON.stringify(next), nowMs);
+    await this.keepTidy();
+  }
+
+  /** 깨어난 사람에게 자는 동안 쌓인 것을 숫자로만 전하고 지워요. 이 연결에만 보내요. */
+  private deliverKept(ws: WebSocket, record: GuestRecord): void {
+    if (!record.key) return;
+    const sql = this.ctx.storage.sql;
+    const row = sql.exec<{ data: string }>("SELECT data FROM sleep_kept WHERE target = ?", record.key).toArray()[0];
+    if (!row) return;
+    sql.exec("DELETE FROM sleep_kept WHERE target = ?", record.key);
+    const summary = wakeSummary(readKept(row.data));
+    if (summary) this.send(ws, { v: PROTOCOL_VERSION, type: "slept-summary", people: summary.people, gifts: summary.gifts });
   }
 
   private retentionDue(): number | null {
@@ -395,7 +464,9 @@ export class WardRoom extends DurableObject<Env> {
 
   private broadcast(event: WardEvent, except?: WebSocket): void {
     const text = JSON.stringify({ v: PROTOCOL_VERSION, type: "event", event } satisfies ServerMessage);
-    for (const { ws } of this.joined(except)) {
+    for (const { ws, record } of this.joined(except)) {
+      // 잠든 사람에게는 목례·한마디를 보내지 않고, 그분께 온 평안은 쌓아 뒀다가 깨어날 때 전해요.
+      if (withheldFromSleeper(event, record)) continue;
       try {
         ws.send(text);
       } catch {
@@ -404,14 +475,26 @@ export class WardRoom extends DurableObject<Env> {
     }
   }
 
+  /**
+   * 연결에 기록을 붙여요. 누워 있지 않은데 잠든 채면 깨워서 저장해요(일어나기, 걷기, 침대 옮기기, 퇴원 모두 여기를 지나요).
+   * 이미 들어와 있던 사람이 잠들거나 깨어나면 다른 사람에게 한 번 알리고, 깨어났으면 쌓인 것을 전해요.
+   */
   private save(ws: WebSocket, attachment: Attachment, record: GuestRecord): void {
+    const before = ws.deserializeAttachment() as Attachment | null;
+    const next = settleSleep(record);
     ws.serializeAttachment({
       joined: true,
       ward: attachment.ward,
       instance: attachment.instance,
       ip: attachment.ip ?? null,
-      record,
+      record: next,
     } satisfies Attachment);
+    // 막 들어온 연결은 join·update에 잠든 상태가 함께 가요.
+    if (!before?.joined) return;
+    const sleeping = Boolean(next.sleeping);
+    if (Boolean(before.record.sleeping) === sleeping) return;
+    this.broadcast({ kind: "sleep", id: next.id, sleeping, hugOk: hugAvailable(next) }, ws);
+    if (!sleeping) this.deliverKept(ws, next);
   }
 
   /** 이 병동의 번호예요. 연결이 처음 들어올 때 적어 둔 값이에요. */
@@ -676,7 +759,7 @@ export class WardRoom extends DurableObject<Env> {
       // 맡아 둔 사람이 더 없으면 alarm도 지워요. 쓸데없이 깨지 않게요.
       // 보관 기간 정리가 남아 있으면 그때로 맞춰 둬요.
       if (nextAlarmAt(away.filter((guest) => guest !== returning)) === null) {
-        const due = this.retentionDue();
+        const due = earlierAlarm(this.retentionDue(), this.sleepDeadline());
         if (due === null) await this.ctx.storage.deleteAlarm();
         else await this.ctx.storage.setAlarm(due);
       }
@@ -753,6 +836,9 @@ export class WardRoom extends DurableObject<Env> {
     });
     // 내 침대 옆 작은 사과나무예요. 이 연결에만 보내요. 다른 사람에게 가는 snapshot·event에는 사과가 없어요.
     if (tree) this.send(ws, { v: PROTOCOL_VERSION, type: "my-tree", active: tree.active, count: tree.count });
+    // 잠든 채 다시 이어졌으면 8시간 alarm을 다시 맞추고, 깨어 있으면 자는 동안 쌓인 것을 전해요.
+    if (record.sleeping) await this.keepSleepAlarm(record);
+    else this.deliverKept(ws, record);
     if (admission.restored) {
       // 다른 사람에게는 자리를 비운 적이 없던 것처럼 보여요. 모습이 바뀌었을 때만 알려요.
       this.broadcast({ kind: "update", guest: toPublic(record) }, ws);
@@ -929,7 +1015,13 @@ export class WardRoom extends DurableObject<Env> {
           return;
         }
         save({ ...record, lastAction: { ...record.lastAction, bless: nowMs }, blessings: (record.blessings ?? 0) + 1 });
+        // 잠든 분께는 빛이 날아가는 것만 남들이 보고, 그분 화면에는 띄우지 않고 쌓아 둬요.
         this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
+        const sleeper = sleeperFor(this.everyone(), target, record.id);
+        if (sleeper?.key) {
+          await this.keepFor(sleeper.key, record, "bless", nowMs);
+          this.send(ws, { v: PROTOCOL_VERSION, type: "kept-quiet" });
+        }
         // 빈 침대면 다음에 누울 사람을 위해 남겨 둬요.
         if (target.bedId !== null && target.targetId === null && this.bedIsEmpty(target.bedId)) {
           await this.leaveOnBed(target.bedId, record, "bless", null, nowMs);
@@ -993,6 +1085,12 @@ export class WardRoom extends DurableObject<Env> {
         this.broadcast({ kind: "gift", id: record.id, gift: { stand, slot, item: message.item } });
         if (emptyBed) await this.leaveOnBed(stand, record, "gift", message.item, nowMs);
         if (toOwner) this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
+        // 잠든 분 머리맡이면 선물은 놓되 그분 화면에는 조용히 놓고, 깨어날 때 숫자로 알려요.
+        const sleeper = toOwner ? null : sleeperFor(this.everyone(), target, record.id);
+        if (sleeper?.key) {
+          await this.keepFor(sleeper.key, record, "gift", nowMs);
+          this.send(ws, { v: PROTOCOL_VERSION, type: "kept-quiet" });
+        }
         this.countBlessing(nowMs);
         await this.keepTidy();
         return;
@@ -1062,11 +1160,11 @@ export class WardRoom extends DurableObject<Env> {
         return;
       }
       case "sleep": {
-        if (Boolean(record.sleeping) === message.sleeping) return;
-        const next = { ...record, sleeping: message.sleeping };
+        // 누워 있을 때만 잠들어요. 같은 값이 다시 오면 아무것도 하지 않아요. 알리기와 깨어날 때의 요약은 save가 해요.
+        const next = sleepChange(record, message.sleeping, nowMs);
+        if (!next) return;
         save(next);
-        // 안아 주기를 받을 수 있는지가 바뀔 때만 다른 사람에게 알려요.
-        if (hugAvailable(next) !== hugAvailable(record)) this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+        await this.keepSleepAlarm(next);
         return;
       }
       case "hug-request": {
@@ -1392,6 +1490,7 @@ export class WardRoom extends DurableObject<Env> {
     sql.exec("DELETE FROM daily_visitors WHERE day != ?", day);
     sql.exec("DELETE FROM daily_stats WHERE day != ?", day);
     sql.exec("DELETE FROM morning_open WHERE day != ?", day);
+    sql.exec("DELETE FROM sleep_kept WHERE at <= ?", now.getTime() - KEPT_KEEP_MS);
   }
 }
 

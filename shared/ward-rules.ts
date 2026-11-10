@@ -53,8 +53,10 @@ export interface GuestRecord {
   bannedNickname?: string;
   /** IP 해시예요. 신고에 함께 적어 IP 차단을 할 수 있게 해요. 남에게 보내지 않아요. */
   ip?: string;
-  /** 수면 모드예요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
+  /** 수면 모드예요. 잠든 사람에게는 안아 주기 요청·목례·한마디가 가지 않고, 평안과 선물은 쌓아 둬요. */
   sleeping?: boolean;
+  /** 잠든 시각이에요. 8시간이 지나면 서버가 연결을 닫아요. */
+  sleptAt?: number;
   /** 설정의 "안아 주기 요청 받지 않기"예요. */
   hugsOff?: boolean;
   /** 다녀간 날 수(한국 날짜)예요. 서버 판단에만 쓰고 남에게도, 화면에도 숫자로 보내지 않아요. */
@@ -93,6 +95,8 @@ export function toPublic(record: GuestRecord): Guest {
     bench: record.bench ?? null,
     address: record.address,
     hugOk: hugAvailable(record),
+    // 잠든 것은 모두에게 보여요. 안아 주기를 꺼 둔 설정은 보내지 않아요.
+    sleeping: Boolean(record.sleeping),
   };
 }
 

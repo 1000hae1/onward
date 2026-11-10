@@ -20,7 +20,8 @@ export function rosterAction(event: WardEvent, known: (id: string) => boolean, m
     event.kind === "bed-claimed" ||
     event.kind === "bed-released" ||
     event.kind === "bow" ||
-    event.kind === "bless"
+    event.kind === "bless" ||
+    event.kind === "sleep"
   ) {
     return known(event.id) ? "apply" : "ignore";
   }

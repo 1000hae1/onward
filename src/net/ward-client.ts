@@ -44,6 +44,8 @@ const BED_ANSWER_MS = 5000;
 const REPLACED_CODE = 4000;
 /** 서버가 들어올 수 없다고 닫았어요. 다시 잇지 않아요. */
 const DENIED_CODE = 4003;
+/** 잠든 지 8시간이 지나 서버가 연결을 쉬었어요. 누를 때까지 다시 잇지 않아요. */
+const SLEPT_LONG_CODE = 4009;
 
 /**
  * offline은 한 번도 닿지 못한 때, reconnecting은 이어졌다가 끊긴 때예요.
@@ -59,6 +61,8 @@ export type ConnectionStatus =
   | "outdated"
   /** 오래 입력이 없어 이 화면이 연결을 잠시 닫았어요. 누르면 다시 이어요. */
   | "paused"
+  /** 잠든 지 8시간이 지나 서버가 연결을 쉬었어요. 누르면 다시 이어요. */
+  | "rested"
   /** 운영자가 입장을 막았어요. */
   | "blocked"
   /** 새 게스트를 너무 많이 만들어 잠시 들어올 수 없어요. */
@@ -75,6 +79,10 @@ export interface WardClientHandlers {
   onDenied(denied: Denied): void;
   onLeftBlessings(message: Extract<ServerMessage, { type: "left-blessings" }>): void;
   onLeftSaved(): void;
+  /** 잠든 분께 보낸 평안이나 선물을 깨지 않게 쌓아 뒀어요. */
+  onKeptQuiet(): void;
+  /** 자는 동안 평안을 빌어 준 사람 수와 놓인 선물 수예요. */
+  onSleptSummary(people: number, gifts: number): void;
   onStatus(status: ConnectionStatus, instance: number): void;
   /** 방명록 링크로 문병 오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
   onVisitDenied(reason: "closed" | "busy"): void;
@@ -292,6 +300,12 @@ export function createWardClient(
       case "left-saved":
         handlers.onLeftSaved();
         return;
+      case "kept-quiet":
+        handlers.onKeptQuiet();
+        return;
+      case "slept-summary":
+        handlers.onSleptSummary(message.people, message.gifts);
+        return;
       case "visit-denied":
         if (message.reason === "closed") visitToken = null;
         handlers.onVisitDenied(message.reason);
@@ -398,6 +412,14 @@ export function createWardClient(
       if (stopped) return;
       if (paused) {
         handlers.onStatus("paused", instance);
+        return;
+      }
+      if (event.code === SLEPT_LONG_CODE) {
+        // 오래 입력이 없을 때처럼 쉬어요. resume을 부르면 같은 병실로 다시 이어요.
+        paused = true;
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = null;
+        handlers.onStatus("rested", instance);
         return;
       }
       if (event.code === DENIED_CODE) {

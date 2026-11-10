@@ -72,7 +72,8 @@ export interface ActionBar {
   update(dt: number): void;
   showToast(text: string): void;
   /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
-  openPerson(person: { id: string; nickname: string; hug: HugMenuState }): void;
+  /** sleepingNote가 있으면 잠든 분이라 메뉴 아래에 안내를 붙여요. */
+  openPerson(person: { id: string; nickname: string; hug: HugMenuState; sleepingNote?: string | null }): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
   /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
@@ -314,7 +315,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   };
 
   /** 다른 동물 메뉴예요. 닉네임은 textContent로만 넣어요. */
-  const openPerson = (person: { id: string; nickname: string; hug: HugMenuState }): void => {
+  const openPerson = (person: { id: string; nickname: string; hug: HugMenuState; sleepingNote?: string | null }): void => {
     const name = `person-${person.id}`;
     const row = document.createElement("div");
     row.className = "action-choices";
@@ -326,7 +327,9 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     // 할 수 없을 때도 버튼은 보여 주고, 왜 안 되는지 바로 아래에 적어요.
     hugButton.disabled = !person.hug.enabled;
     row.append(hugButton);
-    const hugNote = person.hug.enabled ? null : createText("p", person.hug.reason);
+    // 잠든 분이면 안아 주기가 안 되는 까닭 대신, 평안과 선물은 살며시 둘 수 있다고 알려요.
+    const noteText = person.sleepingNote ?? (person.hug.enabled ? null : person.hug.reason);
+    const hugNote = noteText ? createText("p", noteText) : null;
     if (hugNote) hugNote.className = "action-note";
     openSheet(name, `${person.nickname}님`, hugNote ? [row, hugNote] : [row]);
   };
