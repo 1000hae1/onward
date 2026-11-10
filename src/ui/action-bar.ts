@@ -1,6 +1,5 @@
 import { BLESSINGS, blessingText, GIFTS } from "../../shared/gestures";
 import { giftAllowedNow } from "../../shared/ward-rules";
-import { REPORT_REASON_TEXT } from "../../shared/safety-rules";
 import { MORNING_PHRASE } from "../../shared/morning";
 import { DISCHARGE_CONFIRM_TEXT } from "../../shared/discharge-rules";
 import { bedHeadSpot, BEDS, roomAt } from "../../shared/ward-layout";
@@ -29,8 +28,6 @@ export interface ActionSink {
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
   /** 주인만 보는 "내 사과나무"(방명록)를 열어요. */
   openGuestbook(): void;
-  /** 다른 동물을 신고해요. 사유는 번호예요. 답은 화면 안내로 와요. */
-  report(id: string, reason: number): void;
   /** 다른 동물에게 안아 주기를 요청해요. 서버가 거리와 횟수를 살펴요. */
   hug(id: string): void;
   /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
@@ -279,20 +276,6 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     row.append(hugButton);
     const hugNote = person.hug.enabled ? null : createText("p", person.hug.reason);
     if (hugNote) hugNote.className = "action-note";
-    row.append(
-      createButton("신고하기", () => {
-        if (!sink.online()) {
-          showToast("병동 서버에 닿을 때 신고할 수 있어요.");
-          return;
-        }
-        openSheet(name, "어떤 점이 불편했나요?", [
-          choiceList(REPORT_REASON_TEXT, (reason) => {
-            sink.report(person.id, reason);
-            closeSheet();
-          }),
-        ]);
-      }),
-    );
     openSheet(name, `${person.nickname}님`, hugNote ? [row, hugNote] : [row]);
   };
 

@@ -4,19 +4,16 @@ import { test } from "vitest";
 import { clientMessageSchema, parseMessage, PROTOCOL_VERSION, adminBlockSchema } from "../shared/protocol.ts";
 import {
   DAY_MS,
-  decideReport,
   deleteExpired,
   earlierAlarm,
   earliestExpiry,
   enforceBannedNickname,
-  HIDE_AFTER_REPORTERS,
   KEEP,
   MESSAGES_PER_SECOND,
   newRateState,
   nextRetentionAlarm,
   publicNickname,
   rateStep,
-  REPORTS_PER_DAY,
   underHourlyLimit,
 } from "../shared/safety-rules.ts";
 import type { RateState, RateVerdict, RetentionRule, SqlLike } from "../shared/safety-rules.ts";
@@ -77,45 +74,6 @@ test("한 시간 한도는 지난 한 시간만 세요", () => {
   assert.equal(underHourlyLimit([...recent, now - 3_600_000], now, 20), true);
 });
 
-/* ───────────── 신고 ───────────── */
-
-const facts = (over: Partial<Parameters<typeof decideReport>[0]> = {}) => ({
-  reporter: "r1",
-  target: "t1",
-  reporterToday: 0,
-  openReporters: [] as string[],
-  alreadyHidden: false,
-  ...over,
-});
-
-test("서로 다른 세 사람이 신고하면 그때 닉네임을 가려요", () => {
-  assert.equal(HIDE_AFTER_REPORTERS, 3);
-  assert.deepEqual(decideReport(facts()), { result: "saved", hide: false });
-  assert.deepEqual(decideReport(facts({ reporter: "r2", openReporters: ["r1"] })), { result: "saved", hide: false });
-  assert.deepEqual(decideReport(facts({ reporter: "r3", openReporters: ["r1", "r2"] })), { result: "saved", hide: true });
-  // 이미 가려졌으면 다시 가리지 않아요.
-  assert.deepEqual(decideReport(facts({ reporter: "r4", openReporters: ["r1", "r2", "r3"], alreadyHidden: true })), {
-    result: "saved",
-    hide: false,
-  });
-});
-
-test("같은 사람이 여러 번 신고해도 한 사람으로 세요", () => {
-  assert.deepEqual(decideReport(facts({ reporter: "r1", openReporters: ["r1", "r2"] })), { result: "already", hide: false });
-});
-
-test("신고는 한 사람당 하루 5번까지예요", () => {
-  assert.equal(REPORTS_PER_DAY, 5);
-  assert.equal(decideReport(facts({ reporterToday: 4 })).result, "saved");
-  assert.equal(decideReport(facts({ reporterToday: 5 })).result, "limit");
-  // 한도를 넘은 신고는 가림에도 세지 않아요.
-  assert.deepEqual(decideReport(facts({ reporterToday: 5, openReporters: ["a", "b"] })), { result: "limit", hide: false });
-});
-
-test("나 자신은 신고할 수 없어요", () => {
-  assert.equal(decideReport(facts({ reporter: "t1" })).result, "no-target");
-});
-
 const record = (over: Partial<GuestRecord> = {}): GuestRecord => ({
   id: "abcd1234",
   guestId: "secret-guest",
@@ -150,18 +108,6 @@ test("운영자가 되돌린 닉네임으로 다시 바꾸면 자동 닉네임�
   assert.equal(same.nickname, "졸린 곰");
   assert.deepEqual(enforceBannedNickname("다른이름", "불편한이름", "bear", 0), { nickname: "다른이름", reset: false });
   assert.deepEqual(enforceBannedNickname("불편한이름", null, "bear", 0), { nickname: "불편한이름", reset: false });
-});
-
-test("신고 메시지는 번호만 받아요", () => {
-  const ok = JSON.stringify({ v: PROTOCOL_VERSION, type: "report", targetId: "abcd1234", reason: 2 });
-  assert.ok(parseMessage(clientMessageSchema, ok));
-  for (const bad of [
-    { v: PROTOCOL_VERSION, type: "report", targetId: "abcd1234", reason: 3 },
-    { v: PROTOCOL_VERSION, type: "report", targetId: "abcd1234", reason: "닉네임" },
-    { v: PROTOCOL_VERSION, type: "report", targetId: "x", reason: 0 },
-  ]) {
-    assert.equal(parseMessage(clientMessageSchema, JSON.stringify(bad)), null);
-  }
 });
 
 test("hello에 guestId를 보내도 서버는 읽지 않아요", () => {

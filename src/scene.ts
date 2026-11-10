@@ -133,14 +133,6 @@ const DENIED_TEXT: Record<DeniedReason, string> = {
   "too-fast": "조금 천천히 눌러 주세요.",
 };
 
-/** 신고에 대한 서버의 답이에요. */
-const REPORT_TEXT: Record<"saved" | "limit" | "already" | "no-target", string> = {
-  saved: "신고를 받았어요. 운영자가 살펴볼게요.",
-  limit: "오늘은 신고를 더 할 수 없어요. 내일 다시 해 주세요.",
-  already: "이미 신고하신 분이에요. 운영자가 살펴볼게요.",
-  "no-target": "지금은 신고할 수 없어요.",
-};
-
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
 function isPhoneLike(): boolean {
   return (
@@ -688,9 +680,6 @@ export function startScene(canvas: HTMLCanvasElement): void {
       settings?.setProfile(next);
       toast(`닉네임이 '${nickname}'(으)로 바뀌었어요.`);
     },
-    onReportResult(result) {
-      toast(REPORT_TEXT[result]);
-    },
     onHugOffer(requestId, fromId) {
       const from = remotes.guests().find((guest) => guest.id === fromId);
       if (!from || dischargeUntil !== null) return;
@@ -895,7 +884,6 @@ export function startScene(canvas: HTMLCanvasElement): void {
             if (visitingNow) return;
             openOwnerGuestbook();
           },
-          report: (targetId, reason) => client.send({ type: "report", targetId, reason }),
           hug: (targetId) => {
             hugSentAt.set(targetId, Date.now());
             client.send({ type: "hug-request", targetId });

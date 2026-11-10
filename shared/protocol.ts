@@ -98,8 +98,6 @@ export const clientMessageSchema = z.union([
   z.object({ v, type: z.literal("guestbook"), action: z.enum(["create", "off", "info"]) }),
   /** 내 나무의 사과 하나를 숨겨요. 서버에서 바로 지워요. */
   z.object({ v, type: z.literal("hide-apple"), appleId }),
-  /** 다른 동물을 신고해요. 사유는 번호로만 보내요(0 닉네임 · 1 반복 행동 · 2 기타). */
-  z.object({ v, type: z.literal("report"), targetId: publicId, reason: z.number().int().min(0).max(2) }),
   /** 수면 모드를 켜거나 껐어요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
   z.object({ v, type: z.literal("sleep"), sleeping: z.boolean() }),
   /** 다른 동물을 안아 주고 싶어요. 서버가 거리·횟수·설정을 살펴요. */
@@ -284,7 +282,6 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({ v, type: z.literal("entry-failed") }),
   /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
   z.object({ v, type: z.literal("nickname-reset"), nickname: z.string().max(64) }),
-  z.object({ v, type: z.literal("report-result"), result: z.enum(["saved", "limit", "already", "no-target"]) }),
   /** 누군가 나를 안아 주려고 해요. 받는 사람에게만 보내요. */
   z.object({ v, type: z.literal("hug-offer"), requestId, fromId: publicId }),
   /** 상대가 [다음에요]를 눌렀어요. 보낸 사람에게만 보내요. 답이 없으면 아무것도 보내지 않아요. */
@@ -299,7 +296,7 @@ export const serverMessageSchema = z.discriminatedUnion("type", [
   z.object({
     v,
     type: z.literal("action-denied"),
-    action: z.enum(["bless", "bow", "gift", "lamp", "guestbook", "report", "hug", "discharge"]),
+    action: z.enum(["bless", "bow", "gift", "lamp", "guestbook", "hug", "discharge"]),
     reason: deniedReasonSchema,
     /** 선물이면 어떤 선물이었는지예요. 오잎클로버 안내를 따로 보여 주려고요. */
     item: item.optional(),

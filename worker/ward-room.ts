@@ -363,22 +363,6 @@ export class WardRoom extends DurableObject<Env> {
     };
   }
 
-  /** 서로 다른 세 사람이 신고한 사람의 닉네임을 가려요. 이미 가려져 있으면 아무것도 하지 않아요. */
-  private hide(key: string): void {
-    for (const { ws, record } of this.joined()) {
-      if (record.key !== key || record.hidden) continue;
-      const next = { ...record, hidden: true };
-      this.save(ws, ws.deserializeAttachment() as Attachment, next);
-      this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
-    }
-    for (const guest of this.awayGuests()) {
-      if (guest.key !== key || guest.record.hidden) continue;
-      const next = { ...guest.record, hidden: true };
-      this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), key);
-      this.broadcast({ kind: "update", guest: toPublic(next) });
-    }
-  }
-
   /** 지금 연결된 사람들이에요. 연결에 붙은 정보로 매번 다시 만들어요. */
   private joined(except?: WebSocket): { ws: WebSocket; record: GuestRecord }[] {
     return this.ctx.getWebSockets().flatMap((ws) => {
@@ -999,35 +983,6 @@ export class WardRoom extends DurableObject<Env> {
         const key = record.key ?? (await hashGuest(record.guestId));
         save({ ...record, key, lastAction: { ...record.lastAction, link: nowMs } });
         this.sendGuestbook(ws, null, await this.directory().hideApple(key, message.appleId));
-        return;
-      }
-      case "report": {
-        if (!actionReady(record, "report", nowMs)) return deny("report", "too-fast");
-        save({ ...record, lastAction: { ...record.lastAction, report: nowMs } });
-        const target = this.everyone().find((guest) => guest.id === message.targetId) ?? null;
-        const reporterHash = record.key ?? (await hashGuest(record.guestId));
-        if (!target?.key || target.key === reporterHash) {
-          this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: "no-target" });
-          return;
-        }
-        const place = this.place();
-        const outcome = await this.directory().report(
-          {
-            room: `ward-${place.ward}-${place.instance}`,
-            reason: message.reason,
-            reporterId: record.id,
-            reporterHash,
-            targetId: target.id,
-            targetHash: target.key,
-            targetIp: target.ip ?? null,
-            // 이미 가려졌어도 운영자가 볼 수 있게 원래 닉네임을 적어요.
-            targetNickname: target.nickname,
-            targetAnimal: target.animal,
-          },
-          nowMs,
-        );
-        this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: outcome.result });
-        if (outcome.hide) this.hide(target.key);
         return;
       }
       case "sleep": {

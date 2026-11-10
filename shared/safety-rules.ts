@@ -59,40 +59,6 @@ export function underHourlyLimit(times: readonly number[], nowMs: number, limit:
   return times.filter((at) => nowMs - at < LIMIT_WINDOW_MS).length < limit;
 }
 
-/* ───────────── 신고 ───────────── */
-
-/** 신고 사유는 고르기만 해요. 번호로 주고받아요. */
-export const REPORT_REASONS = ["nickname", "repeat", "other"] as const;
-export type ReportReason = (typeof REPORT_REASONS)[number];
-export const REPORT_REASON_TEXT: readonly string[] = ["닉네임이 불편해요", "같은 행동을 반복해요", "기타"];
-/** 한 사람이 하루(한국 날짜)에 할 수 있는 신고 수예요. */
-export const REPORTS_PER_DAY = 5;
-/** 서로 다른 사람이 이만큼 신고하면 닉네임을 가리고 운영자 확인을 기다려요. */
-export const HIDE_AFTER_REPORTERS = 3;
-
-export type ReportResult = "saved" | "limit" | "already" | "no-target";
-
-export interface ReportFacts {
-  reporter: string;
-  target: string;
-  /** 오늘 이 사람이 한 신고 수예요. */
-  reporterToday: number;
-  /** 아직 처리되지 않은 신고 가운데 이 대상을 신고한 사람들(해시)이에요. */
-  openReporters: readonly string[];
-  /** 이미 가려져 있는지예요. */
-  alreadyHidden: boolean;
-}
-
-/** 신고를 받을지, 받으면 이제 닉네임을 가릴지 정해요. */
-export function decideReport(facts: ReportFacts): { result: ReportResult; hide: boolean } {
-  if (facts.reporter === facts.target) return { result: "no-target", hide: false };
-  // 같은 사람이 같은 대상을 여러 번 신고해도 한 번으로 세요. 오늘 횟수도 쓰지 않아요.
-  if (facts.openReporters.includes(facts.reporter)) return { result: "already", hide: false };
-  if (facts.reporterToday >= REPORTS_PER_DAY) return { result: "limit", hide: false };
-  const reporters = new Set([...facts.openReporters, facts.reporter]).size;
-  return { result: "saved", hide: !facts.alreadyHidden && reporters >= HIDE_AFTER_REPORTERS };
-}
-
 const ANIMAL_LABELS: Record<string, string> = {
   rabbit: "토끼",
   bear: "곰",

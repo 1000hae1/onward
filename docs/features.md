@@ -102,7 +102,6 @@
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
 | 닉네임 검사 | 2~10자, 금칙어, 숫자 4개 이상, URL·이메일이면 이유를 알려 주고 들어가지 못해요. 화면과 서버가 같은 규칙을 써요. | 완성 | 닉네임에 `1234`나 `a.com` 넣어 보기 | `shared/nickname.ts`, `shared/bannedWords.ts` |
-| 신고하기 | 다른 동물을 눌러 사유(닉네임 / 반복 행동 / 기타)를 고르면 "운영자가 살펴볼게요"라고 알려 줘요. 하루 5번까지예요. | 완성 | 다른 동물 누르기 → [신고하기] → 사유 | `src/ui/action-bar.ts`(openPerson), `shared/safety-rules.ts`(decideReport), `worker/directory.ts`(report) |
 | 닉네임 가리기 | 서로 다른 세 분이 신고하면 다른 사람 화면에서 그분 닉네임이 "조용한 토끼"처럼 보여요. | 완성 | 세 계정으로 같은 분 신고 | `shared/safety-rules.ts`(publicNickname), `worker/ward-room.ts`(hide) |
 | 요청 제한 | 너무 빨리 누르면 "조금 천천히 눌러 주세요"가 떠요. 계속 몰아 보내면 연결이 닫혀요. | 완성 | 같은 버튼을 빠르게 여러 번 | `shared/safety-rules.ts`(rateStep), `shared/ward-rules.ts`(actionReady) |
 | 새 버전 안내 | 열 때 `/api/health`의 버전을 먼저 견주고, 다르면 "새 버전이 나왔어요. 새로고침해 주세요"와 [새로고침]이 떠요. `index.html`은 매번 새로 확인하고 빌드 파일은 오래 보관해요(`public/_headers`). | 완성 | 배포 직후 열린 창 | `shared/ward-rules.ts`(readVersion), `src/net/ward-client.ts`(outdated), `src/scene.ts`(showOutdated), `public/_headers` |
@@ -177,7 +176,6 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `inbox-ack` | 내가 없는 동안 도착한 평안을 받았어요(그 시각까지 서버가 지워요) |
 | `guestbook` | 내 방명록 `info` / `create`(새 링크) / `off`(링크 끄기). 답은 나에게만 와요 |
 | `hide-apple` | 내 나무의 사과 하나 숨기기(바로 지움) |
-| `report` | 신고(사유 번호 0~2) |
 | `sleep` | 수면 모드 켜기/끄기 |
 | `hug-request` | 안아 주기 요청 |
 | `hug-answer` | 받은 요청에 답하기 |
@@ -203,7 +201,6 @@ CLAUDE.md, README, 코드 주석을 함께 보고 모았어요. 코드에 `TODO`
 | `visitor-arrived` | 내 침대로 문병객이 왔어요(주인에게만) |
 | `guest-token` | 서버가 새로 서명한 게스트 토큰(이 브라우저에만) |
 | `entry-denied` | 들어올 수 없어요(`blocked` / `limited`) |
-| `report-result` | 신고 결과 |
 | `hug-offer` / `hug-declined` | 안아 주기 요청이 왔어요 / 상대가 다음에 하재요 |
 | `discharge-started` / `farewell-count` | 퇴원 시작(배웅 끝 시각) / 지금까지 배웅 수(본인에게만) |
 | `action-denied` | 서버가 받지 않은 동작과 이유 번호 |

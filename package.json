@@ -13,7 +13,8 @@
     "cf-typegen": "wrangler types",
     "e2e": "playwright test",
     "build:preview": "npm run typecheck && CLOUDFLARE_ENV=preview vite build --mode preview",
-    "deploy:preview": "npm run test && npm run build:preview && wrangler deploy"
+    "deploy:preview": "npm run test && npm run build:preview && wrangler deploy",
+    "icons": "node scripts/make-icons.mjs"
   },
   "dependencies": {
     "three": "^0.187.0",
@@ -22,7 +23,9 @@
   "devDependencies": {
     "@cloudflare/vite-plugin": "^1.67.0",
     "@playwright/test": "^1.65.0",
+    "@resvg/resvg-js": "^2.6.2",
     "@types/three": "^0.187.0",
+    "png-to-ico": "^3.0.2",
     "typescript": "^7.0.2",
     "vite": "^8.3.6",
     "vitest": "^5.1.0",

@@ -36,7 +36,7 @@ export interface GuestRecord {
   /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
-  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "report" | "hug" | "discharge", number>>;
+  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "hug" | "discharge", number>>;
   /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
   key?: string;
   /** 방명록 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */

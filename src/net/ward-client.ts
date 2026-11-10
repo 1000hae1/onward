@@ -84,7 +84,6 @@ export interface WardClientHandlers {
   onVisitorArrived(nickname: string): void;
   /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
   onNicknameReset(nickname: string): void;
-  onReportResult(result: Extract<ServerMessage, { type: "report-result" }>["result"]): void;
   /** 누군가 나를 안아 주려고 해요. fromId는 공개 번호예요. */
   onHugOffer(requestId: string, fromId: string): void;
   /** 내가 보낸 안아 주기에 상대가 [다음에요]를 눌렀어요. */
@@ -266,9 +265,6 @@ export function createWardClient(
         return;
       case "nickname-reset":
         handlers.onNicknameReset(message.nickname);
-        return;
-      case "report-result":
-        handlers.onReportResult(message.result);
         return;
       case "hug-offer":
         handlers.onHugOffer(message.requestId, message.fromId);

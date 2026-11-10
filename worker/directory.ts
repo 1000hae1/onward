@@ -22,16 +22,14 @@ import { APPLE_KEEP_MS, checkApple, checkApplePost, HOUR_MS as APPLE_HOUR_MS, ow
 import type { AppleCard, AppleDraft, AppleProblem, StoredApple } from "../shared/guestbook-rules.ts";
 import {
   ADMIN_FAILS_PER_HOUR,
-  decideReport,
   deleteExpired,
   earliestExpiry,
   KEEP,
   NEW_GUESTS_PER_HOUR,
   nextRetentionAlarm,
-  REPORT_REASONS,
   underHourlyLimit,
 } from "../shared/safety-rules.ts";
-import type { Moderation, ReportResult, RetentionRule } from "../shared/safety-rules.ts";
+import type { Moderation, RetentionRule } from "../shared/safety-rules.ts";
 import { koreanDay } from "../shared/ward-rules.ts";
 import { countVisitDay, VISIT_DAYS_KEEP_MS } from "../shared/return-rules.ts";
 import { presenceChange, statsTimestamp, tally } from "../shared/presence-rules.ts";
@@ -41,19 +39,6 @@ import type { MetricsRow, MetricsView } from "../shared/metrics-rules.ts";
 
 /** 날짜별 지표에 더할 수 있는 칸이에요. 표 이름과 열 이름을 SQL에 넣으므로 이 목록 밖의 값은 받지 않아요. */
 type MetricColumn = "entries" | "unique_guests" | "returning_guests" | "stay_ms" | "stays" | "blessings" | "visit_entries";
-
-/** 병실 서버가 신고를 넘길 때 담는 것이에요. 해시와 공개 번호만 있어요. */
-export interface ReportInput {
-  room: string;
-  reason: number;
-  reporterId: string;
-  reporterHash: string;
-  targetId: string;
-  targetHash: string;
-  targetIp: string | null;
-  targetNickname: string;
-  targetAnimal: string;
-}
 
 /** 들어오려는 사람에 대해 directory가 아는 것이에요. */
 export interface GuestStanding {
@@ -379,55 +364,6 @@ export class Directory extends DurableObject<Env> {
   async adminFailed(ipHash: string, nowMs: number): Promise<void> {
     this.ctx.storage.sql.exec("INSERT INTO admin_fail (ip_hash, at) VALUES (?, ?)", ipHash, nowMs);
     await this.keepTidy();
-  }
-
-  /* ───────────── 신고 ───────────── */
-
-  /** 신고를 받아요. 서로 다른 세 사람이 신고하면 hide가 true이고, 병실 서버가 닉네임을 가려요. */
-  async report(input: ReportInput, nowMs: number): Promise<{ result: ReportResult; hide: boolean }> {
-    const sql = this.ctx.storage.sql;
-    const day = koreanDay(new Date(nowMs));
-    const reason = REPORT_REASONS[input.reason];
-    if (!reason || !ROOM_PATTERN.test(input.room)) return { result: "no-target", hide: false };
-    const reporterToday = sql
-      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM report WHERE reporter_hash = ? AND day = ?", input.reporterHash, day)
-      .one().n;
-    const openReporters = sql
-      .exec<{ reporter_hash: string }>(
-        "SELECT DISTINCT reporter_hash FROM report WHERE target_hash = ? AND handled = 0",
-        input.targetHash,
-      )
-      .toArray()
-      .map((row) => row.reporter_hash);
-    const alreadyHidden = sql.exec("SELECT 1 FROM hidden_guest WHERE guest_hash = ?", input.targetHash).toArray().length > 0;
-    const decision = decideReport({
-      reporter: input.reporterHash,
-      target: input.targetHash,
-      reporterToday,
-      openReporters,
-      alreadyHidden,
-    });
-    if (decision.result !== "saved") return decision;
-    sql.exec(
-      `INSERT INTO report (at, day, room, reason, nickname, animal, reporter_id, reporter_hash, target_id, target_hash, target_ip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      nowMs,
-      day,
-      input.room,
-      reason,
-      input.targetNickname,
-      input.targetAnimal,
-      input.reporterId,
-      input.reporterHash,
-      input.targetId,
-      input.targetHash,
-      input.targetIp,
-    );
-    if (decision.hide) {
-      sql.exec("INSERT OR IGNORE INTO hidden_guest (guest_hash, at) VALUES (?, ?)", input.targetHash, nowMs);
-    }
-    await this.keepTidy();
-    return { result: alreadyHidden ? "saved" : decision.result, hide: alreadyHidden || decision.hide };
   }
 
   /* ───────────── 운영자 ───────────── */
