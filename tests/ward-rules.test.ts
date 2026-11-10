@@ -145,6 +145,25 @@ test("다른 침대를 받으면 예전 침대는 비고, 문병객은 눕지 �
   assert.equal(claimBed([visitor], visitor, 7, 1000).granted, false);
 });
 
+test("침대를 옮기는 사이 다른 분이 먼저 누우면 원래 침대를 그대로 지켜요", () => {
+  const a = { ...record("aaaaaaaa"), bed: 1, lyingSince: 500 };
+  const b = record("bbbbbbbb");
+  // b가 먼저 2번 침대를 받아요.
+  const taken = claimBed([a, b], b, 2, 1000);
+  assert.equal(taken.granted, true);
+  const guests = [a, taken.record];
+  const lost = claimBed(guests, a, 2, 1001);
+  assert.equal(lost.granted, false);
+  assert.equal(lost.record.bed, 1);
+  assert.equal(lost.record.lyingSince, 500);
+  // 빈 침대로 옮기면 원래 침대는 비고, 바로 다른 분이 받을 수 있어요.
+  const moved = claimBed(guests, a, 3, 1002);
+  assert.equal(moved.granted, true);
+  assert.equal(moved.record.bed, 3);
+  const c = record("cccccccc");
+  assert.equal(claimBed([moved.record, taken.record, c], c, 1, 1003).granted, true);
+});
+
 test("문병객으로 바꾸면 침대를 비워요", () => {
   const lying = record("aaaaaaaa", { bed: 4 });
   const result = updateProfile(lying, hello({ outfit: "visitor" }));

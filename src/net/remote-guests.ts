@@ -282,13 +282,17 @@ export function createRemoteGuests(
           return;
         }
         case "walk":
+          // 서버는 걸어가면 침대를 비워요. 이름표도 이 값을 따라요.
+          remote.guest = { ...remote.guest, bed: null };
           remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
         case "lie":
+          remote.guest = { ...remote.guest, bed: event.bedId };
           applyStep(remote, tapBed(remote.flow, event.bedId, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           return;
         case "get-up":
+          remote.guest = { ...remote.guest, bed: null };
           if (remote.flow.kind === "heading") {
             remote.flow = FREE;
             remote.path = [];

@@ -31,6 +31,8 @@ import { createOfferings } from "./ward/offerings";
 import { createPlayerControls } from "./ward/controls";
 import { createLighting } from "./ward/lighting";
 import { buildFacilities } from "./ward/facilities";
+import { bedPlates, createBedPlatesView } from "./ward/bed-plates";
+import { createNurseGreeter } from "./ward/nurse-greeting";
 import { buildHospital } from "./ward/hospital";
 import { buildLandscape } from "./ward/landscape";
 import { buildWard } from "./ward/room";
@@ -91,6 +93,8 @@ const MAX_FRAME_SECONDS = 0.05;
 const SLEEP_FRAME_SECONDS = 0.25;
 const SLEEP_MAX_FRAME_SECONDS = 0.3;
 const NIGHTS_KEY = "onward.nights";
+/** 침대를 옮기려는 사이 다른 분이 먼저 누웠을 때예요. */
+const BED_MOVE_TAKEN_TEXT = "방금 다른 분이 누우셨어요.";
 const PORTRAIT_FOV = 68;
 const LANDSCAPE_FOV = 54;
 /** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
@@ -745,8 +749,30 @@ export function startScene(canvas: HTMLCanvasElement): void {
     isBedTaken: (bed) => client.online && remotes.isBedTaken(bed),
     walkTo: (x, z) => client.send({ type: "walk-to", x, z }),
     getUp: () => client.send({ type: "get-up" }),
-    bedRefused: () => toast("다른 분이 먼저 자리를 잡았어요."),
+    bedRefused: (moving) => toast(moving ? BED_MOVE_TAKEN_TEXT : "다른 분이 먼저 자리를 잡았어요."),
   });
+  player.setMoveConfirm((_bed, proceed) => {
+    if (actionBar) actionBar.confirmMove(proceed);
+    else proceed();
+  });
+
+  // 가운데 병아리 간호사가 현관으로 들어서는 분께 고개 숙여 인사해요. 내 화면에서만 보여요.
+  const greeter = facilities.nurses[Math.floor(facilities.nurses.length / 2)];
+  const nurseLabelRoot = document.createElement("div");
+  remoteLabels?.append(nurseLabelRoot);
+  const nurseLabel = createHeadLabels(nurseLabelRoot);
+  const nursePoint = new Vector3();
+  const nextGreeting = createNurseGreeter({ getItem: readStorage, setItem: writeStorage });
+  player.setLobbyListener(() => {
+    if (!entered || !greeter) return;
+    const text = nextGreeting();
+    greeter.bow(reduceMotion.matches);
+    nurseLabel.showBubble(text);
+    announcer?.say(`간호사가 "${text}" 하고 인사했어요.`);
+  });
+
+  const platesRoot = element("bed-plates");
+  const plates = platesRoot ? createBedPlatesView(platesRoot) : null;
 
   const applyProfile = (next: Profile): void => {
     current = next;
@@ -1102,6 +1128,13 @@ export function startScene(canvas: HTMLCanvasElement): void {
     renderer.render(scene, camera);
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
+    for (const nurse of facilities.nurses) nurse.update(dt);
+    nurseLabel.update(dt, camera, greeter ? greeter.headWorld(nursePoint) : null);
+    if (plates) {
+      const mine = entered && !visitingNow ? { nickname: current.nickname, bed: player.claimedBed } : null;
+      plates.sync(bedPlates(remotes.guests(), mine));
+      plates.update(camera, { x: player.walkX, z: player.walkZ });
+    }
   };
 
   // 탭이 보이지 않으면 그리기를 멈춰요. 돌아오면 멈춘 시간을 건너뛰고 이어 그려요.

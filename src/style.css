@@ -316,10 +316,35 @@ a:focus-visible,
   overflow-y: auto;
 }
 
-#remote-labels {
+#remote-labels,
+#bed-plates {
   position: fixed;
   inset: 0;
   pointer-events: none;
+}
+
+/* 침대 발치 이름표예요. 머리 위 이름보다 작고 차분하게, 하얀 명찰처럼 보여요. */
+.bed-plate {
+  position: fixed;
+  top: 0;
+  left: 0;
+  margin: 0;
+  max-width: 9rem;
+  padding: 0.05rem 0.5rem;
+  overflow: hidden;
+  border: 1px solid rgba(95, 158, 152, 0.55);
+  border-radius: 0.35rem;
+  background: rgba(251, 250, 244, 0.92);
+  color: #2f4f4c;
+  font-size: 0.75rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  will-change: transform;
+}
+
+/* 간호사처럼 이름 없이 말풍선만 띄우는 머리 표시예요. */
+.head-name:empty {
+  display: none;
 }
 
 .head-label {

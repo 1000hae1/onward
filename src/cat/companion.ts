@@ -3,6 +3,8 @@ import { BEDS, bedCurlSpot } from "../../shared/ward-layout";
 import { turnToward } from "../ward/camera-view";
 import { addCrumb, followTrail } from "../ward/companion-trail";
 import type { TrailPoint } from "../ward/companion-trail";
+import { chooseSideSpot, clearLine, nextHeading, stepToward, wardWalkable } from "../ward/companion-side";
+import type { Side } from "../ward/companion-side";
 import { blinkAmount, CAT_NOTICE_SECONDS, composeCatPose, createCatPose } from "./cat-pose";
 import type { CatPose } from "./cat-pose";
 import { createCatView } from "./cat-view";
@@ -13,8 +15,14 @@ export const STRIDE = 0.34;
 const BLEND_RATE = 7;
 export const TURN_RATE = 7;
 const COMPANION_SPEED = 2.4;
-/** 주인 뒤로 이만큼 떨어져서 따라와요. */
-const COMPANION_LAG = 1.1;
+/** 옆자리를 따라 나란히 걷는 빠르기예요. 주인(1.8)보다 조금 빨라서 뒤처지지 않아요. */
+const SIDE_SPEED = 2.0;
+/** 옆자리에서 멀어졌으면 이만큼 서둘러 따라붙어요. */
+const SIDE_CATCH_UP_SPEED = 2.9;
+/** 옆자리가 이보다 멀면 곧게 가지 않고 발자국을 따라가요. */
+const SIDE_MAX_REACH = 2.5;
+/** 문처럼 좁아서 옆에 설 수 없을 때는 발자국을 따라 이만큼 뒤에 있어요. */
+const COMPANION_LAG = 0.6;
 const COMPANION_SIT_AFTER = 0.8;
 /** 켜는 순간 주인과 겹치지 않게 곁에서 나타나요. */
 const COMPANION_SPAWN_X = 0.45;
@@ -97,7 +105,10 @@ export interface Companion {
   dispose(): void;
 }
 
-/** 주인이 지나온 길을 몇 걸음 뒤에서 따라오고, 주인이 누우면 침대 옆에 웅크리는 고양이예요. */
+/**
+ * 주인 옆에서 나란히 걷는 고양이예요. 주인이 멈추면 옆에 앉고, 누우면 침대 옆에 웅크려요.
+ * 문처럼 좁아서 옆에 설 수 없으면 잠깐 주인이 지나온 길을 따라와요.
+ */
 export function createCompanion(parent: Object3D): Companion {
   const view = createCatView("companion");
   view.root.visible = false;
@@ -108,6 +119,12 @@ export function createCompanion(parent: Object3D): Companion {
   let trail: readonly TrailPoint[] = [];
   let curlBed: number | null = null;
   let still = 0;
+  /** 주인이 바라보는 방향과 고양이가 서는 쪽이에요. */
+  let heading = 0;
+  let side: Side = 1;
+  let lastOwner: TrailPoint | null = null;
+  /** 지금 옆자리에 나란히 있는지예요. 그러면 멈췄을 때 주인과 같은 쪽을 봐요. */
+  let besideOwner = false;
 
   return {
     get enabled() {
@@ -130,6 +147,7 @@ export function createCompanion(parent: Object3D): Companion {
         trail = [];
         curlBed = null;
         still = COMPANION_SIT_AFTER;
+        lastOwner = null;
       }
     },
     setVisible(visible) {
@@ -139,6 +157,10 @@ export function createCompanion(parent: Object3D): Companion {
       parent.remove(view.root);
     },
     update(dt, owner, stillMotion, frozen) {
+      const here = { x: owner.walkX, z: owner.walkZ };
+      heading = lastOwner ? nextHeading(lastOwner, here, heading) : heading;
+      lastOwner = here;
+
       const lying = owner.lyingBed;
       if (lying !== null && curlBed !== lying) {
         // 주인이 누우면 침대 옆 바닥으로 가서 웅크려요.
@@ -146,22 +168,50 @@ export function createCompanion(parent: Object3D): Companion {
         trail = [...trail, bedCurlSpot(BEDS[lying])];
       } else if (lying === null && curlBed !== null) {
         curlBed = null;
+        trail = [];
       }
-      if (curlBed === null) trail = addCrumb(trail, { x: owner.walkX, z: owner.walkZ });
 
       let walking = false;
-      if (!frozen) {
-        const step = followTrail(moves, trail, COMPANION_SPEED * dt, curlBed === null ? COMPANION_LAG : 0);
-        trail = step.trail;
-        if (step.walked > 0) {
-          const dx = step.position.x - moves.x;
-          const dz = step.position.z - moves.z;
-          moves.x = step.position.x;
-          moves.z = step.position.z;
-          moves.walkPhase += (step.walked / STRIDE) * Math.PI * 2;
-          moves.yaw = turnToward(moves.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * TURN_RATE));
-          walking = true;
+      const walkTo = (x: number, z: number, walked: number): void => {
+        const dx = x - moves.x;
+        const dz = z - moves.z;
+        moves.x = x;
+        moves.z = z;
+        moves.walkPhase += (walked / STRIDE) * Math.PI * 2;
+        moves.yaw = turnToward(moves.yaw, Math.atan2(dx, dz), 1 - Math.exp(-dt * TURN_RATE));
+        walking = true;
+      };
+
+      besideOwner = false;
+      if (curlBed === null) {
+        trail = addCrumb(trail, here);
+        const choice = chooseSideSpot(here, heading, side, wardWalkable);
+        const reachable =
+          choice !== null &&
+          Math.hypot(choice.spot.x - moves.x, choice.spot.z - moves.z) < SIDE_MAX_REACH &&
+          clearLine(moves, choice.spot, wardWalkable);
+        if (choice && reachable) {
+          // 옆자리가 열려 있으면 곧게 가서 나란히 걸어요. 지나온 발자국은 더 쓰지 않아요.
+          side = choice.side;
+          besideOwner = true;
+          trail = [];
+          if (!frozen) {
+            const step = stepToward(moves, choice.spot, dt, SIDE_SPEED, SIDE_CATCH_UP_SPEED);
+            if (step.walked > 0) walkTo(step.position.x, step.position.z, step.walked);
+          }
+        } else if (!frozen) {
+          const step = followTrail(moves, trail, COMPANION_SPEED * dt, COMPANION_LAG);
+          trail = step.trail;
+          if (step.walked > 0) walkTo(step.position.x, step.position.z, step.walked);
         }
+      } else if (!frozen) {
+        const step = followTrail(moves, trail, COMPANION_SPEED * dt, 0);
+        trail = step.trail;
+        if (step.walked > 0) walkTo(step.position.x, step.position.z, step.walked);
+      }
+      // 옆에 멈춰 앉으면 주인과 같은 쪽을 바라봐요.
+      if (!walking && besideOwner && !frozen) {
+        moves.yaw = turnToward(moves.yaw, heading, 1 - Math.exp(-dt * TURN_RATE * 0.5));
       }
       still = walking ? 0 : still + dt;
 

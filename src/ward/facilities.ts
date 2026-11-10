@@ -10,7 +10,7 @@ import {
   SphereGeometry,
   SRGBColorSpace,
 } from "three";
-import type { BufferGeometry, Matrix4, Object3D } from "three";
+import type { Object3D } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
 import {
   ENTRANCE,
@@ -25,7 +25,9 @@ import {
   NURSES,
   WALL_HEIGHT,
 } from "../../shared/ward-layout";
-import { addInstances, createRandom, repeatAt, transform } from "./parts";
+import { addInstances, createRandom, transform } from "./parts";
+import { createChickNurse } from "./chick-nurse";
+import type { ChickNurse } from "./chick-nurse";
 
 const lambert = (color: string): MeshLambertMaterial => new MeshLambertMaterial({ color });
 
@@ -61,7 +63,7 @@ function addSign(parent: Object3D, text: string, x: number, y: number, z: number
   parent.add(sign);
 }
 
-/** 로비 오른쪽의 간호사실이에요. 낮은 카운터 너머로 병아리 간호사들이 보여요. */
+/** 로비 오른쪽의 간호사실이에요. 낮은 카운터 너머로 병아리 간호사들이 보여요(chick-nurse.ts). */
 function buildNurseStation(parent: Object3D): MeshBasicMaterial {
   const station = NURSE_STATION;
   const centerX = NURSE_STATION_CENTER_X;
@@ -136,47 +138,6 @@ function buildNurseStation(parent: Object3D): MeshBasicMaterial {
     transform(centerX + 1.2, (signY + WALL_HEIGHT) / 2, signZ),
   ]);
   return lampMaterial;
-}
-
-/** 간호사 모자를 쓴 병아리들이에요. 카운터 너머로 머리와 어깨가 보여요. */
-function buildChickNurses(parent: Object3D): void {
-  const bases = NURSES.map((nurse) => transform(nurse.x, 0, nurse.z, nurse.rotationY));
-  const yellow = lambert("#ffd65c");
-  const add = (geometry: BufferGeometry, material: MeshLambertMaterial, locals: Matrix4[]): void => {
-    addInstances(parent, geometry, material, repeatAt(bases, locals));
-  };
-
-  const sphere = new SphereGeometry(1, 16, 12);
-  // 몸통과 머리
-  add(sphere, yellow, [
-    transform(0, 0.78, 0, 0, 0.36, 0.42, 0.34),
-    transform(0, 1.34, 0.02, 0, 0.3),
-  ]);
-  // 양쪽 날개
-  add(sphere, lambert("#f7c84a"), [
-    transform(-0.34, 0.86, 0, 0, 0.09, 0.24, 0.18),
-    transform(0.34, 0.86, 0, 0, 0.09, 0.24, 0.18),
-  ]);
-  // 간호복 앞치마
-  add(new RoundedBoxGeometry(0.42, 0.3, 0.06, 2, 0.025), lambert("#fbfdfd"), [
-    transform(0, 0.72, 0.31),
-  ]);
-  // 눈
-  add(new SphereGeometry(0.038, 8, 6), lambert("#2c2a28"), [
-    transform(-0.11, 1.4, 0.28),
-    transform(0.11, 1.4, 0.28),
-  ]);
-  // 볼
-  add(new SphereGeometry(0.05, 8, 6), lambert("#ffb09a"), [
-    transform(-0.2, 1.3, 0.22, 0, 1, 0.6, 0.5),
-    transform(0.2, 1.3, 0.22, 0, 1, 0.6, 0.5),
-  ]);
-  // 부리
-  add(new ConeGeometry(0.055, 0.1, 7), lambert("#f08a2c"), [
-    transform(0, 1.31, 0.33, 0, 1, 0.8, 1),
-  ]);
-  // 흰색 간호사 모자
-  add(new CylinderGeometry(0.16, 0.19, 0.13, 12), lambert("#fbfdfd"), [transform(0, 1.66, 0)]);
 }
 
 /** 현관을 들어서면 보이는 로비예요. 성탄 나무와 긴 의자, 화분이 있어요. */
@@ -269,12 +230,14 @@ function buildLobby(parent: Object3D): void {
 export interface FacilityHandles {
   /** 간호사실 천장 조명판이에요. */
   nurseLamp: MeshBasicMaterial;
+  /** 카운터 안쪽의 병아리 간호사들이에요. 가운데 간호사가 들어오는 분께 인사해요. */
+  nurses: ChickNurse[];
 }
 
 /** 간호사실과 로비예요. */
 export function buildFacilities(parent: Object3D): FacilityHandles {
   const nurseLamp = buildNurseStation(parent);
-  buildChickNurses(parent);
+  const nurses = NURSES.map((placement) => createChickNurse(parent, placement));
   buildLobby(parent);
-  return { nurseLamp };
+  return { nurseLamp, nurses };
 }

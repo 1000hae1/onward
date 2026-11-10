@@ -14,7 +14,8 @@
 | --- | --- | --- | --- | --- |
 | 모습 고르기 | 다섯 동물의 그림을 보고 고르면 뒤의 병동에서 바로 바뀌어요. 옷은 환자복과 평상복 가운데 골라요. | 완성 | 첫 화면에서 동물 그림 → [환자]/[문병객] | `src/ui/entry-screen.ts`, `src/avatar/species.ts`, `src/avatar/portraits.ts`, `src/avatar/egg.ts`, `src/avatar/kit.ts` |
 | 닉네임 정하기 | "따뜻한 곰"처럼 자동 닉네임이 채워져 있고, 고쳐 쓰면 규칙에 맞는지 바로 알려 줘요. | 완성 | 닉네임 칸 수정 → [병동에 들어갈게요] | `src/ui/entry-screen.ts`, `shared/nickname.ts`, `shared/bannedWords.ts`, `worker/ward-room.ts`(hello) |
-| 고양이와 함께 들어가기 | 내 곁을 따라다니는 고양이가 생기고, 다른 사람 화면에도 보여요. | 완성 | [함께 갈게요]/[혼자 갈게요] | `src/cat/companion.ts`, `src/ward/companion-trail.ts`, `src/net/remote-guests.ts` |
+| 고양이와 함께 들어가기 | 고양이가 내 옆에서 나란히 걷고, 다른 사람 화면에도 보여요. 내가 멈추면 옆에 앉고, 누우면 침대 옆에 웅크려요. 문처럼 좁은 곳에서는 잠깐 뒤따라와요. | 완성 | [함께 갈게요]/[혼자 갈게요] | `src/cat/companion.ts`, `src/ward/companion-side.ts`, `src/ward/companion-trail.ts`, `src/net/remote-guests.ts` |
+| 간호사의 인사 | 현관으로 들어서면 간호사실 가운데 병아리 간호사가 고개를 숙이며 "어서 오세요. 편히 쉬다 가세요"라고 인사해요. 이 기기에서 두 번째부터는 "다시 오셨네요"예요. 내 화면에서만 보여요. 간호사는 병동 직원이라 닉네임이 없고 평안·선물·신고 대상이 아니에요. | 완성 | 앞마당에서 현관으로 걸어 들어가기 | `src/ward/chick-nurse.ts`, `src/ward/nurse-greeting.ts`, `src/ward/controls.ts`(setLobbyListener) |
 | 다시 와도 같은 동물로 | 다음에 들어와도 같은 사람으로 알아봐요. 남겨진 평안도 이어져요. | 완성 | 들어갔다가 새로고침해서 다시 들어가기 | `worker/security.ts`, `src/net/ward-params.ts`(토큰 저장), `src/ui/profile.ts` |
 | 정원과 다음 병실 | 한 병동이 30명으로 차면 다음 병실로 넘어가고, 모두 차면 혼자 머물러요. | 완성 | 창을 31개 이상 열어 보기(개발 환경) | `shared/ward-rules.ts`(admit, nextInstance), `src/net/ward-client.ts`(room-full) |
 | 의료 서비스가 아님을 알림 | 입장 화면 아래에 "의료 서비스가 아니에요" 안내가 있어요. | 완성 | 첫 화면 맨 아래 | `src/ui/entry-screen.ts` |
@@ -26,6 +27,8 @@
 | --- | --- | --- | --- | --- |
 | 걷기 | 바닥을 누르면 그곳으로 걸어가요. 갈 수 없는 곳이면 서버가 가까운 곳으로 바로잡아요. | 완성 | 바닥 누르기 | `src/ward/controls.ts`, `src/ward/movement.ts`, `shared/ward-layout.ts`, `shared/ward-rules.ts`(clampToWalkable) |
 | 침대에 눕기와 일어나기 | 빈 침대를 누르면 걸어가 누워요. 동시에 누르면 서버가 먼저 온 한 사람에게만 줘요. | 완성 | 빈 침대 누르기 → 바닥 누르면 일어나요 | `src/ward/bed-flow.ts`, `shared/ward-rules.ts`(claimBed), `worker/ward-room.ts`(lie-down) |
+| 침대 이름표 | 누운 사람의 닉네임이 침대 발치에 달려 모두에게 보여요(같은 병실 안에서). 일어나거나 나가면 사라져요. 서버가 정한 침대(guest.bed)를 따르고, 글자는 textContent로만 넣어요. | 완성 | 침대에 눕기 → 다른 기기에서 같은 병실 보기 | `src/ward/bed-plates.ts`, `src/net/remote-guests.ts` |
+| 침대 옮기기 | 누운 채 다른 빈 침대를 누르면 "이 침대로 옮길까요?" [옮길게요]/[그대로 있을게요]를 물어요. 옮기면 서버가 원래 침대를 반납하고 새 침대를 차지해요. 그사이 다른 분이 누우면 원래 침대에 그대로 있고 "방금 다른 분이 누우셨어요."가 떠요. | 완성 | 누운 채 다른 빈 침대 누르기 | `src/ward/bed-flow.ts`(needsMoveConfirm), `src/ward/controls.ts`, `src/ui/action-bar.ts`(confirmMove), `shared/ward-rules.ts`(claimBed) |
 | 다른 동물 보기 | 같은 병동에 있는 동물들이 걷고 눕는 모습과 머리 위 닉네임이 보여요. | 완성 | 창 두 개로 들어가 보기 | `src/net/remote-guests.ts`, `src/ui/head-labels.ts` |
 | 잠깐 끊겨도 자리 지키기 | 30초 안에 다시 이어지면 침대와 자리를 그대로 돌려받고, 다른 사람에게는 나간 것으로 보이지 않아요. | 완성 | 개발자 도구에서 네트워크를 잠깐 끊었다가 잇기 | `shared/ward-rules.ts`(toAway, expireAway, GRACE_MS), `worker/ward-room.ts`(away 표, alarm) |
 | 다른 창에서 들어오면 쉬기 | 같은 사람이 다른 창으로 들어오면 예전 창은 "이 창은 쉬어요"라고 알려요. | 완성 | 같은 브라우저 탭 두 개로 들어가기 | `src/net/ward-client.ts`(REPLACED_CODE), `worker/ward-room.ts` |

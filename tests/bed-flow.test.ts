@@ -7,6 +7,7 @@ import {
   canStartGesture,
   createLocalBedGate,
   FREE,
+  needsMoveConfirm,
   tapBed,
   tapFloor,
   tickFlow,
@@ -152,4 +153,17 @@ test("침대에 오르내리거나 누운 동안에는 동작을 시작하지 �
   assert.equal(canStartGesture({ kind: "entering", bed: 1, elapsed: 0 }), false);
   assert.equal(canStartGesture(lying(1)), false);
   assert.equal(canStartGesture({ kind: "leaving", bed: 1, remaining: 1, next: null }), false);
+});
+
+test("누운 채로 다른 침대를 누를 때만 옮길지 물어요", () => {
+  assert.equal(needsMoveConfirm(lying(2), 4, true), true);
+  assert.equal(needsMoveConfirm({ kind: "entering", bed: 2, elapsed: 0.3 }, 4, true), true);
+  // 내 침대를 다시 누르면 일어나는 것이니 묻지 않아요.
+  assert.equal(needsMoveConfirm(lying(2), 2, true), false);
+  // 서 있거나 걸어가는 중이면 바로 가요.
+  assert.equal(needsMoveConfirm(FREE, 4, true), false);
+  assert.equal(needsMoveConfirm({ kind: "heading", bed: 2, lie: true }, 4, true), false);
+  assert.equal(needsMoveConfirm({ kind: "leaving", bed: 2, remaining: 0.5, next: null }, 4, true), false);
+  // 문병객은 눕지 않아요.
+  assert.equal(needsMoveConfirm(lying(2), 4, false), false);
 });

@@ -80,7 +80,13 @@ export interface ActionBar {
   openPerson(person: { id: string; nickname: string; hug: HugMenuState }): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
+  /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
+  confirmMove(proceed: () => void): void;
 }
+
+export const MOVE_CONFIRM_TEXT = "이 침대로 옮길까요?";
+export const MOVE_YES_TEXT = "옮길게요";
+export const MOVE_NO_TEXT = "그대로 있을게요";
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
@@ -118,11 +124,21 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     buttons.querySelector<HTMLButtonElement>("button")?.focus();
   });
 
-  const openSheet = (name: string, title: string, children: HTMLElement[]): void => {
+  const openSheet = (name: string, title: string, children: HTMLElement[], cancelLabel = "그만두기"): void => {
     closeSheet();
     sheetName = name;
-    sheet.append(createText("p", title), ...children, createButton("그만두기", closeSheet));
+    sheet.append(createText("p", title), ...children, createButton(cancelLabel, closeSheet));
     sheet.hidden = false;
+  };
+
+  /** 누운 채로 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로 누워 있어요. */
+  const confirmMove = (proceed: () => void): void => {
+    const yes = createButton(MOVE_YES_TEXT, () => {
+      closeSheet();
+      proceed();
+    });
+    openSheet("move-bed", MOVE_CONFIRM_TEXT, [yes], MOVE_NO_TEXT);
+    yes.focus();
   };
 
   /** 다른 침대를 고르는 단계예요. 고르면 그 침대를 보고 동작해요. */
@@ -456,6 +472,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
 
   return {
     showToast,
+    confirmMove,
     showVisitLink(status) {
       if (status.token) {
         saveMyLink(status.token);
