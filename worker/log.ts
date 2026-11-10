@@ -10,6 +10,7 @@ export type LogRoute =
   | "api/stats"
   | "api/health"
   | "api/guestbook"
+  | "guestbook"
   | "ws"
   | "admin"
   | "not-found"

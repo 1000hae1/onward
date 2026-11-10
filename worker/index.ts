@@ -11,6 +11,7 @@ import { WRITER_KEY_PATTERN } from "../shared/guestbook-rules.ts";
 
 import { statsTimestamp } from "../shared/presence-rules.ts";
 import { handleAdmin } from "./admin.ts";
+import { guestbookPage } from "./guestbook-page.ts";
 import { logError } from "./log.ts";
 import type { LogRoute } from "./log.ts";
 import { hashIp, requireSecret } from "./security.ts";
@@ -132,6 +133,7 @@ function routeOf(pathname: string): LogRoute {
   if (pathname === "/api/stats") return "api/stats";
   if (pathname === "/api/health") return "api/health";
   if (pathname.startsWith("/api/guestbook/")) return "api/guestbook";
+  if (pathname === "/guestbook" || pathname.startsWith("/guestbook/")) return "guestbook";
   if (pathname === "/ws") return "ws";
   if (pathname === "/admin" || pathname.startsWith("/admin/")) return "admin";
   return "not-found";
@@ -170,6 +172,11 @@ async function handle(request: Request, env: Env, ctx: ExecutionContext): Promis
   }
 
   if (url.pathname.startsWith("/api/guestbook/")) return guestbookResponse(request, url, env);
+
+  // 방명록 링크 화면이에요. 미리보기 meta만 바꾼 index.html이고, 못 만들면 정적 index.html을 그대로 줘요.
+  if (url.pathname === "/guestbook" || url.pathname.startsWith("/guestbook/")) {
+    return (await guestbookPage(request, url, env, ctx)) ?? env.ASSETS.fetch(request);
+  }
 
   if (url.pathname === "/ws") {
     if (request.headers.get("Upgrade") !== "websocket") {
