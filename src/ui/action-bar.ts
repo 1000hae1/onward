@@ -70,11 +70,16 @@ export interface ActionBar {
   setHidden(hidden: boolean): void;
   /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
   confirmMove(proceed: () => void): void;
+  /** 아직 내 침대가 없을 때 빈 침대를 누르면 이 침대를 쓸지 물어요. */
+  confirmClaim(proceed: () => void): void;
 }
 
 export const MOVE_CONFIRM_TEXT = "이 침대로 옮길까요?";
 export const MOVE_YES_TEXT = "옮길게요";
 export const MOVE_NO_TEXT = "그대로 있을게요";
+export const CLAIM_CONFIRM_TEXT = "이 침대를 쓰시겠어요?";
+export const CLAIM_YES_TEXT = "이 침대 쓰기";
+export const CLAIM_NO_TEXT = "다른 곳 볼게요";
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
@@ -119,7 +124,17 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     sheet.hidden = false;
   };
 
-  /** 누운 채로 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로 누워 있어요. */
+  /** 처음 침대를 고를 때 물어요. [이 침대 쓰기]를 누르면 서버가 배정을 확정한 뒤에 가서 누워요. */
+  const confirmClaim = (proceed: () => void): void => {
+    const yes = createButton(CLAIM_YES_TEXT, () => {
+      closeSheet();
+      proceed();
+    });
+    openSheet("claim-bed", CLAIM_CONFIRM_TEXT, [yes], CLAIM_NO_TEXT);
+    yes.focus();
+  };
+
+  /** 내 침대가 있는데 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로예요. */
   const confirmMove = (proceed: () => void): void => {
     const yes = createButton(MOVE_YES_TEXT, () => {
       closeSheet();
@@ -133,7 +148,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   const pickBed = (name: string, title: string, onBed: (bed: number) => void): void => {
     openSheet(name, title, []);
     player.setBedPicker((bed) => {
-      if (bed === player.claimedBed) {
+      if (bed === player.ownedBed) {
         showToast("다른 침대를 골라 주세요.");
         return;
       }
@@ -221,7 +236,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     openSheet("bed", "내 침대", [createButton("침대 옮기기", () => {
       openSheet("move-picker", "옮길 침대를 눌러 주세요.", []);
       player.setBedPicker((bed) => {
-        if (bed === player.claimedBed) {
+        if (bed === player.ownedBed) {
           showToast("다른 침대를 골라 주세요.");
           return;
         }
@@ -237,8 +252,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       showToast("병동에 연결된 뒤 이용할 수 있어요.");
       return;
     }
-    if (player.lyingBed === null) {
-      showToast("침대에 누운 뒤 퇴원할 수 있어요.");
+    if (player.ownedBed === null) {
+      showToast("내 침대를 고른 뒤 퇴원할 수 있어요.");
       return;
     }
     const children: HTMLElement[] = [];
@@ -401,14 +416,15 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     openDischarge,
     showToast,
     confirmMove,
+    confirmClaim,
     openPerson,
     setHidden(hidden) {
       if (hidden) closeSheet();
       buttons.hidden = hidden;
     },
     update(dt) {
-      // 침대에 누워 있는 동안만 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.
-      const showBed = sink.online() && !visiting() && player.lyingBed !== null;
+      // 내 침대가 있으면 걸어 다닐 때도 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.
+      const showBed = sink.online() && !visiting() && player.ownedBed !== null;
       if (bedButton.hidden === showBed) {
         bedButton.hidden = !showBed;
         if (!showBed && sheetName === "bed") closeSheet();

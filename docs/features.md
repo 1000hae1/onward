@@ -25,18 +25,19 @@
 | 기능 이름 | 사용자가 보는 모습 | 상태 | 어떻게 해보나 | 관련 코드 파일 |
 | --- | --- | --- | --- | --- |
 | 걷기 | 바닥을 누르면 그곳으로 걸어가요. 갈 수 없는 곳이면 서버가 가까운 곳으로 바로잡아요. | 완성 | 바닥 누르기 | `src/ward/controls.ts`, `src/ward/movement.ts`, `shared/ward-layout.ts`, `shared/ward-rules.ts`(clampToWalkable) |
-| 침대에 눕기와 일어나기 | 빈 침대를 누르면 걸어가 누워요. 동시에 누르면 서버가 먼저 온 한 사람에게만 줘요. | 완성 | 빈 침대 누르기 → 바닥 누르면 일어나요 | `src/ward/bed-flow.ts`, `shared/ward-rules.ts`(claimBed), `worker/ward-room.ts`(lie-down) |
-| 침대 이름표 | 누운 사람의 닉네임이 침대 발치에 달려 모두에게 보여요(같은 병실 안에서). 일어나거나 나가면 사라져요. 서버가 정한 침대(guest.bed)를 따르고, 글자는 textContent로만 넣어요. | 완성 | 침대에 눕기 → 다른 기기에서 같은 병실 보기 | `src/ward/bed-plates.ts`, `src/net/remote-guests.ts` |
-| 침대 옮기기 | 누운 채 다른 빈 침대를 누르면 "이 침대로 옮길까요?" [옮길게요]/[그대로 있을게요]를 물어요. 옮기면 서버가 원래 침대를 반납하고 새 침대를 차지해요. 그사이 다른 분이 누우면 원래 침대에 그대로 있고 "방금 다른 분이 누우셨어요."가 떠요. | 완성 | 누운 채 다른 빈 침대 누르기 | `src/ward/bed-flow.ts`(needsMoveConfirm), `src/ward/controls.ts`, `src/ui/action-bar.ts`(confirmMove), `shared/ward-rules.ts`(claimBed) |
+| 내 침대 고르기(고정 배정) | 아직 내 침대가 없을 때 빈 침대를 누르면 "이 침대를 쓰시겠어요?" [이 침대 쓰기]/[다른 곳 볼게요]를 물어요. [이 침대 쓰기]를 누르면 서버가 배정을 확정한 뒤에 걸어가 누워요. 동시에 누르면 서버가 먼저 처리한 한 사람에게만 주고, 늦은 사람에게는 "방금 다른 분이 자리를 잡았어요."가 떠요. 침대에서 내려와 걸어 다녀도 침대는 계속 내 것이고, 내 침대를 누르면 묻지 않고 바로 누워요. 다른 분의 침대를 누르면 눕지 않고 그분 메뉴가 떠요. | 완성 | 빈 침대 누르기 → [이 침대 쓰기] → 바닥 눌러 내려오기 → 내 침대 다시 누르기 | `shared/bed-rules.ts`(claimBed, lieDown, standUp), `src/ward/bed-flow.ts`(bedTapIntent), `src/ward/controls.ts`, `src/ui/action-bar.ts`(confirmClaim), `worker/ward-room.ts`(claim-bed, lie-down, get-up) |
+| 침대 고르기 안내 | 정원(30명)은 침대 수와 따로라, 침대가 다 차도 병동에는 들어와 머물 수 있어요. 내 침대가 없는 환자가 병실에 들어서면 "빈 침대를 누르면 내 침대로 고를 수 있어요."를, 그 병실이 다 찼으면 "이 병실은 침대가 다 찼어요. 104호실에 빈 침대가 있어요."처럼 빈 병실을, 병동 전체가 찼으면 "지금은 빈 침대가 없어요. 편히 둘러보시다가 침대가 비면 골라 주세요."를 알려 줘요. | 완성 | 침대 없이 병실에 들어가기 | `shared/bed-rules.ts`(bedGuide, bedGuideText), `src/scene.ts` |
+| 침대 이름표 | 침대를 배정받은 사람의 닉네임이 침대 발치에 달려 모두에게 보여요(같은 병실 안에서). 침대에서 내려와 걸어 다녀도 그대로이고, 퇴원하거나 30초 넘게 끊기면 사라져요. 서버가 정한 침대(guest.bed)를 따르고, 글자는 textContent로만 넣어요. | 완성 | 침대 고르기 → 내려와 걸어 다니기 → 다른 기기에서 같은 병실 보기 | `src/ward/bed-plates.ts`, `src/net/remote-guests.ts` |
+| 침대 옮기기 | 내 침대가 있는데 다른 빈 침대를 누르면(누워 있든 서 있든) "이 침대로 옮길까요?" [옮길게요]/[그대로 있을게요]를 물어요. 옮기면 서버가 원래 침대를 반납하고 새 침대를 배정해요. 그사이 다른 분이 받으면 원래 침대를 그대로 지키고 "방금 다른 분이 누우셨어요."가 떠요. | 완성 | 내 침대가 있는 채 다른 빈 침대 누르기 | `shared/bed-rules.ts`(claimBed), `src/ward/bed-flow.ts`(bedTapIntent), `src/ui/action-bar.ts`(confirmMove) |
 | 다른 동물 보기 | 같은 병동에 있는 동물들이 걷고 눕는 모습과 머리 위 닉네임이 보여요. | 완성 | 창 두 개로 들어가 보기 | `src/net/remote-guests.ts`, `src/ui/head-labels.ts` |
-| 잠깐 끊겨도 자리 지키기 | 30초 안에 다시 이어지면 침대와 자리를 그대로 돌려받고, 다른 사람에게는 나간 것으로 보이지 않아요. | 완성 | 개발자 도구에서 네트워크를 잠깐 끊었다가 잇기 | `shared/ward-rules.ts`(toAway, expireAway, GRACE_MS), `worker/ward-room.ts`(away 표, alarm) |
+| 잠깐 끊겨도 자리 지키기 | 30초 안에 다시 이어지면 침대와 자리를 그대로 돌려받고, 다른 사람에게는 나간 것으로 보이지 않아요. 30초가 지나면 침대를 반납해요. 이 브라우저는 마지막 내 자리(병동·병실·침대 번호)를 기억해 두었다가, 다음에 들어올 때 그 병실로 가서 예전 침대가 비어 있으면 서버가 같은 침대를 먼저 돌려줘요. | 완성 | 개발자 도구에서 네트워크를 잠깐 끊었다가 잇기 / 창을 닫고 1분 뒤 다시 들어가기 | `shared/ward-rules.ts`(toAway, expireAway, GRACE_MS), `shared/bed-rules.ts`(seatOnEntry), `src/net/ward-params.ts`(loadSeat, saveSeat), `worker/ward-room.ts`(away 표, alarm) |
 | 다른 창에서 들어오면 쉬기 | 같은 사람이 다른 창으로 들어오면 예전 창은 "이 창은 쉬어요"라고 알려요. | 완성 | 같은 브라우저 탭 두 개로 들어가기 | `src/net/ward-client.ts`(REPLACED_CODE), `worker/ward-room.ts` |
 | 혼자 머물기 | 서버에 닿지 않아도 병실은 그대로 열리고, 내 화면에서만 동작해요. | 완성 | `npm run dev` 없이 정적 빌드만 열기 | `src/scene.ts`, `src/ui/action-bar.ts`(online이 false일 때) |
 | 설정 | 들어온 뒤에는 고양이·안아 주기 받기·보기만 바꿔요. 동물과 닉네임은 입장 화면에서만 골라요. | 완성 | 오른쪽 위 [설정] | `src/ui/settings.ts`, `shared/ward-rules.ts`(updateProfile) |
 | 가볍게 보기 | 처음 5초의 프레임 속도와 기기 메모리·코어 수로 보통/가볍게를 스스로 골라요. 가볍게면 픽셀 비율 1.5, 안티에일리어싱 끔, 눈 1/3, 9m보다 먼 동물은 몸만 그려요. 설정에서 [자동/켜기/끄기]로 바꿀 수 있어요. | 완성 | [설정] → [가볍게 보기], `?quality=light&debug=1`로 미리 보기 | `src/ward/quality.ts`, `src/ui/view-prefs.ts`, `src/scene.ts` |
 | 탭이 안 보이면 쉬기 | 다른 탭으로 가면 그리기를 멈추고, 돌아오면 이어 그려요. | 완성 | 다른 탭으로 갔다가 돌아오기 | `src/scene.ts`(visibilitychange) |
 | WebGL 안내 | WebGL을 쓸 수 없거나 그리는 도중 끊기면 "이 기기에서는 병실을 보여주기 어려워요"와 [다시 시도]가 떠요. 되살아나면 스스로 닫혀요. | 완성 | 개발자 도구에서 `WEBGL_lose_context`로 끊어 보기 | `src/ui/webgl-fallback.ts`, `src/main.ts` |
-| 상단 병동 이름과 오늘의 집계 | "온기병동 1병동 1호 · 3/30"(서버에 닿지 않으면 "온기병동 1병동 1호 · 혼자 머무는 중"), "오늘 다녀간 동물 5마리 · 모인 평안 12"가 보여요. | 일부만 | 들어가서 화면 위쪽 보기 | `src/scene.ts`(setHud, setStats), `shared/daily.ts`(statsLine) — **빠진 것: 서버는 오늘 켠 불빛 수(`stats.lamps`)도 세서 보내지만 화면에는 나오지 않아요** |
+| 상단 병동 이름과 오늘의 집계 | "3병동 · 4/30"(1호가 아니면 "3병동 2호 · 4/30", 서버에 닿지 않으면 "3병동 · 혼자 머무는 중"), "오늘 다녀간 동물 5마리 · 모인 평안 12"가 보여요. | 일부만 | 들어가서 화면 위쪽 보기 | `src/scene.ts`(setHud, setStats), `shared/daily.ts`(statsLine) — **빠진 것: 서버는 오늘 켠 불빛 수(`stats.lamps`)도 세서 보내지만 화면에는 나오지 않아요** |
 
 ## 3. 평안을 빌어 주는 동작
 
@@ -68,7 +69,7 @@
 | 아침 창문 | 06:30~09:00에 그날 처음 병실에 들어오면 창문이 열려요. 병실마다 하루 한 번이에요. | 완성 | 아침에 병실 들어가기 | `shared/morning.ts`, `src/ward/morning-window.ts`, `worker/ward-room.ts`(openWindowIfMorning) |
 | 창가 화분 | 병실에 평안이 모일수록 새싹에서 꽃 여러 송이까지 6단계로 자라요. 줄지 않아요. | 완성 | 병실 안에서 창가 화분 누르기 | `shared/planter.ts`, `src/ward/planter-view.ts` |
 | 함께한 밤 | 밤(22시~6시)에 1분 넘게 머물면 그 밤을 세고, 다음 밤에 "n번째 밤"이라고 알려 줘요. | 완성 | `?clockShift=분`으로 밤을 미리 보기 | `shared/daily.ts`(countNight, nightsText), `src/scene.ts` — 이 브라우저에만 저장해요 |
-| 퇴원하기와 배웅 | 퇴원하면 평상복으로 갈아입고 문으로 걸어 나가요. 같은 병실 사람에게 [배웅하기]가 뜨고, 1분 뒤 "n분이 배웅해 주셨어요" 카드가 보여요. | 완성 | 누운 채 [내 침대] → [퇴원하기] → [퇴원할게요] | `shared/discharge-rules.ts`, `src/ui/moments.ts`, `worker/ward-room.ts`(discharge, farewell) |
+| 퇴원하기와 배웅 | 퇴원하면 평상복으로 갈아입고 문으로 걸어 나가요. 같은 병실 사람에게 [배웅하기]가 뜨고, 1분 뒤 "n분이 배웅해 주셨어요" 카드가 보여요. | 완성 | [내 침대] → [퇴원하기] → [퇴원할게요] (퇴원하면 침대를 바로 반납해요) | `shared/discharge-rules.ts`, `src/ui/moments.ts`, `worker/ward-room.ts`(discharge, farewell) |
 | 다시 들러 주셨네요 | 퇴원한 뒤 다시 들어오면 한 번 반겨 줘요. | 완성 | 퇴원 뒤 다시 들어가기 | `shared/return-rules.ts`, `worker/directory.ts`(discharged) |
 
 ## 6. 방명록(사과나무)과 문병

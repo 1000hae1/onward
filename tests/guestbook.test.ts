@@ -32,7 +32,8 @@ import {
 } from "../shared/protocol.ts";
 import { checkVisit, findLink, MAX_VISITORS_PER_LINK, replaceLink, turnOffLink, visitorMay, visitorSpot } from "../shared/visit-rules.ts";
 import type { VisitLinkRow } from "../shared/visit-rules.ts";
-import { admit, claimBed, toPublic } from "../shared/ward-rules.ts";
+import { admit, toPublic } from "../shared/ward-rules.ts";
+import { claimBed } from "../shared/bed-rules.ts";
 import type { GuestRecord, VerifiedHello, VisitRole } from "../shared/ward-rules.ts";
 import { appleSlotPoint, insideCanopy, othersSlots, TREE_HEIGHT, TREE_WIDTH } from "../src/guestbook/tree-shape.ts";
 
@@ -89,7 +90,7 @@ test("다른 사람에게 보이는 손님 정보에는 사과 관련 값이 없
   // 링크가 켜져 있고 사과가 많은 주인이어도 다른 사람에게는 같은 모양이에요.
   const owner = toPublic(record(1, { linked: true }));
   assert.equal(carriesAppleData(owner), false);
-  assert.deepEqual(Object.keys(owner).sort(), ["address", "animal", "bed", "hugOk", "id", "nickname", "outfit", "withCat", "x", "z"]);
+  assert.deepEqual(Object.keys(owner).sort(), ["address", "animal", "bed", "hugOk", "id", "lying", "nickname", "outfit", "withCat", "x", "z"]);
 });
 
 test("snapshot과 모든 event 모양에는 사과를 담을 자리가 없어요", () => {
@@ -294,8 +295,8 @@ test("문병객은 침대를 차지할 수 없고 정원에 세지 않아요", (
   if (admitted.kind !== "admitted") return;
   assert.equal(admitted.record.outfit, "visitor");
   assert.equal(admitted.record.bed, null);
-  assert.equal(claimBed([], admitted.record, 4, NOW).granted, false);
-  assert.equal(claimBed([], { ...admitted.record, outfit: "patient" }, 4, NOW).granted, false);
+  assert.equal(claimBed([], admitted.record, 4).granted, false);
+  assert.equal(claimBed([], { ...admitted.record, outfit: "patient" }, 4).granted, false);
 });
 
 test("한 링크로 동시에 3명까지 문병 와요", () => {

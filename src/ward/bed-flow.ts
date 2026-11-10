@@ -1,6 +1,6 @@
 /**
  * 침대로 걸어가서 눕고 일어나는 흐름이에요. 화면과 상관없는 순수 함수예요.
- * 침대는 BEDS 목록의 번호로 가리키고, 비었는지는 BedGate가 판단해요.
+ * 침대는 BEDS 목록의 번호로 가리키고, 누구의 침대인지는 서버(혼자일 때는 이 화면)가 정해요.
  */
 
 export interface FlowPoint {
@@ -30,33 +30,7 @@ export interface FlowStep {
   bowAtBed?: number;
 }
 
-/**
- * 침대가 비었는지 정하는 쪽이에요. 지금은 이 화면에서만 정하고,
- * 서버가 생기면 같은 모양으로 서버의 판단을 따르게 바꿔요.
- */
-export interface BedGate {
-  isFree(bed: number): boolean;
-  /** 침대를 달라고 요청해요. 이미 누가 있으면 false예요. */
-  request(bed: number): boolean;
-  release(bed: number): void;
-}
-
 export const FREE: BedFlow = { kind: "free" };
-
-export function createLocalBedGate(): BedGate {
-  const taken = new Set<number>();
-  return {
-    isFree: (bed) => !taken.has(bed),
-    request(bed) {
-      if (taken.has(bed)) return false;
-      taken.add(bed);
-      return true;
-    },
-    release(bed) {
-      taken.delete(bed);
-    },
-  };
-}
 
 export interface BedTapContext {
   /** 눕기를 시도해도 되는지예요. 문병객은 false예요. */
@@ -97,12 +71,23 @@ export function tapBed(
 }
 
 /**
- * 이미 누웠거나 눕는 중에 다른 침대를 눌렀는지예요. 이때는 바로 옮기지 않고 "이 침대로 옮길까요?"를 먼저 물어요.
- * 문병객은 눕지 않으니 묻지 않아요.
+ * 침대를 눌렀을 때 무엇을 할지예요. 침대는 한 번 고르면 퇴원할 때까지 내 것이에요.
+ * - visit: 문병객이에요. 침대 곁으로 가서 목례만 해요.
+ * - own: 내 침대예요. 묻지 않고 바로 가서 누워요(누워 있으면 일어나요).
+ * - others: 다른 분의 침대예요. 눕지 않고 그분 메뉴(이름표·평안 빌기)를 보여 줘요.
+ * - claim: 아직 내 침대가 없어요. "이 침대를 쓰시겠어요?"를 먼저 물어요.
+ * - move: 내 침대가 따로 있어요. "이 침대로 옮길까요?"를 먼저 물어요.
  */
-export function needsMoveConfirm(flow: BedFlow, bed: number, canLie: boolean): boolean {
-  if (!canLie) return false;
-  return (flow.kind === "lying" || flow.kind === "entering") && flow.bed !== bed;
+export type BedTapIntent = "visit" | "own" | "others" | "claim" | "move";
+
+export function bedTapIntent(
+  bed: number,
+  context: { canLie: boolean; ownedBed: number | null; takenByOther: boolean },
+): BedTapIntent {
+  if (!context.canLie) return "visit";
+  if (context.ownedBed === bed) return "own";
+  if (context.takenByOther) return "others";
+  return context.ownedBed === null ? "claim" : "move";
 }
 
 /** 빈 바닥을 탭했을 때예요. */
@@ -125,7 +110,7 @@ function startLeaving(bed: number, remaining: number, next: WalkOrder | null): F
   return { flow: { kind: "leaving", bed, remaining, next }, release: bed };
 }
 
-/** 침대 곁에 닿았을 때예요. granted는 BedGate의 대답이에요. */
+/** 침대 곁에 닿았을 때예요. granted는 그 침대가 지금도 내 침대인지예요. */
 export function arrivedAtBed(flow: BedFlow, granted: boolean): FlowStep {
   if (flow.kind !== "heading") return { flow };
   if (!flow.lie) return { flow: FREE, bowAtBed: flow.bed };

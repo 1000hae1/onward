@@ -100,6 +100,8 @@ export interface RemoteGuests {
   /** 가볍게 보기에서는 먼 동물을 몸만 그려요. */
   setQuality(quality: Quality): void;
   isBedTaken(bed: number): boolean;
+  /** 이 침대를 배정받은 사람이에요. 그 사람이 걸어 다녀도 그 사람 것이에요. */
+  ownerOfBed(bed: number): Guest | null;
   othersInRoom(roomIndex: number): boolean;
   handSpot(id: string): Spot | null;
   headSpot(id: string): Spot | null;
@@ -171,7 +173,7 @@ export function createRemoteGuests(
     const label = createHeadLabels(element);
     label.setName(guest.nickname);
     // 누워 있는 사람은 침대 곁 자리에서 바로 누운 모습으로 시작해요.
-    const lying = guest.bed !== null && guest.outfit === "patient";
+    const lying = guest.bed !== null && guest.lying && guest.outfit === "patient";
     const start = lying ? bedApproach(BEDS[guest.bed as number]) : { x: guest.x, z: guest.z };
     const remote: Remote = {
       guest,
@@ -277,26 +279,40 @@ export function createRemoteGuests(
             walkZ: remote.position.z,
             lyingBed: null,
           });
-          if (event.guest.bed === null && remote.flow.kind !== "free") {
+          const lyingNow = event.guest.bed !== null && event.guest.lying;
+          if (!lyingNow && remote.flow.kind !== "free") {
             applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
-          } else if (event.guest.bed !== null && event.guest.outfit === "patient" && remote.flow.kind === "free") {
+          } else if (lyingNow && event.guest.bed !== null && event.guest.outfit === "patient" && remote.flow.kind === "free") {
             // 눕는 event를 놓쳤어도 서버가 아는 침대로 가서 누워요.
             applyStep(remote, tapBed(remote.flow, event.guest.bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           }
           return;
         }
         case "walk":
-          // 서버는 걸어가면 침대를 비워요. 이름표도 이 값을 따라요.
-          remote.guest = { ...remote.guest, bed: null };
+          // 걸어가면 침대에서 내려오지만 침대는 그대로 그 사람 것이에요. 이름표도 그대로예요.
+          remote.guest = { ...remote.guest, lying: false };
           remote.afterWalk = null;
           applyStep(remote, tapFloor(remote.flow, { x: event.x, z: event.z }, BED_TRANSITION_SECONDS));
           return;
         case "lie":
-          remote.guest = { ...remote.guest, bed: event.bedId };
+          remote.guest = { ...remote.guest, bed: event.bedId, lying: true };
           applyStep(remote, tapBed(remote.flow, event.bedId, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
           return;
+        case "bed-claimed":
+          // 침대를 새로 받았어요(처음 고르거나 옮겼어요). 눕는 것은 lie가 따로 와요.
+          remote.guest = { ...remote.guest, bed: event.bedId, lying: false };
+          return;
+        case "bed-released":
+          remote.guest = { ...remote.guest, bed: null, lying: false };
+          if (remote.flow.kind === "heading") {
+            remote.flow = FREE;
+            remote.path = [];
+          } else if (remote.flow.kind !== "free") {
+            applyStep(remote, getUp(remote.flow, BED_TRANSITION_SECONDS));
+          }
+          return;
         case "get-up":
-          remote.guest = { ...remote.guest, bed: null };
+          remote.guest = { ...remote.guest, lying: false };
           if (remote.flow.kind === "heading") {
             remote.flow = FREE;
             remote.path = [];
@@ -425,6 +441,12 @@ export function createRemoteGuests(
         }
         remote.label.update(dt, camera, visible ? remote.avatar.headWorld(headPoint) : null);
       }
+    },
+    ownerOfBed(bed) {
+      for (const remote of remotes.values()) {
+        if (remote.guest.bed === bed && remote.guest.outfit === "patient") return remote.guest;
+      }
+      return null;
     },
     isBedTaken(bed) {
       for (const remote of remotes.values()) {

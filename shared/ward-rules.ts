@@ -7,6 +7,7 @@ import type { NicknameProblem } from "./nickname.ts";
 import { chooseGiftSlot, GIFT_SLOTS_PER_STAND, LAMPS_PER_WINDOW } from "./offering-rules.ts";
 import type { Guest, HelloMessage } from "./protocol.ts";
 import { publicNickname } from "./safety-rules.ts";
+import { isLying } from "./bed-rules.ts";
 import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
 /** 방명록 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
@@ -30,10 +31,11 @@ export interface GuestRecord {
   withCat: boolean;
   x: number;
   z: number;
+  /** 배정받은 내 침대예요. 걸어 다녀도 그대로이고, 퇴원·반납·30초 넘게 끊기면 비어요. */
   bed: number | null;
   /** 이번 입장에서 받은 평안 주소예요. 다른 사람에게 보여도 되는 값이에요. 서버는 연결 정보에만 들고 있어요. */
   address: string;
-  /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
+  /** 내 침대에 누운 시각이에요. 밀리초예요. 서 있으면 null이에요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
   lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "hug" | "discharge", number>>;
@@ -85,6 +87,7 @@ export function toPublic(record: GuestRecord): Guest {
     x: record.x,
     z: record.z,
     bed: record.bed,
+    lying: isLying(record),
     address: record.address,
     hugOk: hugAvailable(record),
   };
@@ -212,24 +215,6 @@ export function clampToWalkable(x: number, z: number): { x: number; z: number } 
     }
   }
   return best;
-}
-
-/**
- * 침대를 달라는 요청이에요. 메시지는 하나씩 차례로 처리되니, 먼저 처리된 사람이 가져가요.
- * 이미 다른 침대에 있었다면 그 침대는 비워요.
- */
-export function claimBed(
-  guests: readonly GuestRecord[],
-  record: GuestRecord,
-  bed: number,
-  nowMs: number,
-): { granted: boolean; record: GuestRecord } {
-  if (record.outfit !== "patient" || record.visit) return { granted: false, record };
-  const taken = guests.some((other) => other.id !== record.id && other.bed === bed);
-  if (taken) return { granted: false, record };
-  // 같은 침대를 다시 받으면 누운 시각은 그대로예요.
-  const lyingSince = record.bed === bed && record.lyingSince !== null ? record.lyingSince : nowMs;
-  return { granted: true, record: { ...record, bed, lyingSince } };
 }
 
 /** 한국 시간으로 몇 월인지예요. */

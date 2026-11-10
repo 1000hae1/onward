@@ -28,11 +28,10 @@ import {
   arrivedAtBed,
   becomeVisitor,
   bedProgress,
+  bedTapIntent,
   canStartGesture,
-  createLocalBedGate,
   FREE,
   getUp,
-  needsMoveConfirm,
   tapBed,
   tapFloor,
   tickFlow,
@@ -125,8 +124,14 @@ function claimedOf(flow: BedFlow): number | null {
 
 /** 내 동작을 병동 서버에 알리는 곳이에요. */
 export interface PlayerNet {
+  /** 내 침대에 눕겠다고 해요. */
   askBed(bed: number): Promise<boolean>;
+  /** 이 침대를 내 침대로 달라고 해요. 서버가 먼저 온 사람에게 줘요. */
+  claimBed(bed: number): Promise<boolean>;
+  /** 다른 분이 배정받은 침대인지예요. 그분이 지금 걸어 다녀도 그분 것이에요. */
   isBedTaken(bed: number): boolean;
+  /** 다른 분의 침대를 눌렀어요. 그분 메뉴를 보여 줘요. */
+  othersBed(bed: number): void;
   walkTo(x: number, z: number): void;
   getUp(): void;
   /** 다른 분이 먼저 침대를 차지했을 때예요. moving이면 침대를 옮기려던 때예요. */
@@ -161,10 +166,17 @@ export interface PlayerControls {
   /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
   setBedPicker(picker: ((bed: number) => void) | null): void;
   /**
-   * 누운 채로 다른 빈 침대를 누르면 옮길지 묻는 곳이에요. 옮기기로 하면 proceed를 불러요.
+   * 내 침대가 있는데 다른 빈 침대를 누르면 옮길지 묻는 곳이에요. 옮기기로 하면 proceed를 불러요.
    * null이면 묻지 않고 바로 옮겨요.
    */
   setMoveConfirm(ask: ((bed: number, proceed: () => void) => void) | null): void;
+  /**
+   * 아직 내 침대가 없을 때 빈 침대를 누르면 "이 침대를 쓰시겠어요?"를 묻는 곳이에요. 쓰기로 하면 proceed를 불러요.
+   * null이면 묻지 않고 바로 받아요.
+   */
+  setClaimConfirm(ask: ((bed: number, proceed: () => void) => void) | null): void;
+  /** 서버가 알려 준 내 침대예요. 다르게 누워 있었으면 일어나요. */
+  setOwnedBed(bed: number | null): void;
   /** 현관으로 병동에 들어설 때마다 불러요. 간호사가 인사해요. */
   setLobbyListener(listener: (() => void) | null): void;
   /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
@@ -192,6 +204,8 @@ export interface PlayerControls {
   readonly lyingBed: number | null;
   /** 쓰고 있거나 눕으러 가는 침대예요. */
   readonly claimedBed: number | null;
+  /** 배정받은 내 침대예요. 걸어 다녀도 그대로예요. 문병객이거나 아직 고르지 않았으면 null이에요. */
+  readonly ownedBed: number | null;
 }
 
 /** 아바타와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동, 침대를 탭하면 눕기예요. */
@@ -291,7 +305,8 @@ export function createPlayerControls(
   let shownZ = position.z;
   let path: Point[] = [];
 
-  const bedGate = createLocalBedGate();
+  /** 배정받은 내 침대예요. 서버에 이어져 있으면 서버가 정한 값이고, 혼자일 때는 이 화면에서 정해요. */
+  let ownedBed: number | null = null;
   let flow: BedFlow = FREE;
   let outfit = initialChoice.outfit;
   /** 처음에는 현관을 바라봐요. */
@@ -312,6 +327,7 @@ export function createPlayerControls(
   let afterWalk: (() => void) | null = null;
   let net: PlayerNet | null = null;
   let moveConfirm: ((bed: number, proceed: () => void) => void) | null = null;
+  let claimConfirm: ((bed: number, proceed: () => void) => void) | null = null;
   let lobbyListener: (() => void) | null = null;
   /** 가장 최근에 침대를 물어본 번호예요. 답이 늦게 오면 이미 다른 곳을 눌렀는지 견줘요. */
   let askToken = 0;
@@ -379,7 +395,6 @@ export function createPlayerControls(
 
   const applyStep = (step: FlowStep): void => {
     flow = step.flow;
-    if (step.release !== undefined) bedGate.release(step.release);
     if (step.walk) startWalk(step.walk);
     if (step.bowAtBed !== undefined) {
       const bed = BEDS[step.bowAtBed];
@@ -389,55 +404,79 @@ export function createPlayerControls(
     }
   };
 
-  /** 침대로 가서 누워요. 서버에 이어져 있으면 먼저 물어보고, 허락받으면 걸어가요. moving은 침대를 옮기는 중이에요. */
-  const goToBed = (bed: number, token: number, moving: boolean): void => {
-    const canLie = outfit === "patient";
-    const mine =
+  /** 내 침대로 가서 누워요. 이미 누워 있으면 일어나요. 서버에 이어져 있으면 먼저 알리고, 허락받으면 걸어가요. */
+  const lieOnOwnBed = (bed: number, token: number): void => {
+    const already =
       (flow.kind === "heading" || flow.kind === "entering" || flow.kind === "lying") && flow.bed === bed;
-    if (net && canLie && !mine) {
-      if (net.isBedTaken(bed)) {
-        net.bedRefused(moving);
+    if (!net || already) {
+      applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
+      return;
+    }
+    const asking = net;
+    void asking.askBed(bed).then((granted) => {
+      if (token !== askToken) {
+        // 그사이 다른 곳을 눌렀어요. 서버는 누운 줄 아니 일어났다고 알려요. 침대는 그대로 내 것이에요.
+        if (granted && claimedOf(flow) !== bed) asking.getUp();
         return;
       }
-      const asking = net;
-      void asking.askBed(bed).then((granted) => {
-        if (token !== askToken) {
-          // 그사이 다른 곳을 눌렀어요. 받은 침대가 필요 없으면 돌려줘요.
-          if (granted && lastClaimed === null) asking.getUp();
-          return;
-        }
-        if (!granted) {
-          // 서버는 침대를 내주지 않을 때 원래 침대를 그대로 둬요. 여기서도 그대로 누워 있어요.
-          asking.bedRefused(moving);
-          return;
-        }
-        applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
-      });
+      if (granted) applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
+    });
+  };
+
+  /** 침대를 내 침대로 받고 누우러 가요. 서버가 먼저 온 사람에게 주고, 받은 뒤에야 걸어가요. */
+  const claimAndLie = (bed: number, token: number, moving: boolean): void => {
+    if (!net) {
+      ownedBed = bed;
+      lieOnOwnBed(bed, token);
       return;
     }
-    if (canLie && !mine && !bedGate.isFree(bed)) {
-      net?.bedRefused(moving);
-      return;
-    }
-    applyStep(tapBed(flow, bed, { canLie, isFree: bedGate.isFree(bed) }, BED_TRANSITION_SECONDS));
+    const asking = net;
+    void asking.claimBed(bed).then((granted) => {
+      if (!granted) {
+        // 서버는 침대를 내주지 않을 때 원래 침대를 그대로 둬요. 여기서도 그대로예요.
+        asking.bedRefused(moving);
+        return;
+      }
+      ownedBed = bed;
+      // 그사이 다른 곳을 눌렀어도 받은 침대는 내 것이에요. 걸어가지만 않아요.
+      if (token !== askToken) return;
+      lieOnOwnBed(bed, token);
+    });
   };
 
   const chooseBed = (bed: number): void => {
     afterUp = null;
     afterWalk = null;
     const token = ++askToken;
-    const canLie = outfit === "patient";
-    const moving = needsMoveConfirm(flow, bed, canLie);
-    const taken = net ? net.isBedTaken(bed) : !bedGate.isFree(bed);
-    if (moving && moveConfirm && !taken) {
-      // 누운 채로 다른 빈 침대를 눌렀어요. 옮길지 먼저 묻고, 그사이 다른 곳을 누르면 잊어요.
-      moveConfirm(bed, () => {
-        if (token !== askToken || !needsMoveConfirm(flow, bed, outfit === "patient")) return;
-        goToBed(bed, token, true);
-      });
-      return;
+    const intent = bedTapIntent(bed, {
+      canLie: outfit === "patient",
+      ownedBed,
+      takenByOther: net ? net.isBedTaken(bed) : false,
+    });
+    switch (intent) {
+      case "visit":
+        applyStep(tapBed(flow, bed, { canLie: false, isFree: true }, BED_TRANSITION_SECONDS));
+        return;
+      case "own":
+        lieOnOwnBed(bed, token);
+        return;
+      case "others":
+        net?.othersBed(bed);
+        return;
+      case "claim":
+      case "move": {
+        const moving = intent === "move";
+        const ask = moving ? moveConfirm : claimConfirm;
+        // 묻는 사이 다른 곳을 누르면 잊어요.
+        const proceed = (): void => {
+          if (token !== askToken || outfit !== "patient") return;
+          claimAndLie(bed, token, moving);
+        };
+        if (ask) ask(bed, proceed);
+        else proceed();
+        return;
+      }
     }
-    goToBed(bed, token, moving);
   };
 
   const handleTap = (clientX: number, clientY: number): void => {
@@ -516,7 +555,11 @@ export function createPlayerControls(
     setChoice(choice) {
       avatar.setChoice(choice);
       outfit = choice.outfit;
-      if (outfit === "visitor") applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
+      if (outfit === "visitor") {
+        // 문병객으로 바꾸면 서버가 침대를 반납해요. 여기서도 비워요.
+        ownedBed = null;
+        applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
+      }
     },
     playGesture(next) {
       if (!canStartGesture(flow)) return;
@@ -555,6 +598,22 @@ export function createPlayerControls(
     },
     setMoveConfirm(ask) {
       moveConfirm = ask;
+    },
+    setClaimConfirm(ask) {
+      claimConfirm = ask;
+    },
+    setOwnedBed(bed) {
+      ownedBed = bed;
+      const using = claimedOf(flow);
+      if (using === null || using === bed) return;
+      // 서버가 아는 내 침대와 다른 침대에 있거나 가는 중이었어요. 일어나요.
+      afterUp = null;
+      if (flow.kind === "heading") {
+        flow = FREE;
+        path = [];
+        return;
+      }
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
     },
     setLobbyListener(listener) {
       lobbyListener = listener;
@@ -640,6 +699,9 @@ export function createPlayerControls(
     get claimedBed() {
       return claimedOf(flow);
     },
+    get ownedBed() {
+      return ownedBed;
+    },
     update(dt) {
       const stillMotion = reduceMotion.matches;
       applyStep(tickFlow(flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
@@ -680,7 +742,7 @@ export function createPlayerControls(
         }
 
         if (path.length === 0 && flow.kind === "heading") {
-          const granted = flow.lie && bedGate.request(flow.bed);
+          const granted = flow.lie && flow.bed === ownedBed;
           applyStep(arrivedAtBed(flow, granted));
         }
         if (path.length === 0 && afterWalk) {

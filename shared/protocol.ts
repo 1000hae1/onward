@@ -3,7 +3,7 @@ import { ADDRESS_PATTERN } from "./left-blessings.ts";
 import { APPLE_NOTE_MAX, APPLE_PHRASES, APPLE_SLOTS } from "./apple-limits.ts";
 
 /** 프로토콜 버전. 화면과 Worker가 함께 쓰는 모든 메시지에 v 필드로 담아요. */
-export const PROTOCOL_VERSION = 6;
+export const PROTOCOL_VERSION = 7;
 /** 화면이 보내는 메시지는 이보다 길면 읽지 않고 버려요. */
 export const MAX_MESSAGE_BYTES = 1024;
 /** 화면이 읽는 서버 메시지의 최대 글자 수예요. 손님 30명과 잠시 끊긴 사람이 다 든 snapshot도 넉넉히 들어가요. */
@@ -11,6 +11,7 @@ export const MAX_SERVER_MESSAGE_CHARS = 65_536;
 /** 연결 유지용 글자예요. 서버가 객체를 깨우지 않고 자동으로 답해요. */
 export const PING = "ping";
 export const PONG = "pong";
+/** 병동(인스턴스) 하나의 정원이에요. 침대 수와 따로예요. 침대가 다 차도 들어와 머물 수 있고, 침대만 받지 못해요. 문병객은 세지 않아요. */
 export const WARD_CAPACITY = 30;
 export const BED_COUNT = 36;
 
@@ -78,9 +79,18 @@ export const clientMessageSchema = z.union([
     visitToken: address.optional(),
     /** 설정의 "안아 주기 요청 받지 않기"예요. */
     hugsOff: z.boolean().optional(),
+    /** 이 브라우저가 기억하는 지난번 내 침대예요. 비어 있으면 서버가 먼저 돌려줘요. 판단은 서버가 해요. */
+    seat: bedId.optional(),
   }),
+  /** 걸어가요. 누워 있었으면 일어나지만 침대 배정은 그대로예요. */
   z.object({ v, type: z.literal("walk-to"), x: coordinate, z: coordinate }),
+  /** 이 침대를 내 침대로 받고 싶어요. 처음 고를 때와 옮길 때 써요. 답은 bed-granted나 bed-unavailable이에요. */
+  z.object({ v, type: z.literal("claim-bed"), bedId }),
+  /** 내 침대를 내놓아요. */
+  z.object({ v, type: z.literal("release-bed") }),
+  /** 내 침대에 누워요. 배정받은 침대에만 누울 수 있어요. */
   z.object({ v, type: z.literal("lie-down"), bedId }),
+  /** 침대에서 내려와요. 배정은 그대로예요. */
   z.object({ v, type: z.literal("get-up") }),
   z
     .object({ v, type: z.literal("bless"), targetId: publicId.optional(), bedId: bedId.optional() })
@@ -120,7 +130,10 @@ export const guestSchema = z.object({
   withCat: z.boolean(),
   x: coordinate,
   z: coordinate,
+  /** 배정받은 침대예요. 걸어 다녀도 그대로라 이름표도 이 값을 따라요. */
   bed: bedId.nullable(),
+  /** 지금 그 침대에 누워 있는지예요. */
+  lying: z.boolean(),
   address,
   /** 지금 안아 주기 요청을 받을 수 있는지예요. 잠들었는지, 설정으로 껐는지는 나누지 않아요. */
   hugOk: z.boolean(),
@@ -164,6 +177,10 @@ export const wardEventSchema = z.discriminatedUnion("kind", [
   z.object({ kind: z.literal("leave"), id: publicId }),
   z.object({ kind: z.literal("walk"), id: publicId, x: coordinate, z: coordinate }),
   z.object({ kind: z.literal("lie"), id: publicId, bedId }),
+  /** 누군가 침대를 배정받았어요(처음 고르거나 옮겼어요). 아직 눕지는 않았어요. */
+  z.object({ kind: z.literal("bed-claimed"), id: publicId, bedId }),
+  /** 누군가 침대를 내놓았어요. */
+  z.object({ kind: z.literal("bed-released"), id: publicId }),
   z.object({ kind: z.literal("get-up"), id: publicId }),
   z.object({ kind: z.literal("bless"), id: publicId, bedId: bedId.nullable(), targetId: publicId.nullable() }),
   z.object({ kind: z.literal("bow"), id: publicId, phrase }),

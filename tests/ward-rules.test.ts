@@ -15,7 +15,6 @@ import {
   nextInstance,
   readVersion,
   toAway,
-  claimBed,
   clampToWalkable,
   giftAllowedNow,
   giftSlot,
@@ -29,7 +28,7 @@ import {
 import type { GuestRecord } from "../shared/ward-rules.ts";
 
 const hello = (over: Partial<VerifiedHello> = {}): VerifiedHello => ({
-  v: 6,
+  v: 7,
   type: "hello",
   guestId: "guest-aaaa-0001",
   animal: "otter",
@@ -55,21 +54,21 @@ const record = (id: string, over: Partial<GuestRecord> = {}): GuestRecord => ({
   ...over,
 });
 
-test("메시지는 v=5이고 형식이 맞을 때만 읽어요", () => {
-  const good = JSON.stringify({ v: 6, type: "walk-to", x: 1, z: 2 });
-  assert.deepEqual(parseMessage(clientMessageSchema, good), { v: 6, type: "walk-to", x: 1, z: 2 });
+test("메시지는 v=7이고 형식이 맞을 때만 읽어요", () => {
+  const good = JSON.stringify({ v: 7, type: "walk-to", x: 1, z: 2 });
+  assert.deepEqual(parseMessage(clientMessageSchema, good), { v: 7, type: "walk-to", x: 1, z: 2 });
   for (const bad of [
     // 예전 버전(v1) 메시지는 읽지 않아요.
     JSON.stringify({ v: 1, type: "walk-to", x: 1, z: 2 }),
     JSON.stringify({ type: "walk-to", x: 1, z: 2 }),
-    JSON.stringify({ v: 6, type: "walk-to", x: "1", z: 2 }),
-    JSON.stringify({ v: 6, type: "fly" }),
-    JSON.stringify({ v: 6, type: "bow", phrase: 6 }),
+    JSON.stringify({ v: 7, type: "walk-to", x: "1", z: 2 }),
+    JSON.stringify({ v: 7, type: "fly" }),
+    JSON.stringify({ v: 7, type: "bow", phrase: 6 }),
     // 예전 버전(v3) 메시지도 읽지 않아요.
     JSON.stringify({ v: 4, type: "walk-to", x: 1, z: 2 }),
-    JSON.stringify({ v: 6, type: "gift", item: 0 }),
-    JSON.stringify({ v: 6, type: "gift", item: 0, bedId: 1, targetId: "abcd1234" }),
-    JSON.stringify({ v: 6, type: "lie-down", bedId: 36 }),
+    JSON.stringify({ v: 7, type: "gift", item: 0 }),
+    JSON.stringify({ v: 7, type: "gift", item: 0, bedId: 1, targetId: "abcd1234" }),
+    JSON.stringify({ v: 7, type: "lie-down", bedId: 36 }),
     "{",
     "ping",
     "x".repeat(5000),
@@ -80,15 +79,15 @@ test("메시지는 v=5이고 형식이 맞을 때만 읽어요", () => {
 });
 
 test("bless와 gift는 사람이나 침대 가운데 하나만 받아요", () => {
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless", bedId: 3 })));
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless", targetId: "abcd1234" })));
-  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 6, type: "bless" })), null);
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 7, type: "bless", bedId: 3 })));
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 7, type: "bless", targetId: "abcd1234" })));
+  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 7, type: "bless" })), null);
 });
 
 test("서버 메시지도 같은 방법으로 검사해요", () => {
-  const event = JSON.stringify({ v: 6, type: "event", event: { kind: "bow", id: "abcd1234", phrase: 2 } });
+  const event = JSON.stringify({ v: 7, type: "event", event: { kind: "bow", id: "abcd1234", phrase: 2 } });
   assert.ok(parseMessage(serverMessageSchema, event));
-  assert.equal(parseMessage(serverMessageSchema, JSON.stringify({ v: 6, type: "event", event: { kind: "bow", id: "x", phrase: 2 } })), null);
+  assert.equal(parseMessage(serverMessageSchema, JSON.stringify({ v: 7, type: "event", event: { kind: "bow", id: "x", phrase: 2 } })), null);
 });
 
 test("닉네임이 규칙에 어긋나면 들어오지 못해요", () => {
@@ -120,48 +119,6 @@ test("들어오면 앞마당에서 시작하고, 남에게는 guestId를 보이�
   const shown = toPublic(result.record);
   assert.equal("guestId" in shown, false);
   assert.equal(JSON.stringify(shown).includes(result.record.guestId), false);
-});
-
-test("침대는 먼저 처리된 한 사람만 가져가요", () => {
-  const a = record("aaaaaaaa");
-  const b = record("bbbbbbbb");
-  const first = claimBed([a, b], a, 5, 1000);
-  assert.equal(first.granted, true);
-  const guests = [first.record, b];
-  const second = claimBed(guests, b, 5, 1000);
-  assert.equal(second.granted, false);
-  assert.equal(second.record.bed, null);
-  // 같은 사람이 다시 눌러도 그대로예요.
-  assert.equal(claimBed(guests, first.record, 5, 1000).granted, true);
-});
-
-test("다른 침대를 받으면 예전 침대는 비고, 문병객은 눕지 못해요", () => {
-  const a = record("aaaaaaaa", { bed: 1 });
-  const moved = claimBed([a], a, 2, 1000);
-  assert.equal(moved.record.bed, 2);
-  const b = record("bbbbbbbb");
-  assert.equal(claimBed([moved.record, b], b, 1, 1000).granted, true);
-  const visitor = record("cccccccc", { outfit: "visitor" });
-  assert.equal(claimBed([visitor], visitor, 7, 1000).granted, false);
-});
-
-test("침대를 옮기는 사이 다른 분이 먼저 누우면 원래 침대를 그대로 지켜요", () => {
-  const a = { ...record("aaaaaaaa"), bed: 1, lyingSince: 500 };
-  const b = record("bbbbbbbb");
-  // b가 먼저 2번 침대를 받아요.
-  const taken = claimBed([a, b], b, 2, 1000);
-  assert.equal(taken.granted, true);
-  const guests = [a, taken.record];
-  const lost = claimBed(guests, a, 2, 1001);
-  assert.equal(lost.granted, false);
-  assert.equal(lost.record.bed, 1);
-  assert.equal(lost.record.lyingSince, 500);
-  // 빈 침대로 옮기면 원래 침대는 비고, 바로 다른 분이 받을 수 있어요.
-  const moved = claimBed(guests, a, 3, 1002);
-  assert.equal(moved.granted, true);
-  assert.equal(moved.record.bed, 3);
-  const c = record("cccccccc");
-  assert.equal(claimBed([moved.record, taken.record, c], c, 1, 1003).granted, true);
 });
 
 test("문병객으로 바꾸면 침대를 비워요", () => {
@@ -326,16 +283,10 @@ test("고양이 방문은 바뀐 병실만 알려요", () => {
   assert.deepEqual(changedVisits([one], [{ ...one, at: 9000 }]), [{ room: 2, visit: { ...one, at: 9000 } }]);
 });
 
-test("다시 같은 침대를 받으면 누운 시각이 그대로라 고양이 시각도 바뀌지 않아요", () => {
-  const a = record("aaaaaaaa", { bed: 3, lyingSince: 100 });
-  assert.equal(claimBed([a], a, 3, 9999).record.lyingSince, 100);
-  assert.equal(claimBed([a], a, 4, 9999).record.lyingSince, 9999);
-});
-
 test("다른 사람에게 보내는 정보에는 평안 주소가 있고 guestId는 없어요", () => {
   const guest = record("aaaaaaaa", { guestId: "guest-secret-0001", address: "Q".repeat(22) });
   const shown = toPublic(guest);
   assert.equal(shown.address, "Q".repeat(22));
   assert.equal(JSON.stringify(shown).includes("guest-secret-0001"), false);
-  assert.deepEqual(Object.keys(shown).sort(), ["address", "animal", "bed", "hugOk", "id", "nickname", "outfit", "withCat", "x", "z"]);
+  assert.deepEqual(Object.keys(shown).sort(), ["address", "animal", "bed", "hugOk", "id", "lying", "nickname", "outfit", "withCat", "x", "z"]);
 });

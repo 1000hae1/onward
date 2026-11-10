@@ -10,7 +10,8 @@ import type { ClientMessage, ServerMessage, WardEvent } from "../../shared/proto
 import type { NicknameProblem } from "../../shared/nickname";
 import { readVersion } from "../../shared/ward-rules";
 import type { Profile } from "../ui/profile";
-import { loadGuestToken, MAX_INSTANCE, saveGuestToken } from "./ward-params";
+import { BED_COUNT } from "../../shared/protocol";
+import { loadGuestToken, loadSeat, MAX_INSTANCE, saveGuestToken } from "./ward-params";
 import type { WardParams } from "./ward-params";
 
 /** 연결을 유지하려고 보내는 간격이에요. 서버는 깨어나지 않고 자동으로 답해요. */
@@ -103,8 +104,10 @@ export interface WardClient {
   /** 들어가거나, 들어간 뒤 모습을 바꿀 때 보내요. */
   hello(profile: Profile): void;
   send(message: DistributiveOmit<ClientMessage, "v">): void;
-  /** 침대를 달라고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
+  /** 내 침대에 눕겠다고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
   askBed(bed: number): Promise<boolean>;
+  /** 이 침대를 내 침대로 달라고 해요(처음 고르기, 옮기기). 서버에 닿지 않을 때는 바로 허락해요. */
+  claimBed(bed: number): Promise<boolean>;
   /** 방명록 링크로 문병 갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
   setVisit(visit: { token: string; ward: number; instance: number } | null): void;
   readonly ward: number;
@@ -159,7 +162,31 @@ export function createWardClient(
     withCat: current.withCat,
     hugsOff: current.hugsOff,
     ...(visitToken ? { visitToken } : {}),
+    ...seatHint(),
   });
+
+  /** 이 브라우저가 기억하는 지난번 침대예요. 지금 가는 병동·병실과 같을 때만 보내요. 문병 갈 때는 보내지 않아요. */
+  const seatHint = (): { seat?: number } => {
+    if (visitToken) return {};
+    const seat = loadSeat(BED_COUNT);
+    return seat && seat.ward === ward && seat.instance === instance ? { seat: seat.bed } : {};
+  };
+
+  /** 침대 요청을 보내고 bed-granted나 bed-unavailable을 기다려요. 같은 침대의 앞선 요청은 거절로 끝내요. */
+  const askAboutBed = (type: "lie-down" | "claim-bed", bed: number): Promise<boolean> => {
+    if (!online) return Promise.resolve(true);
+    bedAnswers.get(bed)?.(false);
+    return new Promise((resolve) => {
+      bedAnswers.set(bed, resolve);
+      rawSend({ v: PROTOCOL_VERSION, type, bedId: bed });
+      setTimeout(() => {
+        if (bedAnswers.get(bed) === resolve) {
+          bedAnswers.delete(bed);
+          resolve(false);
+        }
+      }, BED_ANSWER_MS);
+    });
+  };
 
   const rawSend = (message: ClientMessage): void => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -430,18 +457,10 @@ export function createWardClient(
       rawSend({ v: PROTOCOL_VERSION, ...message } as ClientMessage);
     },
     askBed(bed) {
-      if (!online) return Promise.resolve(true);
-      bedAnswers.get(bed)?.(false);
-      return new Promise((resolve) => {
-        bedAnswers.set(bed, resolve);
-        rawSend({ v: PROTOCOL_VERSION, type: "lie-down", bedId: bed });
-        setTimeout(() => {
-          if (bedAnswers.get(bed) === resolve) {
-            bedAnswers.delete(bed);
-            resolve(false);
-          }
-        }, BED_ANSWER_MS);
-      });
+      return askAboutBed("lie-down", bed);
+    },
+    claimBed(bed) {
+      return askAboutBed("claim-bed", bed);
     },
   };
 }

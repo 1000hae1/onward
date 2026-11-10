@@ -15,7 +15,6 @@ import {
   alarmToSet,
   catVisits,
   changedVisits,
-  claimBed,
   clampToWalkable,
   expireAway,
   giftAllowedNow,
@@ -67,6 +66,7 @@ import { addPeace } from "../shared/planter.ts";
 import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
 import { shouldGreet } from "../shared/return-rules.ts";
 import { hugAvailable } from "../shared/ward-rules.ts";
+import { claimBed, isLying, lieDown, releaseBed, seatOnEntry, standUp } from "../shared/bed-rules.ts";
 import { headcount, shouldReport } from "../shared/presence-rules.ts";
 import { departureOf, MAX_DEPARTURES_PER_REPORT } from "../shared/metrics-rules.ts";
 
@@ -684,8 +684,17 @@ export class WardRoom extends DurableObject<Env> {
     // 새로 들어오면 directory에서 새 평안 주소를 받고, 없는 동안 도착한 평안을 꺼내요.
     // 30초 안에 돌아온 사람은 쓰던 주소를 그대로 써서 directory에 묻지 않아요.
     // 링크 주인이면 이번 주소와 병동 위치를 directory에 함께 적어요. 문병객은 자기 링크의 위치를 바꾸지 않아요.
+    // 새로 들어온 환자에게는 이 브라우저가 기억하는 지난번 침대를 먼저 돌려줘요. 비어 있을 때만이에요.
+    const seated =
+      admission.restored || admission.record.visit
+        ? admission.record
+        : seatOnEntry(
+            this.everyone(ws).filter((guest) => guest.id !== admission.replaces),
+            admission.record,
+            hello.seat,
+          );
     let record: GuestRecord = {
-      ...admission.record,
+      ...seated,
       // 30초 안에 돌아온 사람은 처음 들어온 시각을 그대로 써요.
       joinedAt: admission.record.joinedAt ?? now,
       key,
@@ -748,6 +757,8 @@ export class WardRoom extends DurableObject<Env> {
     this.refreshCatVisits(before);
     await this.syncPresence(now);
     this.countVisitor(key, now);
+    // 지난번 침대를 다시 받았으면 그 침대에 남겨져 있던 평안을 전해요.
+    if (!admission.restored && record.bed !== null) await this.deliverLeft(ws, record.bed, record, now);
     await this.openWindowIfMorning(roomAt(record.x, record.z)?.index ?? null, now);
     await this.keepTidy();
     // 새로 온 문병객이면 주인 화면에만 알려요.
@@ -784,12 +795,12 @@ export class WardRoom extends DurableObject<Env> {
         if (spot.x !== message.x || spot.z !== message.z) {
           this.send(ws, { v: PROTOCOL_VERSION, type: "position-corrected", x: spot.x, z: spot.z });
         }
-        // 걸어가면 누워 있던 침대는 비워요.
-        const hadBed = record.bed !== null;
+        // 걸어가면 누워 있던 침대에서 내려와요. 침대 배정은 그대로예요.
+        const hadBed = record.lyingSince !== null;
         const roomChanged = roomAt(record.x, record.z)?.index !== roomAt(spot.x, spot.z)?.index;
         // 고양이 방문은 병실을 옮기거나 일어날 때만 따지니, 그때만 저장소를 읽어요.
         const before = hadBed || roomChanged ? this.lastVisits() : [];
-        save({ ...record, x: spot.x, z: spot.z, bed: null, lyingSince: null });
+        save({ ...record, x: spot.x, z: spot.z, lyingSince: null });
         if (hadBed) this.broadcast({ kind: "get-up", id: record.id }, ws);
         this.broadcast({ kind: "walk", id: record.id, x: spot.x, z: spot.z }, ws);
         // 병실을 옮기거나 침대에서 일어났을 때만 고양이 방문을 다시 따져요.
@@ -797,8 +808,44 @@ export class WardRoom extends DurableObject<Env> {
         if (roomChanged) await this.openWindowIfMorning(roomAt(spot.x, spot.z)?.index ?? null, nowMs);
         return;
       }
+      case "claim-bed": {
+        // 먼저 처리된 사람이 가져가요. 잠시 끊긴 사람의 침대도 그 사람 것이에요.
+        const result = claimBed(this.everyone(ws), record, message.bedId);
+        if (!result.granted) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "bed-unavailable", bedId: message.bedId });
+          return;
+        }
+        const changed = result.record.bed !== record.bed;
+        const wasLying = record.lyingSince !== null;
+        const before = changed && wasLying ? this.lastVisits() : null;
+        save(result.record);
+        this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
+        if (!changed) return;
+        // 옮기면 원래 침대에서 먼저 내려와요. 다른 사람 화면의 이름표는 bed-claimed를 따라요.
+        if (wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "bed-claimed", id: record.id, bedId: message.bedId }, ws);
+        if (before) this.refreshCatVisits(before);
+        // 링크 주인이면 문병객이 찾아올 침대를 알려요.
+        if (record.linked && record.key) {
+          await this.directory().reportLocation(record.key, { ...this.place(), bed: message.bedId });
+        }
+        // 그 침대에 남겨져 있던 평안을 새 주인에게 전하고 바로 지워요.
+        await this.deliverLeft(ws, message.bedId, record, nowMs);
+        return;
+      }
+      case "release-bed": {
+        if (record.bed === null) return;
+        const wasLying = record.lyingSince !== null;
+        const before = wasLying ? this.lastVisits() : null;
+        save(releaseBed(record).record);
+        if (wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "bed-released", id: record.id }, ws);
+        if (before) this.refreshCatVisits(before);
+        return;
+      }
       case "lie-down": {
-        const result = claimBed(this.everyone(), record, message.bedId, nowMs);
+        // 내 침대에만 누워요. 배정은 claim-bed로 먼저 받아요.
+        const result = lieDown(record, message.bedId, nowMs);
         if (!result.granted) {
           this.send(ws, { v: PROTOCOL_VERSION, type: "bed-unavailable", bedId: message.bedId });
           return;
@@ -810,19 +857,15 @@ export class WardRoom extends DurableObject<Env> {
         this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
         this.broadcast({ kind: "lie", id: record.id, bedId: message.bedId }, ws);
         this.refreshCatVisits(before);
-        // 링크 주인이면 문병객이 찾아올 침대를 알려요.
-        if (record.linked && record.key) {
-          await this.directory().reportLocation(record.key, { ...this.place(), bed: message.bedId });
-        }
-        // 그 침대에 남겨져 있던 평안을 전하고 바로 지워요.
-        await this.deliverLeft(ws, message.bedId, record, nowMs);
         await this.openWindowIfMorning(BEDS[message.bedId].roomIndex, nowMs);
         return;
       }
       case "get-up": {
-        if (record.bed === null) return;
+        // 침대에서 내려오기만 해요. 침대는 계속 내 것이에요.
+        const next = standUp(record);
+        if (!next) return;
         const before = this.lastVisits();
-        save({ ...record, bed: null, lyingSince: null });
+        save(next);
         this.broadcast({ kind: "get-up", id: record.id }, ws);
         this.refreshCatVisits(before);
         return;
@@ -1053,23 +1096,25 @@ export class WardRoom extends DurableObject<Env> {
         if (!hugStillPossible(from.record, record)) return;
         // 안아 주는 사람은 상대 곁으로 다가가요. 누워 있으면 침대 옆자리예요.
         // 안아 주는 사람이 누워 있었으면 일어나서 가요.
-        const spot = hugSpot(from.record, record);
-        const before = from.record.bed !== null ? this.lastVisits() : null;
+        // 침대 배정은 그대로 두고 자세만 바꿔요.
+        const lyingBed = isLying(record) ? record.bed : null;
+        const spot = hugSpot(from.record, { x: record.x, z: record.z, bed: lyingBed });
+        const before = from.record.lyingSince !== null ? this.lastVisits() : null;
         this.save(from.ws, from.ws.deserializeAttachment() as Attachment, {
           ...from.record,
           x: spot.x,
           z: spot.z,
-          bed: null,
           lyingSince: null,
         });
-        this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: record.bed });
+        this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: lyingBed });
         if (before) this.refreshCatVisits(before);
         return;
       }
       case "discharge": {
         if (canDischarge(record) !== "ok") return deny("discharge", "no-bed");
         const before = this.lastVisits();
-        const room = record.bed !== null ? BEDS[record.bed].roomIndex : (roomAt(record.x, record.z)?.index ?? null);
+        // 지금 서 있는 병실이 먼저이고, 병실 밖이면 내 침대가 있는 병실이에요.
+        const room = roomAt(record.x, record.z)?.index ?? (record.bed !== null ? BEDS[record.bed].roomIndex : null);
         const next = startDischarge({ ...record, lastAction: { ...record.lastAction, discharge: nowMs } }, nowMs, message.closeLink);
         save(next);
         const key = record.key ?? (await hashGuest(record.guestId));
@@ -1077,7 +1122,7 @@ export class WardRoom extends DurableObject<Env> {
         if (message.closeLink) await directory.disableGuestbookLink(key);
         await directory.markDischarged(key, nowMs);
         this.send(ws, { v: PROTOCOL_VERSION, type: "discharge-started", until: nowMs + FAREWELL_MS });
-        // 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
+        // 퇴원하면 침대를 바로 반납해요. 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
         this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
         if (room !== null) {
           const text = JSON.stringify({
@@ -1242,7 +1287,7 @@ export class WardRoom extends DurableObject<Env> {
     return this.env.DIRECTORY.getByName("directory");
   }
 
-  /** 아무도 누워 있지 않은 침대예요. 잠시 끊긴 사람의 침대도 누워 있는 것으로 봐요. */
+  /** 아무에게도 배정되지 않은 침대예요. 잠시 끊긴 사람의 침대도 그 사람 것이에요. */
   private bedIsEmpty(bed: number): boolean {
     return !this.everyone().some((guest) => guest.bed === bed);
   }
