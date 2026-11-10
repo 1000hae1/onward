@@ -2,7 +2,7 @@ import { Group, Mesh, Object3D } from "three";
 import type { Vector3 } from "three";
 import { ARM_REACH, ARM_Y, AVATAR_HEIGHT, FOOT_X, getAvatarKit, getAvatarMaterial, HEAD_CENTER_Y } from "./kit";
 import type { Pose } from "./pose";
-import { speciesById } from "./species";
+import { speciesById, speciesScale } from "./species";
 import type { AvatarChoice } from "./species";
 import { EGG_DEPTH, eggRadius, eggY } from "./egg";
 
@@ -36,6 +36,7 @@ const LANTERN_FORWARD = 0.12;
 
 export interface Avatar {
   readonly root: Group;
+  readonly size: number;
   setChoice(choice: AvatarChoice): void;
   /** 자리와 방향을 정해요. rotationY 0은 +z 쪽을 봐요. */
   place(x: number, z: number, yaw: number): void;
@@ -65,6 +66,8 @@ export function createAvatar(choice: AvatarChoice): Avatar {
 
   const root = new Group();
   const base = new Group();
+  let size = speciesScale(choice.species);
+  base.scale.setScalar(size);
   const shell = new Group();
   const squash = new Group();
   const armPivotLeft = new Group();
@@ -95,8 +98,11 @@ export function createAvatar(choice: AvatarChoice): Avatar {
 
   return {
     root,
+    get size() { return size; },
     setChoice(next) {
       const look = lookOf(next);
+      size = speciesScale(next.species);
+      base.scale.setScalar(size);
       body.geometry = look.body;
       armLeft.geometry = look.arm;
       armRight.geometry = look.armRight;
@@ -114,7 +120,7 @@ export function createAvatar(choice: AvatarChoice): Avatar {
     lanternWorld(target) {
       head.getWorldPosition(target);
       // 서 있으면 머리 꼭대기 위로 떠 있고, 누우면 베개 위로 조금 내려와요.
-      target.y += LANTERN_STAND_ABOVE + (LANTERN_LIE_ABOVE - LANTERN_STAND_ABOVE) * lie;
+      target.y += (LANTERN_STAND_ABOVE + (LANTERN_LIE_ABOVE - LANTERN_STAND_ABOVE) * lie) * size;
       // 얼굴에도 빛이 닿도록 바라보는 쪽으로 조금 앞에 떠요.
       target.x += Math.sin(root.rotation.y) * LANTERN_FORWARD;
       target.z += Math.cos(root.rotation.y) * LANTERN_FORWARD;
@@ -129,7 +135,7 @@ export function createAvatar(choice: AvatarChoice): Avatar {
     apply(pose) {
       standY = pose.bedLift * BED_STAND_Y;
       lie = pose.bedLie;
-      base.position.y = pose.bedLift * BED_STAND_Y + pose.bedLie * BED_LIE_RAISE;
+      base.position.y = pose.bedLift * BED_STAND_Y + pose.bedLie * BED_LIE_RAISE * size;
       base.rotation.x = pose.bedLie * LYING_PITCH;
       shell.position.y = pose.bob;
       shell.rotation.set(pose.lean, pose.twist, pose.sway);

@@ -312,3 +312,18 @@ test("침대 탭은 시선이 처음 닿는 침대만 잡고, 벽 너머는 잡�
   const blocked = pickBox({ x: 0, y: 0.6, z }, { x, y: 0.6, z }, BED_BOXES, WALL_BOXES);
   assert.equal(blocked, null);
 });
+
+
+test("동물 크기는 곰, 사슴, 나머지 순이고 모습을 바꿔도 반영돼요", async () => {
+  const { createAvatar } = await import("../src/avatar/avatar.ts");
+  const avatar = createAvatar({ species: "rabbit", outfit: "patient" });
+  const point = new Vector3();
+  const normalHead = avatar.headWorld(point).y;
+  for (const [species, scale] of [["bear", 1.3], ["deer", 1.1], ["otter", 1], ["penguin", 1], ["rabbit", 1]] as const) {
+    avatar.setChoice({ species, outfit: "patient" });
+    assert.equal(avatar.size, scale);
+    assert.ok(Math.abs(avatar.headWorld(point).y - normalHead * scale) < 1e-8);
+    // 침대 높이는 동물의 크기로 확대하지 않아요.
+    assert.equal(avatar.root.scale.y, 1);
+  }
+});

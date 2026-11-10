@@ -136,9 +136,9 @@ export function createRemoteGuests(
   const lanternPoint = new Vector3();
 
   const handOf = (remote: Remote): Spot => ({
-    x: remote.shownX + Math.sin(remote.yaw) * HAND_REACH,
-    y: HAND_HEIGHT,
-    z: remote.shownZ + Math.cos(remote.yaw) * HAND_REACH,
+    x: remote.shownX + Math.sin(remote.yaw) * HAND_REACH * remote.avatar.size,
+    y: HAND_HEIGHT * remote.avatar.size,
+    z: remote.shownZ + Math.cos(remote.yaw) * HAND_REACH * remote.avatar.size,
   });
 
   const startWalk = (remote: Remote, order: WalkOrder): void => {
@@ -233,7 +233,7 @@ export function createRemoteGuests(
     if (event.targetId === null) return null;
     if (event.targetId === me) return myHead();
     const target = remotes.get(event.targetId);
-    return target ? { x: target.shownX, y: HEAD_HEIGHT, z: target.shownZ } : null;
+    return target ? { x: target.shownX, y: HEAD_HEIGHT * target.avatar.size, z: target.shownZ } : null;
   };
 
   let myId: string | null = null;
@@ -447,7 +447,7 @@ export function createRemoteGuests(
     },
     headSpot(id) {
       const remote = remotes.get(id);
-      return remote ? { x: remote.shownX, y: HEAD_HEIGHT, z: remote.shownZ } : null;
+      return remote ? { x: remote.shownX, y: HEAD_HEIGHT * remote.avatar.size, z: remote.shownZ } : null;
     },
     lanterns(sink) {
       for (const remote of remotes.values()) {

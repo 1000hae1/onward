@@ -617,9 +617,9 @@ export function createPlayerControls(
     },
     handSpot() {
       return {
-        x: shownX + Math.sin(yaw) * HAND_REACH,
-        y: HAND_HEIGHT,
-        z: shownZ + Math.cos(yaw) * HAND_REACH,
+        x: shownX + Math.sin(yaw) * HAND_REACH * avatar.size,
+        y: HAND_HEIGHT * avatar.size,
+        z: shownZ + Math.cos(yaw) * HAND_REACH * avatar.size,
       };
     },
     headWorld(target) {

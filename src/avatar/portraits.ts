@@ -1,6 +1,5 @@
-import { DirectionalLight, HemisphereLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
+import { Box3, Sphere, Vector3, DirectionalLight, HemisphereLight, PerspectiveCamera, Scene, WebGLRenderer } from "three";
 import { createAvatar } from "./avatar";
-import { AVATAR_HEIGHT } from "./kit";
 import { createPose } from "./pose";
 import { SPECIES } from "./species";
 import type { Outfit, SpeciesId } from "./species";
@@ -38,15 +37,25 @@ function renderAll(): Map<string, string> {
   scene.add(key);
 
   const camera = new PerspectiveCamera(26, 1, 0.1, 10);
-  const middle = AVATAR_HEIGHT * 0.52;
-  camera.position.set(0.45, middle + 0.32, 1.85);
-  camera.lookAt(0, middle, 0);
 
   const avatar = createAvatar({ species: SPECIES[0].id, outfit: "patient" });
   // 귀와 꼬리가 보이도록 살짝 비스듬히 세워요.
   avatar.place(0, 0, 0.42);
   avatar.apply(createPose());
   scene.add(avatar.root);
+
+  // 가장 큰 체격과 귀·뿔까지 담는 공통 구도로 동물 사이의 크기 차이를 유지해요.
+  const bounds = new Box3();
+  for (const spec of SPECIES) {
+    for (const outfit of OUTFITS) {
+      avatar.setChoice({ species: spec.id, outfit });
+      bounds.union(new Box3().setFromObject(avatar.root));
+    }
+  }
+  const sphere = bounds.getBoundingSphere(new Sphere());
+  const distance = sphere.radius * 1.08 / Math.sin(camera.fov * Math.PI / 360);
+  camera.position.copy(sphere.center).add(new Vector3(0.45, 0.32, 1.85).normalize().multiplyScalar(distance));
+  camera.lookAt(sphere.center);
 
   for (const spec of SPECIES) {
     for (const outfit of OUTFITS) {
