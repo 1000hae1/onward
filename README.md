@@ -57,7 +57,7 @@ curl -s "$ONWARD/admin/metrics?days=30" -H "Authorization: Bearer $ADMIN_KEY"
 
 답의 `metrics[]`는 최근 날짜부터예요. 하루 입장 수(`entries`), 서로 다른 사람 수(`uniqueGuests`),
 다시 온 사람 비율(`returningRate`), 평균 머문 시간(`avgStayMinutes`), 평안 빌기 수(`blessings`),
-문병 링크로 들어온 수(`visitEntries`)만 있어요. 사람을 알 수 있는 값은 없어요.
+방명록 링크로 문병 온 수(`visitEntries`)만 있어요. 사람을 알 수 있는 값은 없어요.
 
 ### 최근 신고 보기
 
@@ -73,11 +73,11 @@ curl -s "$ONWARD/admin/reports?limit=50" -H "Authorization: Bearer $ADMIN_KEY"
 ```sh
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"불편한 닉네임을 반복해서 써요"}'
 
 curl -s -X POST "$ONWARD/admin/block" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
+  -d '{"v":6,"ipHash":"<64자 해시>","reason":"새 게스트를 계속 만들어 신고해요"}'
 ```
 
 막힌 사람에게는 "지금은 들어올 수 없어요"만 보여요. 지금 병실에 있으면 바로 내보내요. 차단은 30일 뒤에 풀려요.
@@ -87,36 +87,48 @@ curl -s -X POST "$ONWARD/admin/block" \
 ```sh
 curl -s -X POST "$ONWARD/admin/reset-nickname" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"닉네임이 불편하다는 신고 3건"}'
 ```
 
 가림도 함께 풀려요. 같은 닉네임으로 다시 바꾸면 서버가 또 자동 닉네임으로 바꿔요. 신고된 적이 있는 사람에게만 할 수 있어요.
 
-### 문병 링크 끄기
+### 방명록 링크 끄기
 
 ```sh
-curl -s -X POST "$ONWARD/admin/revoke-visit-link" \
+curl -s -X POST "$ONWARD/admin/revoke-guestbook-link" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"링크가 여러 곳에 퍼졌어요"}'
 ```
+
+사과 달기와 문병이 모두 막혀요. 이미 달린 사과는 그대로예요.
+
+### 사과 숨기기
+
+```sh
+curl -s -X POST "$ONWARD/admin/hide-apple" \
+  -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
+  -d '{"v":6,"appleId":123,"reason":"주인이 불편하다고 알려 왔어요"}'
+```
+
+사과를 바로 지우고 audit_log에 사과 번호와 사유만 남겨요. 사과 번호는 주인 화면의 WS 메시지(`guestbook`의 `apples[].id`)에 있어요.
 
 ### 가림 풀기 (살펴보니 문제가 없을 때)
 
 ```sh
 curl -s -X POST "$ONWARD/admin/clear-flag" \
   -H "Authorization: Bearer $ADMIN_KEY" -H "Content-Type: application/json" \
-  -d '{"v":5,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
+  -d '{"v":6,"guestHash":"<64자 해시>","reason":"확인해 보니 문제없어요"}'
 ```
 
 ### 답의 모양
 
 | 상태 | 본문 |
 | --- | --- |
-| 200 | `{"v":5,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
-| 400 | `{"v":5,"error":"bad_request"}` |
-| 401 | `{"v":5,"error":"unauthorized"}` |
-| 404 | `{"v":5,"ok":false,"error":"unknown_guest"}` 또는 `{"v":5,"error":"not_found"}` |
-| 429 | `{"v":5,"error":"too_many"}` |
+| 200 | `{"v":6,"ok":true,"affected":<지금 병실에서 바로 반영된 사람 수>}` |
+| 400 | `{"v":6,"error":"bad_request"}` |
+| 401 | `{"v":6,"error":"unauthorized"}` |
+| 404 | `{"v":6,"ok":false,"error":"unknown_guest"}` 또는 `{"v":6,"error":"not_found"}` |
+| 429 | `{"v":6,"error":"too_many"}` |
 
 ## 안전장치 요약
 
@@ -125,6 +137,9 @@ curl -s -X POST "$ONWARD/admin/clear-flag" \
   IP 해시마다 새 게스트는 1시간에 20명까지예요.
 - 신고: 한 사람당 하루 5번. 서로 다른 세 사람이 신고하면 그 사람 닉네임이 다른 사람 화면에서 '조용한 ○○'로 보여요.
 - 15분 동안 입력이 없으면 화면이 연결을 닫아요(수면 모드는 예외).
+- 수면 모드는 서버가 알아요. 누워 있을 때만 잠들 수 있고, 같은 병동 사람에게 한 번 알려요(snapshot에도 들어가요).
+  잠든 동안 목례·한마디·안아 주기는 가지 않고, 평안과 선물은 `sleep_kept`(guestId 해시)에 쌓았다가 깨어날 때 숫자로만 전해요.
+  잠든 지 8시간이 지나면 alarm이 연결을 닫아요(코드 4009). 그 뒤로는 끊긴 사람과 같아서 30초 뒤 침대를 반납해요.
 - 보관 기간이 지난 데이터는 Durable Object alarm이 지워요. 지울 게 있을 때만, 하루에 많아야 한 번 깨어나요.
 - 다녀간 날 수와 퇴원 표시는 directory에 guestId 해시로만 두고, 마지막으로 다녀간 뒤 180일이 지나면 지워요.
   다녀간 날 수는 누구에게도 숫자로 보내지 않아요. 본인에게도 "반겨 줄지(greet)"만 보내요.

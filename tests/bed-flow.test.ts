@@ -4,10 +4,9 @@ import {
   arrivedAtBed,
   becomeVisitor,
   bedProgress,
+  bedTapIntent,
   canStartGesture,
-  createLocalBedGate,
   FREE,
-  needsMoveConfirm,
   tapBed,
   tapFloor,
   tickFlow,
@@ -138,15 +137,6 @@ test("누운 채 문병객으로 바꾸면 일어나요", () => {
   assert.deepEqual(tickFlow(pending.flow, 1, D).flow, { kind: "heading", bed: 4, lie: false });
 });
 
-test("한 침대에는 한 명만 누워요", () => {
-  const gate = createLocalBedGate();
-  assert.equal(gate.request(7), true);
-  assert.equal(gate.isFree(7), false);
-  assert.equal(gate.request(7), false);
-  gate.release(7);
-  assert.equal(gate.request(7), true);
-});
-
 test("침대에 오르내리거나 누운 동안에는 동작을 시작하지 않아요", () => {
   assert.equal(canStartGesture(FREE), true);
   assert.equal(canStartGesture({ kind: "heading", bed: 1, lie: true }), true);
@@ -155,15 +145,16 @@ test("침대에 오르내리거나 누운 동안에는 동작을 시작하지 �
   assert.equal(canStartGesture({ kind: "leaving", bed: 1, remaining: 1, next: null }), false);
 });
 
-test("누운 채로 다른 침대를 누를 때만 옮길지 물어요", () => {
-  assert.equal(needsMoveConfirm(lying(2), 4, true), true);
-  assert.equal(needsMoveConfirm({ kind: "entering", bed: 2, elapsed: 0.3 }, 4, true), true);
-  // 내 침대를 다시 누르면 일어나는 것이니 묻지 않아요.
-  assert.equal(needsMoveConfirm(lying(2), 2, true), false);
-  // 서 있거나 걸어가는 중이면 바로 가요.
-  assert.equal(needsMoveConfirm(FREE, 4, true), false);
-  assert.equal(needsMoveConfirm({ kind: "heading", bed: 2, lie: true }, 4, true), false);
-  assert.equal(needsMoveConfirm({ kind: "leaving", bed: 2, remaining: 0.5, next: null }, 4, true), false);
-  // 문병객은 눕지 않아요.
-  assert.equal(needsMoveConfirm(lying(2), 4, false), false);
+test("처음 고를 때만 쓸지 묻고, 내 침대는 바로 눕고, 다른 분 침대에는 눕지 않아요", () => {
+  // 아직 내 침대가 없으면 빈 침대에서 "이 침대를 쓰시겠어요?"를 물어요.
+  assert.equal(bedTapIntent(4, { canLie: true, ownedBed: null, takenByOther: false }), "claim");
+  // 내 침대는 걸어 다니다 눌러도 묻지 않고 바로 가서 누워요.
+  assert.equal(bedTapIntent(4, { canLie: true, ownedBed: 4, takenByOther: false }), "own");
+  // 다른 분의 침대는 그분이 지금 서 있어도 그분 것이에요.
+  assert.equal(bedTapIntent(4, { canLie: true, ownedBed: null, takenByOther: true }), "others");
+  assert.equal(bedTapIntent(4, { canLie: true, ownedBed: 2, takenByOther: true }), "others");
+  // 내 침대가 있는데 다른 빈 침대를 누르면 옮길지 물어요. 서 있을 때도 같아요.
+  assert.equal(bedTapIntent(4, { canLie: true, ownedBed: 2, takenByOther: false }), "move");
+  // 문병객은 눕지 않고 곁에서 목례만 해요.
+  assert.equal(bedTapIntent(4, { canLie: false, ownedBed: null, takenByOther: true }), "visit");
 });

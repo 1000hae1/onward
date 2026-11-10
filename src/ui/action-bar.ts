@@ -1,18 +1,26 @@
 import { BLESSINGS, blessingText, GIFTS } from "../../shared/gestures";
 import { giftAllowedNow } from "../../shared/ward-rules";
-import { visitCountText } from "../../shared/visit-rules";
-import { REPORT_REASON_TEXT } from "../../shared/safety-rules";
 import { MORNING_PHRASE } from "../../shared/morning";
 import { DISCHARGE_CONFIRM_TEXT } from "../../shared/discharge-rules";
-import { loadMyLink, saveMyLink, shareVisit, visitUrl } from "../net/visit-link";
 import { bedHeadSpot, BEDS, roomAt } from "../../shared/ward-layout";
 import { gestureDuration } from "../avatar/pose";
 import type { PlayerControls } from "../ward/controls";
 import type { Offerings } from "../ward/offerings";
 import type { HeadLabels } from "./head-labels";
-import { createButton, createText } from "./widgets";
+import { createButton, createEmojiButton, createText } from "./widgets";
 import { SOLO_ONLY_TEXT } from "../../shared/offering-rules";
+import { FIVE_LEAF_ITEM } from "../../shared/left-blessings";
+import { giftIcon } from "./icons/gift-icons";
 import type { HugMenuState } from "../../shared/hug-rules";
+import { CAT_PLAY_LABELS } from "../../shared/cat-play-rules";
+import type { CatPlayKind } from "../../shared/cat-play-rules";
+
+/** 고양이를 눌렀을 때 나오는 메뉴예요. 할 수 없는 놀이는 버튼을 끄고 이유를 보여 줘요. */
+export interface CatMenu {
+  title: string;
+  choices: readonly { kind: CatPlayKind; enabled: boolean; reason: string | null }[];
+  pick(kind: CatPlayKind): void;
+}
 
 /** 손을 모은 뒤 빛이 떠나기까지 기다리는 시간이에요. */
 export const LIGHT_DELAY_SECONDS = gestureDuration("pray") * 0.55;
@@ -29,21 +37,10 @@ export interface ActionSink {
   blessPerson(id: string): void;
   /** 자리에 없는 사람에게 평안이나 선물을 남겨요. */
   leaveFor(address: string, kind: "bless" | "gift", item?: number): void;
-  /** 내 문병 링크를 만들거나 끄거나 상태를 물어요. 답은 showVisitLink로 와요. */
-  visitLink(action: "create" | "off" | "info"): void;
-  /** 다른 동물을 신고해요. 사유는 번호예요. 답은 화면 안내로 와요. */
-  report(id: string, reason: number): void;
   /** 다른 동물에게 안아 주기를 요청해요. 서버가 거리와 횟수를 살펴요. */
   hug(id: string): void;
-  /** 오늘 퇴원해요. closeLink면 문병 링크도 함께 꺼요. */
+  /** 오늘 퇴원해요. closeLink면 방명록 링크도 함께 꺼요. */
   discharge(closeLink: boolean): void;
-}
-
-/** 서버가 알려 준 내 문병 링크예요. token은 새로 만든 그때만 있어요. */
-export interface VisitLinkStatus {
-  token: string | null;
-  active: boolean;
-  visits: number;
 }
 
 /** 오늘 같은 병실에서 만난 사람이에요. present는 지금 같은 병실에 있으면 그 사람의 머리 자리예요. */
@@ -66,31 +63,48 @@ export interface ActionBarOptions {
   stillMotion(): boolean;
   /** 오늘 만난 사람들이에요. 서버에 닿지 않을 때는 빈 목록이에요. */
   people(): PersonChoice[];
-  /** 문병 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
+  /** 방명록 링크로 온 문병객이면 침대를 골라 보내기만 하고, 불빛과 내 침대 메뉴는 없어요. */
   visiting(): boolean;
+  /** 켜진 방명록 링크가 있는지예요. 퇴원할 때 함께 끌지 물어봐요. */
+  guestbookActive(): boolean;
   /** 한국 시간 06:30~09:00이면 "좋은 아침이에요"를 보여 줘요. 서버도 시간을 다시 살펴요. */
   morning(): boolean;
+  /** 오잎클로버를 오늘 이미 놓았는지예요. 화면에서 버튼을 흐리게 할 뿐이고, 정하는 것은 서버예요. */
+  fiveLeafUsed(): boolean;
 }
 
+/** 오잎클로버를 오늘 이미 놓았을 때 버튼 아래에 작게 적는 말이에요. */
+export const FIVE_LEAF_USED_NOTE = "내일 다시";
+
 export interface ActionBar {
+  openDischarge(): void;
   update(dt: number): void;
   showToast(text: string): void;
-  showVisitLink(status: VisitLinkStatus): void;
   /** 다른 동물을 눌렀을 때 나오는 메뉴예요. 안아 주기를 할 수 없으면 버튼을 끄고 이유를 보여 줘요. */
-  openPerson(person: { id: string; nickname: string; hug: HugMenuState }): void;
+  /** sleepingNote가 있으면 잠든 분이라 메뉴 아래에 안내를 붙여요. */
+  openPerson(person: { id: string; nickname: string; hug: HugMenuState; sleepingNote?: string | null }): void;
+  /** 고양이를 눌렀을 때 나오는 작은 메뉴예요. */
+  openCat(menu: CatMenu): void;
+  /** 열려 있는 메뉴를 닫아요. */
+  closeMenu(): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
   /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
   confirmMove(proceed: () => void): void;
+  /** 아직 내 침대가 없을 때 빈 침대를 누르면 이 침대를 쓸지 물어요. */
+  confirmClaim(proceed: () => void): void;
 }
 
 export const MOVE_CONFIRM_TEXT = "이 침대로 옮길까요?";
 export const MOVE_YES_TEXT = "옮길게요";
 export const MOVE_NO_TEXT = "그대로 있을게요";
+export const CLAIM_CONFIRM_TEXT = "이 침대를 쓰시겠어요?";
+export const CLAIM_YES_TEXT = "이 침대 쓰기";
+export const CLAIM_NO_TEXT = "다른 곳 볼게요";
 
 /** 화면 아래 네 버튼이에요. 서버에 닿으면 다른 사람에게도 보이고, 아니면 내 화면에만 보여요. */
 export function createActionBar(options: ActionBarOptions): ActionBar {
-  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, morning } = options;
+  const { root, toast, player, offerings, labels, sink, stillMotion, people, visiting, guestbookActive, morning, fiveLeafUsed } = options;
 
   const sheet = document.createElement("div");
   sheet.className = "ward-panel action-sheet";
@@ -131,7 +145,44 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     sheet.hidden = false;
   };
 
-  /** 누운 채로 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로 누워 있어요. */
+  /** 고양이 메뉴예요. 버튼 앞에 이모지를 붙이고, 할 수 없는 놀이는 이유를 아래에 적어요. */
+  const openCat = (menu: CatMenu): void => {
+    const row = document.createElement("div");
+    row.className = "action-choices";
+    const notes = new Set<string>();
+    let first: HTMLButtonElement | null = null;
+    for (const choice of menu.choices) {
+      const { emoji, label } = CAT_PLAY_LABELS[choice.kind];
+      const button = createEmojiButton(emoji, label, () => {
+        closeSheet();
+        menu.pick(choice.kind);
+      });
+      button.disabled = !choice.enabled;
+      if (!choice.enabled && choice.reason) notes.add(choice.reason);
+      if (choice.enabled && !first) first = button;
+      row.append(button);
+    }
+    const children: HTMLElement[] = [row];
+    for (const text of notes) {
+      const note = createText("p", text);
+      note.className = "action-note";
+      children.push(note);
+    }
+    openSheet("cat", menu.title, children);
+    (first as HTMLButtonElement | null)?.focus();
+  };
+
+  /** 처음 침대를 고를 때 물어요. [이 침대 쓰기]를 누르면 서버가 배정을 확정한 뒤에 가서 누워요. */
+  const confirmClaim = (proceed: () => void): void => {
+    const yes = createButton(CLAIM_YES_TEXT, () => {
+      closeSheet();
+      proceed();
+    });
+    openSheet("claim-bed", CLAIM_CONFIRM_TEXT, [yes], CLAIM_NO_TEXT);
+    yes.focus();
+  };
+
+  /** 내 침대가 있는데 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로예요. */
   const confirmMove = (proceed: () => void): void => {
     const yes = createButton(MOVE_YES_TEXT, () => {
       closeSheet();
@@ -145,7 +196,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   const pickBed = (name: string, title: string, onBed: (bed: number) => void): void => {
     openSheet(name, title, []);
     player.setBedPicker((bed) => {
-      if (bed === player.claimedBed) {
+      if (bed === player.ownedBed) {
         showToast("다른 침대를 골라 주세요.");
         return;
       }
@@ -208,16 +259,38 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     ]);
   };
 
-  const choiceList = (
-    labelsOf: readonly string[],
-    onPick: (id: number) => void,
-    enabled: (id: number) => boolean = () => true,
-  ): HTMLElement => {
+  const choiceList = (labelsOf: readonly string[], onPick: (id: number) => void): HTMLElement => {
     const list = document.createElement("div");
     list.className = "action-choices";
     labelsOf.forEach((label, id) => {
-      const button = createButton(label, () => onPick(id));
-      button.disabled = !enabled(id);
+      list.append(createButton(label, () => onPick(id)));
+    });
+    return list;
+  };
+
+  /** 선물 고르기 버튼이에요. 아이콘은 위, 이름은 아래예요. 아이콘은 aria-hidden이라 낭독기는 이름만 읽어요. */
+  const giftChoices = (now: Date, onPick: (id: number) => void): HTMLElement => {
+    const list = document.createElement("div");
+    list.className = "action-choices gift-choices";
+    const usedFiveLeaf = fiveLeafUsed();
+    GIFTS.forEach((name, id) => {
+      const button = createButton("", () => onPick(id));
+      button.className = "gift-choice";
+      const icon = giftIcon(id);
+      if (icon) button.append(icon);
+      const label = document.createElement("span");
+      label.className = "gift-label";
+      label.textContent = name;
+      button.append(label);
+      const used = id === FIVE_LEAF_ITEM && usedFiveLeaf;
+      if (used) {
+        const note = document.createElement("span");
+        note.className = "gift-note";
+        note.textContent = FIVE_LEAF_USED_NOTE;
+        button.append(note);
+      }
+      // 겨울이 아니면 귤·홍시·호빵은 서버가 받지 않아서 흐리게 둬요.
+      button.disabled = used || !giftAllowedNow(id, now);
       list.append(button);
     });
     return list;
@@ -228,74 +301,34 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     else open();
   };
 
-  /** 내 문병 링크의 지금 상태예요. 메뉴를 열 때 서버에 물어서 채워요. */
-  let link: { active: boolean; visits: number } | null = null;
-  let linkNote = "";
-  /** 공유 창도 복사도 안 되면 링크를 직접 보여 줘요. */
-  let manualLink: string | null = null;
-
-  const share = (token: string): void => {
-    void shareVisit(token).then((result) => {
-      if (result === "copied") showToast("링크를 복사했어요. 보내고 싶은 분께 붙여 넣어 주세요.");
-      else if (result === "shared") showToast("링크를 보냈어요.");
-      else if (result === "failed") {
-        manualLink = visitUrl(token);
-        renderBedMenu();
-      }
-    });
-  };
-
+  /** 누운 상태를 유지한 채 옮길 침대를 골라요. */
   const renderBedMenu = (): void => {
-    if (sheetName !== "bed") return;
-    const children: HTMLElement[] = [];
-    if (link === null) {
-      children.push(createText("p", "확인하는 중이에요."));
-    } else {
-      children.push(createText("p", link.active ? visitCountText(link.visits) : "지금은 켜진 문병 링크가 없어요."));
-      if (linkNote) children.push(createText("p", linkNote));
-      const token = loadMyLink();
-      const row = document.createElement("div");
-      row.className = "action-choices";
-      if (link.active && token) {
-        row.append(
-          createButton("내 침대로 문병 오기", () => share(token)),
-          createButton("새로 만들기", () => sink.visitLink("create")),
-          createButton("링크 끄기", () => sink.visitLink("off")),
-        );
-      } else if (link.active) {
-        // 다른 기기에서 만들었거나 저장소가 지워져서 이 기기에는 링크 원본이 없어요.
-        children.push(createText("p", "이 기기에는 링크가 없어요. 새로 만들면 예전 링크는 열리지 않아요."));
-        row.append(
-          createButton("새로 만들기", () => sink.visitLink("create")),
-          createButton("링크 끄기", () => sink.visitLink("off")),
-        );
-      } else {
-        row.append(createButton("내 침대로 문병 오기", () => sink.visitLink("create")));
-      }
-      children.push(row);
-      const leave = document.createElement("div");
-      leave.className = "action-choices";
-      leave.append(createButton("퇴원하기", openDischarge));
-      children.push(leave);
-      if (manualLink) {
-        const input = document.createElement("input");
-        input.type = "text";
-        input.readOnly = true;
-        input.value = manualLink;
-        input.className = "visit-link-text";
-        input.setAttribute("aria-label", "문병 링크");
-        input.addEventListener("focus", () => input.select());
-        children.push(createText("p", "아래 링크를 길게 눌러 복사해 주세요."), input);
-      }
-    }
-    openSheet("bed", "내 침대", children);
+    openSheet("bed", "내 침대", [createButton("침대 옮기기", () => {
+      openSheet("move-picker", "옮길 침대를 눌러 주세요.", []);
+      player.setBedPicker((bed) => {
+        if (bed === player.ownedBed) {
+          showToast("다른 침대를 골라 주세요.");
+          return;
+        }
+        closeSheet();
+        player.chooseBed(bed);
+      });
+    })]);
   };
 
-  /** 퇴원을 한 번 더 묻는 단계예요. 문병 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
+  /** 퇴원을 한 번 더 묻는 단계예요. 방명록 링크를 같이 끌지는 고를 수 있고, 기본은 끄지 않아요. */
   const openDischarge = (): void => {
+    if (!sink.online() || visiting()) {
+      showToast("병동에 연결된 뒤 이용할 수 있어요.");
+      return;
+    }
+    if (player.ownedBed === null) {
+      showToast("내 침대를 고른 뒤 퇴원할 수 있어요.");
+      return;
+    }
     const children: HTMLElement[] = [];
     let closeLink = false;
-    if (link?.active) {
+    if (guestbookActive()) {
       const label = document.createElement("label");
       label.className = "action-check";
       const box = document.createElement("input");
@@ -305,7 +338,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         closeLink = box.checked;
       });
       const text = document.createElement("span");
-      text.textContent = "문병 링크도 함께 끌게요";
+      text.textContent = "방명록 링크도 함께 끌게요";
       label.append(box, text);
       children.push(label);
     }
@@ -322,7 +355,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   };
 
   /** 다른 동물 메뉴예요. 닉네임은 textContent로만 넣어요. */
-  const openPerson = (person: { id: string; nickname: string; hug: HugMenuState }): void => {
+  const openPerson = (person: { id: string; nickname: string; hug: HugMenuState; sleepingNote?: string | null }): void => {
     const name = `person-${person.id}`;
     const row = document.createElement("div");
     row.className = "action-choices";
@@ -334,41 +367,23 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     // 할 수 없을 때도 버튼은 보여 주고, 왜 안 되는지 바로 아래에 적어요.
     hugButton.disabled = !person.hug.enabled;
     row.append(hugButton);
-    const hugNote = person.hug.enabled ? null : createText("p", person.hug.reason);
+    // 잠든 분이면 안아 주기가 안 되는 까닭 대신, 평안과 선물은 살며시 둘 수 있다고 알려요.
+    const noteText = person.sleepingNote ?? (person.hug.enabled ? null : person.hug.reason);
+    const hugNote = noteText ? createText("p", noteText) : null;
     if (hugNote) hugNote.className = "action-note";
-    row.append(
-      createButton("신고하기", () => {
-        if (!sink.online()) {
-          showToast("병동 서버에 닿을 때 신고할 수 있어요.");
-          return;
-        }
-        openSheet(name, "어떤 점이 불편했나요?", [
-          choiceList(REPORT_REASON_TEXT, (reason) => {
-            sink.report(person.id, reason);
-            closeSheet();
-          }),
-        ]);
-      }),
-    );
     openSheet(name, `${person.nickname}님`, hugNote ? [row, hugNote] : [row]);
   };
 
   const bedButton = createButton(
     "내 침대",
-    toggleable("bed", () => {
-      link = null;
-      linkNote = "";
-      manualLink = null;
-      openSheet("bed", "내 침대", []);
-      renderBedMenu();
-      sink.visitLink("info");
-    }),
+    toggleable("bed", renderBedMenu),
   );
   bedButton.hidden = true;
   const lamp = lampButton();
 
   buttons.append(
-    createButton(
+    createEmojiButton(
+      "🙏",
       "평안 빌기",
       toggleable("pray", () => {
         pickTarget(
@@ -399,7 +414,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         );
       }),
     ),
-    createButton(
+    createEmojiButton(
+      "🙇",
       "목례와 한마디",
       toggleable("blessing", () => {
         openSheet("blessing", "어떤 한마디를 건넬까요?", [
@@ -416,14 +432,15 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
         ]);
       }),
     ),
-    createButton(
+    createEmojiButton(
+      "🍀",
       "머리맡 선물",
       toggleable("gift", () => {
         const now = new Date();
         const seasonal = GIFTS.some((_, id) => !giftAllowedNow(id, now));
         openSheet("gift", seasonal ? "어떤 선물을 놓을까요? 귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요." : "어떤 선물을 놓을까요?", [
-          choiceList(
-            GIFTS,
+          giftChoices(
+            now,
             (gift) => {
               pickTarget(
                 "gift",
@@ -441,7 +458,6 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
                 },
               );
             },
-            (gift) => giftAllowedNow(gift, now),
           ),
         ]);
       }),
@@ -451,7 +467,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   );
 
   function lampButton(): HTMLButtonElement {
-    return createButton("창가에 불빛", () => {
+    return createEmojiButton("🕯️", "창가에 불빛", () => {
       closeSheet();
       if (sink.online()) {
         // 서버가 받아 주면 빛이 창틀로 날아가고 안내가 떠요. 받지 않으면 이유가 떠요.
@@ -471,29 +487,20 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   root.hidden = false;
 
   return {
+    openDischarge,
     showToast,
     confirmMove,
-    showVisitLink(status) {
-      if (status.token) {
-        saveMyLink(status.token);
-        // 공유 창은 누른 순간에만 열 수 있어서, 서버 답을 받은 뒤에는 한 번 더 눌러 보내요.
-        linkNote = link?.active ? "새 링크를 만들었어요. 예전 링크는 이제 열리지 않아요." : "링크가 준비됐어요. 눌러서 보내 주세요.";
-      } else if (!status.active) {
-        if (link?.active) linkNote = "링크를 껐어요. 이제 이 링크로는 들어올 수 없어요.";
-        saveMyLink(null);
-      }
-      manualLink = null;
-      link = { active: status.active, visits: status.visits };
-      renderBedMenu();
-    },
+    confirmClaim,
     openPerson,
+    openCat,
+    closeMenu: closeSheet,
     setHidden(hidden) {
       if (hidden) closeSheet();
       buttons.hidden = hidden;
     },
     update(dt) {
-      // 침대에 누워 있는 동안만 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.
-      const showBed = sink.online() && !visiting() && player.lyingBed !== null;
+      // 내 침대가 있으면 걸어 다닐 때도 내 침대 메뉴를 보여 줘요. 문병객은 불빛도 놓지 않아요.
+      const showBed = sink.online() && !visiting() && player.ownedBed !== null;
       if (bedButton.hidden === showBed) {
         bedButton.hidden = !showBed;
         if (!showBed && sheetName === "bed") closeSheet();

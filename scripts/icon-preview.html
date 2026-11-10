@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>파비콘 확인</title>
+<!-- 확인용 페이지예요. 브라우저로 이 파일을 바로 열면 돼요(../public의 결과물을 읽어요). -->
+<style>
+  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; }
+  section { padding: 24px 16px; }
+  .light { background: #ffffff; color: #222; }
+  .dark { background: #111318; color: #ddd; }
+  .row { display: flex; flex-wrap: wrap; gap: 32px; align-items: flex-end; }
+  figure { margin: 0; text-align: center; }
+  figcaption { margin-top: 6px; font-size: 12px; opacity: .75; }
+  img { display: block; margin: 0 auto; image-rendering: auto; }
+  .zoom img { image-rendering: pixelated; }
+  h2 { font-size: 15px; margin: 0 0 16px; }
+</style>
+</head>
+<body>
+  <section class="light"><h2>밝은 바탕</h2><div class="row"></div></section>
+  <section class="dark"><h2>어두운 바탕</h2><div class="row"></div></section>
+  <section class="light zoom"><h2>실제 픽셀 확대(×6)</h2><div class="row"></div></section>
+  <section class="dark"><h2>그 밖의 크기</h2><div class="row"></div></section>
+<script>
+  const base = "../public/";
+  const items = [
+    ["favicon-16.png", 16, "16px"],
+    ["favicon-32.png", 32, "32px"],
+    ["apple-touch-icon.png", 180, "180px (apple-touch-icon)"],
+  ];
+  const others = [
+    ["favicon.svg", 128, "favicon.svg"],
+    ["favicon.ico", 32, "favicon.ico"],
+    ["icon-192.png", 192, "icon-192"],
+    ["icon-maskable-512.png", 192, "maskable 512 (192로 축소)"],
+  ];
+  const sections = document.querySelectorAll(".row");
+  const add = (row, [file, size, label], scale = 1) => {
+    const figure = document.createElement("figure");
+    const img = document.createElement("img");
+    img.src = base + file + "?t=" + Date.now();
+    img.width = img.height = size * scale;
+    img.alt = label;
+    const caption = document.createElement("figcaption");
+    caption.textContent = label;
+    figure.append(img, caption);
+    row.append(figure);
+  };
+  items.forEach((item) => add(sections[0], item));
+  items.forEach((item) => add(sections[1], item));
+  items.slice(0, 2).forEach((item) => add(sections[2], item, 6));
+  others.forEach((item) => add(sections[3], item));
+</script>
+</body>
+</html>

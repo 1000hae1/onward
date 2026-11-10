@@ -7,7 +7,7 @@ export interface EntryHeading {
 }
 
 /**
- * 문병 링크로 왔으면 문병 제목, 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 "돌아왔네요",
+ * 방명록 링크로 왔으면 문병 제목, 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 "돌아왔네요",
  * 아니면 처음 오는 분의 제목이에요. 닉네임은 화면에 textContent로만 넣어요.
  */
 export function entryHeading(input: { returning: boolean; nickname: string; visitTitle?: string }): EntryHeading {

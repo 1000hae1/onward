@@ -16,6 +16,8 @@ import { createAvatar } from "../avatar/avatar";
 import { AVATAR_HEIGHT, HAND_HEIGHT, HAND_REACH } from "../avatar/kit";
 import {
   advanceBreath,
+  SLEEP_BREATH_AMOUNT,
+  SLEEP_BREATH_SECONDS,
   BED_TRANSITION_SECONDS,
   composePose,
   createPose,
@@ -28,16 +30,28 @@ import {
   arrivedAtBed,
   becomeVisitor,
   bedProgress,
+  bedTapIntent,
   canStartGesture,
-  createLocalBedGate,
   FREE,
   getUp,
-  needsMoveConfirm,
   tapBed,
   tapFloor,
   tickFlow,
 } from "./bed-flow";
 import type { BedFlow, FlowStep, WalkOrder } from "./bed-flow";
+import {
+  arrivedAtSeat,
+  headToSeat,
+  isSeated,
+  NO_SEAT,
+  rise,
+  seatAllowsGesture,
+  seatInUse,
+  seatProgress,
+  tickSeat,
+} from "./seat-flow";
+import type { SeatFlow } from "./seat-flow";
+import { benchTap } from "../../shared/bench-rules";
 import {
   cameraAngleToSee,
   easeDistance,
@@ -50,6 +64,7 @@ import {
 } from "./camera-view";
 import {
   BED_BOXES,
+  BENCH_BOXES,
   bedApproach,
   bedRest,
   bedRestYaw,
@@ -61,8 +76,12 @@ import {
   OBSTACLES,
   PLAYER_RADIUS,
   PLAYER_START,
+  seatApproach,
+  seatRest,
+  seatYaw,
   WALK_AREAS,
   WALL_BOXES,
+  YARD_BENCH,
 } from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "./movement";
 import type { NavGrid, Point } from "./movement";
@@ -101,6 +120,8 @@ const NURSE_STATION_SPOT = {
 };
 const TAP_MAX_MOVE_PX = 8;
 const TAP_MAX_MS = 450;
+/** 손가락으로 이만큼 누르고 있으면 길게 누른 거예요. */
+export const LONG_PRESS_MS = 500;
 const MARKER_SECONDS = 0.9;
 /** 누른 방향으로 살펴보는 거리예요. 앞마당 끝에서 건물 안쪽까지 닿아요. */
 const TAP_REACH = 80;
@@ -125,12 +146,26 @@ function claimedOf(flow: BedFlow): number | null {
 
 /** 내 동작을 병동 서버에 알리는 곳이에요. */
 export interface PlayerNet {
+  /** 내 침대에 눕겠다고 해요. */
   askBed(bed: number): Promise<boolean>;
+  /** 이 침대를 내 침대로 달라고 해요. 서버가 먼저 온 사람에게 줘요. */
+  claimBed(bed: number): Promise<boolean>;
+  /** 다른 분이 배정받은 침대인지예요. 그분이 지금 걸어 다녀도 그분 것이에요. */
   isBedTaken(bed: number): boolean;
+  /** 다른 분의 침대를 눌렀어요. 그분 메뉴를 보여 줘요. */
+  othersBed(bed: number): void;
   walkTo(x: number, z: number): void;
   getUp(): void;
   /** 다른 분이 먼저 침대를 차지했을 때예요. moving이면 침대를 옮기려던 때예요. */
   bedRefused(moving: boolean): void;
+  /** 앞마당 벤치 자리에 앉겠다고 해요. 서버가 먼저 온 사람을 앉혀요. */
+  askSeat(seat: number): Promise<boolean>;
+  /** 다른 분이 앉아 있는 자리인지예요. */
+  isSeatTaken(seat: number): boolean;
+  /** 벤치에서 일어났다고 알려요. 걸어가면 walkTo가 대신 알려요. */
+  standUp(): void;
+  /** 벤치에 앉지 못했을 때예요. full이면 누르기 전부터 두 자리가 다 차 있었어요. */
+  seatRefused(full: boolean): void;
 }
 
 export interface PlayerControls {
@@ -154,19 +189,32 @@ export interface PlayerControls {
   forceGetUp(): void;
   /** 수면 모드에서는 카메라를 지금 자리에 고정해요. 드래그와 확대를 받지 않아요. */
   setCameraLocked(locked: boolean): void;
+  /** 수면 모드예요. 눈을 감고 이불을 덮고 아주 느리게 숨쉬어요. 누워 있을 때만 그렇게 보여요. */
+  setAsleep(asleep: boolean): void;
   /** 길찾기 격자예요. 다른 사람의 걸음을 그릴 때 함께 써요. */
   readonly nav: NavGrid;
+  /** 고른 침대로 이동해요. 기존 확인 절차와 서버 점유 검사를 거쳐요. */
+  chooseBed(bed: number): void;
   /** 다른 침대를 고르는 동안 침대 탭을 받아요. 이때 바닥을 눌러도 걷지 않아요. */
   setBedPicker(picker: ((bed: number) => void) | null): void;
   /**
-   * 누운 채로 다른 빈 침대를 누르면 옮길지 묻는 곳이에요. 옮기기로 하면 proceed를 불러요.
+   * 내 침대가 있는데 다른 빈 침대를 누르면 옮길지 묻는 곳이에요. 옮기기로 하면 proceed를 불러요.
    * null이면 묻지 않고 바로 옮겨요.
    */
   setMoveConfirm(ask: ((bed: number, proceed: () => void) => void) | null): void;
+  /**
+   * 아직 내 침대가 없을 때 빈 침대를 누르면 "이 침대를 쓰시겠어요?"를 묻는 곳이에요. 쓰기로 하면 proceed를 불러요.
+   * null이면 묻지 않고 바로 받아요.
+   */
+  setClaimConfirm(ask: ((bed: number, proceed: () => void) => void) | null): void;
+  /** 서버가 알려 준 내 침대예요. 다르게 누워 있었으면 일어나요. */
+  setOwnedBed(bed: number | null): void;
   /** 현관으로 병동에 들어설 때마다 불러요. 간호사가 인사해요. */
   setLobbyListener(listener: (() => void) | null): void;
   /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
   setTapFilter(filter: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
+  /** 휴대폰에서 길게 누르면 불러요. true를 돌려주면 손을 뗄 때 탭으로 보지 않아요. */
+  setLongPress(handler: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
   /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
   whenUp(action: () => void): void;
   faceToward(x: number, z: number): void;
@@ -175,12 +223,14 @@ export interface PlayerControls {
    * 다 도착하면 then을 불러요. 누르면 다른 곳으로 가니 then도 잊어요.
    */
   walkToSpot(x: number, z: number, then: () => void, tellServer?: boolean): void;
-  /** 문병 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
+  /** 방명록 링크로 들어오면 주인 침대 곁에서 바로 시작해요. 카메라도 함께 옮겨 침대를 바라봐요. */
   placeAt(x: number, z: number, faceX: number, faceZ: number): void;
   /** 빛과 선물이 떠나는 손 앞 자리예요. */
   handSpot(): { x: number; y: number; z: number };
   /** 화면에 보이면 머리 자리를 target에 쓰고, 숨어 있으면 null을 돌려줘요. */
   headWorld(target: Vector3): Vector3 | null;
+  /** 머리 위 등불 자리를 target에 쓰고 발밑 높이를 돌려줘요. 아바타가 보이지 않으면 null이에요. */
+  lanternWorld(target: Vector3): number | null;
   /** 걸어 다니는 자리예요. 누워 있어도 침대 곁 자리예요. */
   readonly walkX: number;
   readonly walkZ: number;
@@ -188,6 +238,14 @@ export interface PlayerControls {
   readonly lyingBed: number | null;
   /** 쓰고 있거나 눕으러 가는 침대예요. */
   readonly claimedBed: number | null;
+  /** 배정받은 내 침대예요. 걸어 다녀도 그대로예요. 문병객이거나 아직 고르지 않았으면 null이에요. */
+  readonly ownedBed: number | null;
+  /** 앉아 있거나 앉으러 가는 벤치 자리예요. */
+  readonly seat: number | null;
+  /** 벤치에 앉는 중이거나 앉아 있거나 일어나는 중이에요. */
+  readonly seated: boolean;
+  /** 벤치에서 일어나요. 서버가 이미 자리를 비웠을 때(안아 주기, 다시 이었을 때) 써요. */
+  leaveSeat(): void;
 }
 
 /** 아바타와 3인칭 카메라예요. 드래그는 둘러보기, 짧은 탭은 이동, 침대를 탭하면 눕기예요. */
@@ -287,8 +345,14 @@ export function createPlayerControls(
   let shownZ = position.z;
   let path: Point[] = [];
 
-  const bedGate = createLocalBedGate();
+  /** 배정받은 내 침대예요. 서버에 이어져 있으면 서버가 정한 값이고, 혼자일 때는 이 화면에서 정해요. */
+  let ownedBed: number | null = null;
   let flow: BedFlow = FREE;
+  let seatFlow: SeatFlow = NO_SEAT;
+  /** 벤치에서 다 일어난 뒤 할 일이에요. 없으면 일어났다고 서버에 알려요. */
+  let afterRise: (() => void) | null = null;
+  /** 가장 최근에 벤치 자리를 물어본 askToken이에요. */
+  let lastSeatAsk = 0;
   let outfit = initialChoice.outfit;
   /** 처음에는 현관을 바라봐요. */
   let yaw = Math.PI;
@@ -297,17 +361,20 @@ export function createPlayerControls(
   let walkPhase = 0;
   let walkWeight = 0;
   let breathPhase = 0;
+  let asleep = false;
   let gesture: Gesture | null = null;
   let gestureElapsed = 0;
   let facingCamera = false;
   let inputEnabled = true;
   let bedPicker: ((bed: number) => void) | null = null;
   let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
+  let longPress: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
   let afterUp: (() => void) | null = null;
   /** walkToSpot으로 가는 중이면 도착해서 할 일이에요. */
   let afterWalk: (() => void) | null = null;
   let net: PlayerNet | null = null;
   let moveConfirm: ((bed: number, proceed: () => void) => void) | null = null;
+  let claimConfirm: ((bed: number, proceed: () => void) => void) | null = null;
   let lobbyListener: (() => void) | null = null;
   /** 가장 최근에 침대를 물어본 번호예요. 답이 늦게 오면 이미 다른 곳을 눌렀는지 견줘요. */
   let askToken = 0;
@@ -353,15 +420,30 @@ export function createPlayerControls(
     return onFloor ? { x: hit.x, z: hit.z } : null;
   };
 
-  /** 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요. */
-  const startWalk = (order: WalkOrder, tellServer = true): void => {
+  /** 벤치에서 일어나기 시작해요. 다 일어나면 then을 해요. */
+  const riseThen = (then: (() => void) | null): void => {
+    seatFlow = rise(seatFlow, BED_TRANSITION_SECONDS);
+    afterRise = then;
+  };
+
+  /**
+   * 정해진 곳까지 길을 찾아 걷기 시작해요. 길이 없으면 그 자리에 머물러요.
+   * 벤치에 앉아 있으면 먼저 일어나요. seat가 있으면 그 자리에 앉으러 가는 길이에요.
+   */
+  const startWalk = (order: WalkOrder, tellServer = true, seat?: number): void => {
+    if (isSeated(seatFlow)) {
+      riseThen(() => startWalk(order, tellServer, seat));
+      return;
+    }
     const spot = order.kind === "bed" ? bedApproach(BEDS[order.bed]) : order.point;
     const goal = nav.nearestFree(spot);
     const nextPath = goal ? nav.findPath(position, goal) : [];
+    seatFlow = NO_SEAT;
     if (!goal || nextPath.length === 0) {
       if (flow.kind === "heading") flow = FREE;
       return;
     }
+    if (seat !== undefined) seatFlow = headToSeat(seat);
     // 눕으러 가는 길은 서버가 침대를 내줄 때 이미 알고 있어요. 그 밖의 걸음만 목적지를 알려요.
     if (tellServer && !(order.kind === "bed" && order.lie)) net?.walkTo(goal.x, goal.z);
     path = nextPath;
@@ -375,7 +457,6 @@ export function createPlayerControls(
 
   const applyStep = (step: FlowStep): void => {
     flow = step.flow;
-    if (step.release !== undefined) bedGate.release(step.release);
     if (step.walk) startWalk(step.walk);
     if (step.bowAtBed !== undefined) {
       const bed = BEDS[step.bowAtBed];
@@ -385,41 +466,152 @@ export function createPlayerControls(
     }
   };
 
-  /** 침대로 가서 누워요. 서버에 이어져 있으면 먼저 물어보고, 허락받으면 걸어가요. moving은 침대를 옮기는 중이에요. */
-  const goToBed = (bed: number, token: number, moving: boolean): void => {
-    const canLie = outfit === "patient";
-    const mine =
+  /** 내 침대로 가서 누워요. 이미 누워 있으면 일어나요. 서버에 이어져 있으면 먼저 알리고, 허락받으면 걸어가요. */
+  const lieOnOwnBed = (bed: number, token: number): void => {
+    const already =
       (flow.kind === "heading" || flow.kind === "entering" || flow.kind === "lying") && flow.bed === bed;
-    if (net && canLie && !mine) {
-      if (net.isBedTaken(bed)) {
-        net.bedRefused(moving);
+    if (!net || already) {
+      applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
+      return;
+    }
+    const asking = net;
+    void asking.askBed(bed).then((granted) => {
+      if (token !== askToken) {
+        // 그사이 다른 곳을 눌렀어요. 서버는 누운 줄 아니 일어났다고 알려요. 침대는 그대로 내 것이에요.
+        if (granted && claimedOf(flow) !== bed) asking.getUp();
         return;
       }
-      const asking = net;
-      void asking.askBed(bed).then((granted) => {
-        if (token !== askToken) {
-          // 그사이 다른 곳을 눌렀어요. 받은 침대가 필요 없으면 돌려줘요.
-          if (granted && lastClaimed === null) asking.getUp();
-          return;
-        }
-        if (!granted) {
-          // 서버는 침대를 내주지 않을 때 원래 침대를 그대로 둬요. 여기서도 그대로 누워 있어요.
-          asking.bedRefused(moving);
-          return;
-        }
-        applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
-      });
-      return;
-    }
-    if (canLie && !mine && !bedGate.isFree(bed)) {
-      net?.bedRefused(moving);
-      return;
-    }
-    applyStep(tapBed(flow, bed, { canLie, isFree: bedGate.isFree(bed) }, BED_TRANSITION_SECONDS));
+      if (granted) applyStep(tapBed(flow, bed, { canLie: true, isFree: true }, BED_TRANSITION_SECONDS));
+    });
   };
 
-  const handleTap = (clientX: number, clientY: number): void => {
-    if (!inputEnabled) return;
+  /** 침대를 내 침대로 받고 누우러 가요. 서버가 먼저 온 사람에게 주고, 받은 뒤에야 걸어가요. */
+  const claimAndLie = (bed: number, token: number, moving: boolean): void => {
+    if (!net) {
+      ownedBed = bed;
+      lieOnOwnBed(bed, token);
+      return;
+    }
+    const asking = net;
+    void asking.claimBed(bed).then((granted) => {
+      if (!granted) {
+        // 서버는 침대를 내주지 않을 때 원래 침대를 그대로 둬요. 여기서도 그대로예요.
+        asking.bedRefused(moving);
+        return;
+      }
+      ownedBed = bed;
+      // 그사이 다른 곳을 눌렀어도 받은 침대는 내 것이에요. 걸어가지만 않아요.
+      if (token !== askToken) return;
+      lieOnOwnBed(bed, token);
+    });
+  };
+
+  const chooseBed = (bed: number): void => {
+    afterUp = null;
+    afterWalk = null;
+    const token = ++askToken;
+    const intent = bedTapIntent(bed, {
+      canLie: outfit === "patient",
+      ownedBed,
+      takenByOther: net ? net.isBedTaken(bed) : false,
+    });
+    switch (intent) {
+      case "visit":
+        applyStep(tapBed(flow, bed, { canLie: false, isFree: true }, BED_TRANSITION_SECONDS));
+        return;
+      case "own":
+        lieOnOwnBed(bed, token);
+        return;
+      case "others":
+        net?.othersBed(bed);
+        return;
+      case "claim":
+      case "move": {
+        const moving = intent === "move";
+        const ask = moving ? moveConfirm : claimConfirm;
+        // 묻는 사이 다른 곳을 누르면 잊어요.
+        const proceed = (): void => {
+          if (token !== askToken || outfit !== "patient") return;
+          claimAndLie(bed, token, moving);
+        };
+        if (ask) ask(bed, proceed);
+        else proceed();
+        return;
+      }
+    }
+  };
+
+  /** 벤치 자리로 가서 앉아요. 누워 있거나 다른 자리에 앉아 있으면 먼저 일어나요. 서버는 이미 허락했어요. */
+  const goToSeat = (seat: number): void => {
+    if (isSeated(seatFlow)) {
+      riseThen(() => goToSeat(seat));
+      return;
+    }
+    if (!canStartGesture(flow)) {
+      // 침대에서 일어난 뒤에 가요. 일어난 뒤 가려던 곳은 잊어요.
+      if (flow.kind === "leaving") flow = { ...flow, next: null };
+      afterUp = () => goToSeat(seat);
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
+      return;
+    }
+    flow = FREE;
+    gesture = null;
+    const spot = seatApproach(seat);
+    if (Math.hypot(spot.x - position.x, spot.z - position.z) < 0.15) {
+      path = [];
+      seatFlow = arrivedAtSeat(headToSeat(seat));
+      yawGoal = seatYaw(seat);
+      return;
+    }
+    startWalk({ kind: "spot", point: spot }, false, seat);
+  };
+
+  /** 벤치에서 일어나요. 앉으러 가던 중이면 그만둬요. 서버에도 알려요. */
+  const standFromSeat = (): void => {
+    if (seatFlow.kind === "heading") {
+      seatFlow = NO_SEAT;
+      path = [];
+    } else if (isSeated(seatFlow)) {
+      riseThen(null);
+    }
+    net?.standUp();
+  };
+
+  /** 벤치를 눌렀을 때예요. 빈자리를 서버에 먼저 묻고, 허락받으면 걸어가요. */
+  const chooseBench = (bench: number, token: number): void => {
+    const tap = benchTap(bench, { seat: seatInUse(seatFlow), x: position.x, z: position.z }, (seat) =>
+      net ? net.isSeatTaken(seat) : false,
+    );
+    if (tap.kind === "stand") {
+      standFromSeat();
+      return;
+    }
+    if (tap.kind === "full") {
+      net?.seatRefused(true);
+      return;
+    }
+    if (!net) {
+      goToSeat(tap.seat);
+      return;
+    }
+    const asking = net;
+    lastSeatAsk = token;
+    void asking.askSeat(tap.seat).then((granted) => {
+      if (!granted) {
+        if (token === askToken) asking.seatRefused(false);
+        return;
+      }
+      if (token !== askToken) {
+        // 그사이 다른 곳을 눌렀어요. 서버는 앉은 줄 아니 일어났다고 알려요. 다른 벤치를 다시 물었으면 그대로 둬요.
+        if (lastSeatAsk === token && seatInUse(seatFlow) === null) asking.standUp();
+        return;
+      }
+      goToSeat(tap.seat);
+    });
+  };
+
+  /** 화면의 한 점에서 병실로 뻗는 시선이에요. */
+  const rayAt = (clientX: number, clientY: number): { origin: Vector3; direction: Vector3; reach: Vector3 } => {
     const rect = canvas.getBoundingClientRect();
     pointer.set(
       ((clientX - rect.left) / rect.width) * 2 - 1,
@@ -427,8 +619,12 @@ export function createPlayerControls(
     );
     raycaster.setFromCamera(pointer, camera);
     const { origin, direction } = raycaster.ray;
+    return { origin, direction, reach: origin.clone().addScaledVector(direction, TAP_REACH) };
+  };
 
-    const reach = origin.clone().addScaledVector(direction, TAP_REACH);
+  const handleTap = (clientX: number, clientY: number): void => {
+    if (!inputEnabled) return;
+    const { origin, direction, reach } = rayAt(clientX, clientY);
     const bed = pickBox(origin, reach, BED_BOXES, WALL_BOXES);
     if (bedPicker) {
       if (bed !== null) bedPicker(bed);
@@ -440,18 +636,12 @@ export function createPlayerControls(
     afterWalk = null;
     const token = ++askToken;
     if (bed !== null) {
-      const canLie = outfit === "patient";
-      const moving = needsMoveConfirm(flow, bed, canLie);
-      const taken = net ? net.isBedTaken(bed) : !bedGate.isFree(bed);
-      if (moving && moveConfirm && !taken) {
-        // 누운 채로 다른 빈 침대를 눌렀어요. 옮길지 먼저 묻고, 그사이 다른 곳을 누르면 잊어요.
-        moveConfirm(bed, () => {
-          if (token !== askToken || !needsMoveConfirm(flow, bed, outfit === "patient")) return;
-          goToBed(bed, token, true);
-        });
-        return;
-      }
-      goToBed(bed, token, moving);
+      chooseBed(bed);
+      return;
+    }
+    const bench = pickBox(origin, reach, BENCH_BOXES, WALL_BOXES);
+    if (bench !== null) {
+      chooseBench(bench, token);
       return;
     }
 
@@ -465,6 +655,11 @@ export function createPlayerControls(
   const activePointers = new Set<number>();
   let dragging = false;
   let tapStart: { x: number; y: number; time: number; id: number } | null = null;
+  let pressTimer: ReturnType<typeof setTimeout> | null = null;
+  const cancelPress = (): void => {
+    if (pressTimer !== null) clearTimeout(pressTimer);
+    pressTimer = null;
+  };
 
   canvas.addEventListener("pointerdown", (event) => {
     activePointers.add(event.pointerId);
@@ -474,8 +669,28 @@ export function createPlayerControls(
       activePointers.size === 1 && event.button === 0
         ? { x: event.clientX, y: event.clientY, time: event.timeStamp, id: event.pointerId }
         : null;
+    cancelPress();
+    // 손가락으로 길게 누르면 바로 하는 동작이 있어요(고양이 쓰다듬기).
+    const start = tapStart;
+    if (start && event.pointerType === "touch" && longPress) {
+      pressTimer = setTimeout(() => {
+        pressTimer = null;
+        if (tapStart !== start || !inputEnabled || !longPress) return;
+        const { origin, reach } = rayAt(start.x, start.y);
+        if (longPress(origin, reach)) tapStart = null;
+      }, LONG_PRESS_MS);
+    }
+  });
+  // 길게 누르는 동안 브라우저 메뉴가 뜨지 않게 해요.
+  canvas.addEventListener("contextmenu", (event) => {
+    if (longPress) event.preventDefault();
+  });
+  canvas.addEventListener("pointermove", (event) => {
+    if (pressTimer === null || !tapStart || tapStart.id !== event.pointerId) return;
+    if (Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y) > TAP_MAX_MOVE_PX) cancelPress();
   });
   canvas.addEventListener("pointerup", (event) => {
+    cancelPress();
     activePointers.delete(event.pointerId);
     if (activePointers.size === 0) dragging = false;
     const start = tapStart;
@@ -487,6 +702,7 @@ export function createPlayerControls(
     }
   });
   canvas.addEventListener("pointercancel", (event) => {
+    cancelPress();
     activePointers.delete(event.pointerId);
     if (activePointers.size === 0) dragging = false;
     tapStart = null;
@@ -500,17 +716,24 @@ export function createPlayerControls(
       return shownZ;
     },
     get canGesture() {
-      return canStartGesture(flow);
+      return canStartGesture(flow) && seatAllowsGesture(seatFlow);
     },
     setChoice(choice) {
       avatar.setChoice(choice);
       outfit = choice.outfit;
-      if (outfit === "visitor") applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
+      if (outfit === "visitor") {
+        // 문병객으로 바꾸면 서버가 침대를 반납해요. 여기서도 비워요.
+        ownedBed = null;
+        applyStep(becomeVisitor(flow, BED_TRANSITION_SECONDS));
+      }
     },
     playGesture(next) {
-      if (!canStartGesture(flow)) return;
-      // 걷던 중이면 멈춰 서서 해요. 다른 사람 화면에서도 여기서 멈추게 알려요.
-      if (path.length > 0) net?.walkTo(position.x, position.z);
+      if (!canStartGesture(flow) || !seatAllowsGesture(seatFlow)) return;
+      // 걷던 중이면 멈춰 서서 해요. 다른 사람 화면에서도 여기서 멈추게 알려요. 벤치로 가던 길이면 앉지 않아요.
+      if (path.length > 0) {
+        net?.walkTo(position.x, position.z);
+        if (seatFlow.kind === "heading") seatFlow = NO_SEAT;
+      }
       flow = FREE;
       path = [];
       gesture = next;
@@ -526,7 +749,7 @@ export function createPlayerControls(
       net = next;
     },
     correctDestination(x, z) {
-      if (path.length === 0 || flow.kind !== "free") return;
+      if (path.length === 0 || flow.kind !== "free" || seatFlow.kind !== "none") return;
       startWalk({ kind: "spot", point: { x, z } }, false);
     },
     forceGetUp() {
@@ -542,14 +765,37 @@ export function createPlayerControls(
     setCameraLocked(locked) {
       controls.enabled = !locked;
     },
+    setAsleep(next) {
+      asleep = next;
+    },
     setMoveConfirm(ask) {
       moveConfirm = ask;
+    },
+    setClaimConfirm(ask) {
+      claimConfirm = ask;
+    },
+    setOwnedBed(bed) {
+      ownedBed = bed;
+      const using = claimedOf(flow);
+      if (using === null || using === bed) return;
+      // 서버가 아는 내 침대와 다른 침대에 있거나 가는 중이었어요. 일어나요.
+      afterUp = null;
+      if (flow.kind === "heading") {
+        flow = FREE;
+        path = [];
+        return;
+      }
+      applyStep(getUp(flow, BED_TRANSITION_SECONDS));
     },
     setLobbyListener(listener) {
       lobbyListener = listener;
     },
+    chooseBed,
     setBedPicker(picker) {
       bedPicker = picker;
+    },
+    setLongPress(handler) {
+      longPress = handler;
     },
     setTapFilter(filter) {
       tapFilter = filter;
@@ -567,6 +813,13 @@ export function createPlayerControls(
     },
     walkToSpot(x, z, then, tellServer = false) {
       afterUp = null;
+      if (isSeated(seatFlow)) {
+        // 벤치에서 일어난 뒤에 걸어가요.
+        afterWalk = null;
+        riseThen(() => this.walkToSpot(x, z, then, tellServer));
+        return;
+      }
+      seatFlow = NO_SEAT;
       const goal = nav.nearestFree({ x, z });
       if (!goal || Math.hypot(goal.x - position.x, goal.z - position.z) < 0.05) {
         afterWalk = null;
@@ -585,7 +838,9 @@ export function createPlayerControls(
       const dx = x - position.x;
       const dz = z - position.z;
       afterUp = null;
+      afterRise = null;
       flow = FREE;
+      seatFlow = NO_SEAT;
       path = [];
       glance = null;
       position = { x, z };
@@ -605,13 +860,16 @@ export function createPlayerControls(
     },
     handSpot() {
       return {
-        x: shownX + Math.sin(yaw) * HAND_REACH,
-        y: HAND_HEIGHT,
-        z: shownZ + Math.cos(yaw) * HAND_REACH,
+        x: shownX + Math.sin(yaw) * HAND_REACH * avatar.size,
+        y: HAND_HEIGHT * avatar.size,
+        z: shownZ + Math.cos(yaw) * HAND_REACH * avatar.size,
       };
     },
     headWorld(target) {
       return avatar.root.visible ? avatar.headWorld(target) : null;
+    },
+    lanternWorld(target) {
+      return avatar.root.visible ? avatar.lanternWorld(target) : null;
     },
     get walkX() {
       return position.x;
@@ -625,6 +883,23 @@ export function createPlayerControls(
     get claimedBed() {
       return claimedOf(flow);
     },
+    get ownedBed() {
+      return ownedBed;
+    },
+    get seat() {
+      return seatInUse(seatFlow);
+    },
+    get seated() {
+      return isSeated(seatFlow);
+    },
+    leaveSeat() {
+      if (seatFlow.kind === "heading") {
+        seatFlow = NO_SEAT;
+        path = [];
+      } else if (isSeated(seatFlow) && seatFlow.kind !== "rising") {
+        riseThen(null);
+      }
+    },
     update(dt) {
       const stillMotion = reduceMotion.matches;
       applyStep(tickFlow(flow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS));
@@ -632,6 +907,15 @@ export function createPlayerControls(
         const action = afterUp;
         afterUp = null;
         action();
+      }
+      const seatStep = tickSeat(seatFlow, stillMotion ? BED_TRANSITION_SECONDS : dt, BED_TRANSITION_SECONDS);
+      seatFlow = seatStep.flow;
+      if (seatStep.stood) {
+        const action = afterRise;
+        afterRise = null;
+        // 다른 곳으로 가지 않고 일어나기만 했으면 서버에 알려요. 이미 알렸으면 서버가 그냥 넘겨요.
+        if (action) action();
+        else net?.standUp();
       }
       // 쓰던 침대를 내놓았으면 서버에 알려요.
       const claimed = claimedOf(flow);
@@ -665,8 +949,12 @@ export function createPlayerControls(
         }
 
         if (path.length === 0 && flow.kind === "heading") {
-          const granted = flow.lie && bedGate.request(flow.bed);
+          const granted = flow.lie && flow.bed === ownedBed;
           applyStep(arrivedAtBed(flow, granted));
+        }
+        if (path.length === 0 && seatFlow.kind === "heading") {
+          yawGoal = seatYaw(seatFlow.seat);
+          seatFlow = arrivedAtSeat(seatFlow);
         }
         if (path.length === 0 && afterWalk) {
           const action = afterWalk;
@@ -686,7 +974,9 @@ export function createPlayerControls(
         if (gestureElapsed >= gestureDuration(gesture)) gesture = null;
       }
 
-      breathPhase = advanceBreath(breathPhase, dt, stillMotion);
+      const sleeping = asleep && flow.kind === "lying";
+      avatar.setAsleep(sleeping);
+      breathPhase = advanceBreath(breathPhase, dt, stillMotion, sleeping ? SLEEP_BREATH_SECONDS : undefined);
       composePose(pose, {
         walkPhase,
         breathPhase,
@@ -694,7 +984,9 @@ export function createPlayerControls(
         gesture,
         gestureElapsed,
         bedProgress: bedProgress(flow, BED_TRANSITION_SECONDS),
+        seatProgress: seatProgress(seatFlow, BED_TRANSITION_SECONDS),
         carrying: outfit === "visitor",
+        breathAmount: sleeping ? SLEEP_BREATH_AMOUNT : 1,
       });
 
       // 침대에 오르내리는 동안에는 곁 자리와 침대 위 자리 사이를 옮겨 가요.
@@ -708,6 +1000,13 @@ export function createPlayerControls(
         nextZ += (rest.z - nextZ) * pose.bedTravel;
         shownYaw = turnToward(yaw, bedRestYaw(bed), pose.bedTurn);
       }
+      // 벤치에 앉는 동안에는 앞자리와 앉는 자리 사이를 옮겨 가요.
+      if (isSeated(seatFlow) && seatFlow.kind !== "none") {
+        const rest = seatRest(seatFlow.seat);
+        nextX += (rest.x - nextX) * pose.seatTravel;
+        nextZ += (rest.z - nextZ) * pose.seatTravel;
+        shownYaw = turnToward(shownYaw, seatYaw(seatFlow.seat), pose.seatTurn);
+      }
       const movedX = nextX - shownX;
       const movedZ = nextZ - shownZ;
       shownX = nextX;
@@ -716,7 +1015,8 @@ export function createPlayerControls(
       avatar.apply(pose);
       shadow.position.x = shownX;
       shadow.position.z = shownZ;
-      shadow.position.y = FLOOR_SHADOW_Y + (BED_SHADOW_Y - FLOOR_SHADOW_Y) * pose.bedLift;
+      shadow.position.y =
+        FLOOR_SHADOW_Y + (BED_SHADOW_Y - FLOOR_SHADOW_Y) * pose.bedLift + YARD_BENCH.seatY * pose.seatLift;
       desired.x += movedX;
       desired.z += movedZ;
       controls.target.x += movedX;

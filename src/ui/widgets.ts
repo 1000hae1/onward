@@ -8,6 +8,21 @@ export function createButton(label: string, onClick: () => void): HTMLButtonElem
   return element;
 }
 
+/** 앞에 이모지가 붙은 버튼이에요. 이모지는 꾸밈이라 화면 낭독기는 글자만 읽어요. */
+export function createEmojiButton(emoji: string, label: string, onClick: () => void): HTMLButtonElement {
+  const element = createButton("", onClick);
+  element.classList.add("emoji-button");
+  const icon = document.createElement("span");
+  icon.className = "button-emoji";
+  icon.setAttribute("aria-hidden", "true");
+  icon.textContent = emoji;
+  const text = document.createElement("span");
+  text.className = "button-label";
+  text.textContent = label;
+  element.append(icon, text);
+  return element;
+}
+
 export interface ChoiceRow<T> {
   readonly element: HTMLElement;
   select(value: T): void;

@@ -7,9 +7,10 @@ import type { NicknameProblem } from "./nickname.ts";
 import { chooseGiftSlot, GIFT_SLOTS_PER_STAND, LAMPS_PER_WINDOW } from "./offering-rules.ts";
 import type { Guest, HelloMessage } from "./protocol.ts";
 import { publicNickname } from "./safety-rules.ts";
+import { isLying } from "./bed-rules.ts";
 import { BEDS, PLAYER_START, ROOMS, roomAt, WALK_AREAS } from "./ward-layout.ts";
 
-/** 문병 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
+/** 방명록 링크로 들어온 사람의 역할이에요. 연결 정보와 잠시 끊긴 기록에만 두고 남에게 보내지 않아요. */
 export interface VisitRole {
   /** 주인의 guestId 해시예요. */
   owner: string;
@@ -30,18 +31,21 @@ export interface GuestRecord {
   withCat: boolean;
   x: number;
   z: number;
+  /** 배정받은 내 침대예요. 걸어 다녀도 그대로이고, 퇴원·반납·30초 넘게 끊기면 비어요. */
   bed: number | null;
   /** 이번 입장에서 받은 평안 주소예요. 다른 사람에게 보여도 되는 값이에요. 서버는 연결 정보에만 들고 있어요. */
   address: string;
-  /** 침대를 받은 시각이에요. 밀리초예요. 병동 고양이가 찾아올 때를 정해요. */
+  /** 내 침대에 누운 시각이에요. 밀리초예요. 서 있으면 null이에요. 병동 고양이가 찾아올 때를 정해요. */
   lyingSince: number | null;
+  /** 지금 앉아 있는 앞마당 벤치 자리예요. 서 있으면 비어 있어요. 침대 배정과 따로예요. */
+  bench?: number | null;
   /** 동작별로 마지막에 받아 준 시각이에요. 밀리초예요. */
-  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "report" | "hug" | "discharge", number>>;
+  lastAction: Partial<Record<"bless" | "bow" | "gift" | "lamp" | "link" | "hug" | "discharge", number>>;
   /** guestId 해시예요. 문병 온 주인을 찾을 때 써요. */
   key?: string;
-  /** 문병 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
+  /** 방명록 링크로 들어왔으면 그 역할이에요. 침대를 차지하지 않고 정원에도 세지 않아요. */
   visit?: VisitRole;
-  /** 켜진 문병 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
+  /** 켜진 방명록 링크가 있는 주인이에요. 이때만 directory에 병실 위치를 알려요. */
   linked?: boolean;
   /** 서로 다른 세 사람이 신고해서 닉네임을 가리고 운영자 확인을 기다려요. */
   hidden?: boolean;
@@ -49,8 +53,10 @@ export interface GuestRecord {
   bannedNickname?: string;
   /** IP 해시예요. 신고에 함께 적어 IP 차단을 할 수 있게 해요. 남에게 보내지 않아요. */
   ip?: string;
-  /** 수면 모드예요. 잠든 사람에게는 안아 주기 요청이 가지 않아요. */
+  /** 수면 모드예요. 잠든 사람에게는 안아 주기 요청·목례·한마디가 가지 않고, 평안과 선물은 쌓아 둬요. */
   sleeping?: boolean;
+  /** 잠든 시각이에요. 8시간이 지나면 서버가 연결을 닫아요. */
+  sleptAt?: number;
   /** 설정의 "안아 주기 요청 받지 않기"예요. */
   hugsOff?: boolean;
   /** 다녀간 날 수(한국 날짜)예요. 서버 판단에만 쓰고 남에게도, 화면에도 숫자로 보내지 않아요. */
@@ -61,6 +67,8 @@ export interface GuestRecord {
   joinedAt?: number;
   /** 이번에 들어와서 평안을 빈 횟수예요. 나갈 때 숫자로만 집계해요. */
   blessings?: number;
+  /** 최근 30초 동안 고양이 놀이를 청한 시각이에요. 연결마다 요청 횟수를 제한해요. */
+  catTaps?: number[];
 }
 
 /** 서명을 확인한 뒤의 hello예요. guestId는 토큰에서 꺼낸 값이에요. */
@@ -85,8 +93,12 @@ export function toPublic(record: GuestRecord): Guest {
     x: record.x,
     z: record.z,
     bed: record.bed,
+    lying: isLying(record),
+    bench: record.bench ?? null,
     address: record.address,
     hugOk: hugAvailable(record),
+    // 잠든 것은 모두에게 보여요. 안아 주기를 꺼 둔 설정은 보내지 않아요.
+    sleeping: Boolean(record.sleeping),
   };
 }
 
@@ -118,7 +130,7 @@ export function admit(
   if (!nickname.ok) return { kind: "rejected", problem: nickname.problem };
   const same = others.find((record) => record.guestId === hello.guestId) ?? null;
   const role = visit?.role ?? returning?.visit ?? null;
-  // 문병객은 평상복에 꽃다발을 들어요. 화면에서 무엇을 골랐든 서버가 정해요.
+  // 문병객은 옷 없이 꽃다발을 들어요. 화면에서 무엇을 골랐든 서버가 정해요.
   const outfit = role ? "visitor" : hello.outfit;
   if (returning) {
     const bed = outfit === "visitor" ? null : returning.bed;
@@ -212,24 +224,6 @@ export function clampToWalkable(x: number, z: number): { x: number; z: number } 
     }
   }
   return best;
-}
-
-/**
- * 침대를 달라는 요청이에요. 메시지는 하나씩 차례로 처리되니, 먼저 처리된 사람이 가져가요.
- * 이미 다른 침대에 있었다면 그 침대는 비워요.
- */
-export function claimBed(
-  guests: readonly GuestRecord[],
-  record: GuestRecord,
-  bed: number,
-  nowMs: number,
-): { granted: boolean; record: GuestRecord } {
-  if (record.outfit !== "patient" || record.visit) return { granted: false, record };
-  const taken = guests.some((other) => other.id !== record.id && other.bed === bed);
-  if (taken) return { granted: false, record };
-  // 같은 침대를 다시 받으면 누운 시각은 그대로예요.
-  const lyingSince = record.bed === bed && record.lyingSince !== null ? record.lyingSince : nowMs;
-  return { granted: true, record: { ...record, bed, lyingSince } };
 }
 
 /** 한국 시간으로 몇 월인지예요. */

@@ -1,4 +1,4 @@
-import { createButton, createText } from "./widgets";
+import { createButton, createEmojiButton, createText } from "./widgets";
 
 /** 수면 모드에서 들리는 바람결 소리의 크기예요. 아주 작게 들려요. */
 const SOUND_VOLUME = 0.035;
@@ -72,8 +72,8 @@ export function createSleepMode(options: SleepModeOptions): SleepMode {
   let wakeLock: WakeLockLike | null = null;
   const wakeLockApi = (navigator as WakeLockNavigator).wakeLock;
 
-  const sleepButton = createButton("잠들기", () => setSleeping(true));
-  sleepButton.className = "sleep-button";
+  const sleepButton = createEmojiButton("🌙", "잠들기", () => setSleeping(true));
+  sleepButton.classList.add("sleep-button");
   buttonRoot.append(sleepButton);
   buttonRoot.hidden = true;
 

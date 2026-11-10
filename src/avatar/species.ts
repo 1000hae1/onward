@@ -23,6 +23,11 @@ export interface BlobSpec {
 }
 
 export type SpeciesId = "rabbit" | "bear" | "penguin" | "otter" | "deer";
+/** 기본 체격에 대한 동물별 크기예요. */
+export function speciesScale(id: SpeciesId): number {
+  return id === "bear" ? 1.3 : id === "deer" ? 1.1 : 1;
+}
+
 export type Outfit = "patient" | "visitor";
 
 export interface SpeciesSpec {

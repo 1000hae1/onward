@@ -1,17 +1,17 @@
 import {
   BoxGeometry,
-  CanvasTexture,
   Mesh,
   MeshBasicMaterial,
   MeshLambertMaterial,
   PlaneGeometry,
-  SRGBColorSpace,
 } from "three";
 import type { BufferGeometry, Matrix4, Object3D } from "three";
 import { mergeGeometries } from "three/addons/utils/BufferGeometryUtils.js";
 import { BUILDING, BUILDING_HEIGHT, ENTRANCE, FLOOR_COUNT, FLOOR_HEIGHT } from "../../shared/ward-layout";
 import { facadeWindowCenters, mirrorPairIndex } from "./facade-windows";
 import { addInstances, createRandom, transform } from "./parts";
+import { buildSignboard } from "./signboard";
+import type { Signboard } from "./signboard";
 
 const WINDOW_SPACING = 3.6;
 const WINDOW_WIDTH = 2.2;
@@ -29,6 +29,12 @@ export interface HospitalHandles {
   windowDark: MeshBasicMaterial;
   windowEveningOnly: MeshBasicMaterial;
   windowAllNight: MeshBasicMaterial;
+  signboard: Signboard;
+}
+
+export interface HospitalOptions {
+  /** 간판 글자를 비스듬히 봐도 선명하게 하는 값이에요. */
+  anisotropy: number;
 }
 
 function outerWall(
@@ -79,30 +85,11 @@ function windowsOnFace(
   return windows;
 }
 
-function createSignTexture(): CanvasTexture {
-  const canvas = document.createElement("canvas");
-  canvas.width = 512;
-  canvas.height = 128;
-  const context = canvas.getContext("2d");
-  if (context) {
-    context.fillStyle = "#3f6f6b";
-    context.fillRect(0, 0, canvas.width, canvas.height);
-    context.fillStyle = "#fbfaf4";
-    context.font = '600 74px "Apple SD Gothic Neo", "Noto Sans KR", "Malgun Gothic", sans-serif';
-    context.textAlign = "center";
-    context.textBaseline = "middle";
-    context.fillText("온기병동", canvas.width / 2, canvas.height / 2 + 4);
-  }
-  const texture = new CanvasTexture(canvas);
-  texture.colorSpace = SRGBColorSpace;
-  return texture;
-}
-
 /**
  * 밖에서 보이는 병원 건물이에요. 바깥벽은 바깥에서만 보이는 면이라,
  * 병실 안에서는 벽에 가리지 않고 창밖 풍경이 그대로 보여요.
  */
-export function buildHospital(parent: Object3D): HospitalHandles {
+export function buildHospital(parent: Object3D, options: HospitalOptions): HospitalHandles {
   const width = BUILDING.maxX - BUILDING.minX;
   const depth = BUILDING.maxZ - BUILDING.minZ;
   const centerZ = (BUILDING.minZ + BUILDING.maxZ) / 2;
@@ -194,13 +181,12 @@ export function buildHospital(parent: Object3D): HospitalHandles {
     transform(0, CANOPY_Y + 0.2, BUILDING.maxZ + canopyDepth / 2, 0, CANOPY_HALF_WIDTH * 2 + 0.1, 0.12, canopyDepth + 0.1),
   ]);
 
-  // 이름표예요. 실제 병원의 이름이나 표장은 쓰지 않아요.
-  const sign = new Mesh(
-    new PlaneGeometry(7, 1.75),
-    new MeshBasicMaterial({ map: createSignTexture() }),
-  );
-  sign.position.set(0, FLOOR_HEIGHT + 1.6, BUILDING.maxZ + 0.1);
-  parent.add(sign);
+  // 현관 위의 남색 라이트박스 간판이에요. 실제 병원의 이름이나 표장은 쓰지 않아요.
+  const signboard = buildSignboard(parent, {
+    y: FLOOR_HEIGHT + 1.6,
+    wallZ: BUILDING.maxZ,
+    anisotropy: options.anisotropy,
+  });
 
-  return { windowDark, windowEveningOnly, windowAllNight };
+  return { windowDark, windowEveningOnly, windowAllNight, signboard };
 }

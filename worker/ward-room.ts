@@ -7,15 +7,25 @@ import {
   PROTOCOL_VERSION,
   WARD_CAPACITY,
 } from "../shared/protocol.ts";
-import type { ClientMessage, HealthResponse, ServerMessage, WardEvent, WardStats } from "../shared/protocol.ts";
-import { bedApproach, BEDS, roomAt, ROOMS } from "../shared/ward-layout.ts";
+import type { CatPlayMessage, ClientMessage, HealthResponse, ServerMessage, WardEvent, WardStats } from "../shared/protocol.ts";
+import {
+  catTapAllowed,
+  freshCatState,
+  requestPlay,
+  shouldRub,
+  startRub,
+  wakeFromKnead,
+  wardCatId,
+  wardCatRoom,
+} from "../shared/cat-play-rules.ts";
+import type { ActivePlay, CatState } from "../shared/cat-play-rules.ts";
+import { bedApproach, BEDS, doorSpots, roomAt, ROOMS } from "../shared/ward-layout.ts";
 import {
   actionReady,
   admit,
   alarmToSet,
   catVisits,
   changedVisits,
-  claimBed,
   clampToWalkable,
   expireAway,
   giftAllowedNow,
@@ -61,13 +71,29 @@ import { visitorDelivery, visitorMay, visitorSpot } from "../shared/visit-rules.
 import type { VerifiedHello, VisitRole } from "../shared/ward-rules.ts";
 import { checkHugAnswer, checkHugRequest, HUG_ANSWER_MS, HUG_REPEAT_MS, hugSpot, hugStillPossible } from "../shared/hug-rules.ts";
 import type { PendingHug } from "../shared/hug-rules.ts";
+import type { GuestbookStatus } from "./directory.ts";
 import { isMorningWindow, phraseAllowed, shouldOpenWindow } from "../shared/morning.ts";
 import { addPeace } from "../shared/planter.ts";
 import { canDischarge, countFarewell, FAREWELL_MS, farewellCount, startDischarge } from "../shared/discharge-rules.ts";
 import { shouldGreet } from "../shared/return-rules.ts";
 import { hugAvailable } from "../shared/ward-rules.ts";
+import { claimBed, isLying, lieDown, releaseBed, seatOnEntry, standUp } from "../shared/bed-rules.ts";
+import { leaveSeat, seatOf, takeSeat } from "../shared/bench-rules.ts";
 import { headcount, shouldReport } from "../shared/presence-rules.ts";
 import { departureOf, MAX_DEPARTURES_PER_REPORT } from "../shared/metrics-rules.ts";
+import {
+  keepForSleeper,
+  KEPT_KEEP_MS,
+  nextSleepDeadline,
+  readKept,
+  settleSleep,
+  sleepChange,
+  sleeperFor,
+  SLEEP_LIMIT_MS,
+  sleptTooLong,
+  wakeSummary,
+  withheldFromSleeper,
+} from "../shared/sleep-rules.ts";
 
 /** 연결마다 붙여 두는 정보예요. 하이버네이션 뒤에는 이것만 남아요. */
 type Attachment =
@@ -82,10 +108,18 @@ const DENIED_CODE = 4003;
 const ENTRY_FAILED_CODE = 1011;
 /** 메시지를 너무 빨리 계속 보냈어요. */
 const TOO_MANY_CODE = 4008;
+/** 잠든 지 8시간이 지나 연결을 쉬어요. 화면은 누를 때까지 다시 잇지 않아요. */
+const SLEPT_LONG_CODE = 4009;
 /** Worker가 IP 해시를 담아 보내는 내부 헤더예요. Worker가 항상 덮어써서 화면이 바꿀 수 없어요. */
 export const IP_HASH_HEADER = "X-Onward-Ip-Hash";
 /** IP 해시가 없을 때 요청 제한을 셀 자리예요. Worker를 거치면 생기지 않아요. */
 const NO_IP = "0".repeat(64);
+
+/** 고양이 놀이 기록과 쓰다듬은 횟수를 두는 기간이에요. 어제 쓰다듬은 것까지 기억하려고 이틀이에요. */
+const CAT_KEEP_MS = 2 * 24 * 60 * 60 * 1000;
+/** 이보다 오래전에 끝난 놀이는 snapshot에 담지 않아요. 끝난 뒤 제자리로 돌아가는 동안만 함께 보면 돼요. */
+const CAT_RECENT_MS = 60_000;
+const DAY_MS = 24 * 60 * 60 * 1000;
 
 /** 병실에서 보관 기간이 있는 표예요. */
 const RETENTION: readonly RetentionRule[] = [
@@ -98,6 +132,10 @@ const RETENTION: readonly RetentionRule[] = [
   { table: "morning_open", kind: "day", column: "day" },
   { table: "hug_sent", kind: "at", column: "at", keepMs: HUG_REPEAT_MS },
   { table: "hug_pending", kind: "at", column: "at", keepMs: HUG_ANSWER_MS },
+  { table: "sleep_kept", kind: "at", column: "at", keepMs: KEPT_KEEP_MS },
+  { table: "cat_state", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
+  { table: "cat_pets", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
+  { table: "cat_rubbed", kind: "at", column: "at", keepMs: CAT_KEEP_MS },
 ];
 const MAX_INSTANCE = 20;
 type DeniedAction = Extract<ServerMessage, { type: "action-denied" }>["action"];
@@ -140,7 +178,7 @@ export class WardRoom extends DurableObject<Env> {
     // 마지막으로 알린 고양이 방문이에요. 바뀐 것만 알리려고 둬요.
     sql.exec(`CREATE TABLE IF NOT EXISTS cat_visits (
       room INTEGER PRIMARY KEY, bed INTEGER NOT NULL, at INTEGER NOT NULL)`);
-    // 이 객체가 맡은 병동 번호예요. 문병 링크 주인의 위치를 알릴 때 써요.
+    // 이 객체가 맡은 병동 번호예요. 방명록 링크 주인의 위치를 알릴 때 써요.
     sql.exec(`CREATE TABLE IF NOT EXISTS place (ward INTEGER NOT NULL, instance INTEGER NOT NULL)`);
     // 다음에 보관 기간을 정리할 시각이에요. alarm 하나를 재접속 유예와 함께 쓰려고 적어 둬요.
     sql.exec(`CREATE TABLE IF NOT EXISTS retention (due INTEGER NOT NULL)`);
@@ -161,6 +199,18 @@ export class WardRoom extends DurableObject<Env> {
     // 정말 나간 사람의 머문 시간과 평안 빌기 수예요. 누구인지는 적지 않아요. 다음 인원 보고에 실어 보내고 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS departures (
       id INTEGER PRIMARY KEY AUTOINCREMENT, stay_ms INTEGER NOT NULL, blessings INTEGER NOT NULL)`);
+    // 잠든 사람(guestId 해시) 몫으로 쌓아 둔 평안과 선물이에요. 보낸 사람도 해시로만 두고, 깨어나면 숫자만 전하고 지워요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS sleep_kept (
+      target TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // 고양이마다 지금 하는 놀이, 연달아 논 횟수, 쉬는 때예요. 병동 고양이는 w0~w5, 데리고 다니는 고양이는 주인의 공개 번호예요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_state (
+      cat TEXT PRIMARY KEY, data TEXT NOT NULL, at INTEGER NOT NULL)`);
+    // 병동 고양이를 쓰다듬어 준 횟수예요. guestId 해시와 한국 날짜로 세요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_pets (
+      guest TEXT NOT NULL, day TEXT NOT NULL, count INTEGER NOT NULL, at INTEGER NOT NULL, PRIMARY KEY (guest, day))`);
+    // 기억하는 고양이가 오늘 먼저 다가가 비빈 사람이에요. 하루 한 번만이에요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS cat_rubbed (
+      guest TEXT PRIMARY KEY, day TEXT NOT NULL, at INTEGER NOT NULL)`);
   }
 
   health(): HealthResponse {
@@ -257,6 +307,10 @@ export class WardRoom extends DurableObject<Env> {
    */
   async alarm(): Promise<void> {
     const now = Date.now();
+    // 잠든 지 8시간이 지난 연결은 닫아요. 그 뒤로는 끊긴 사람처럼 30초 동안 자리를 맡아 둬요.
+    for (const { ws, record } of this.joined()) {
+      if (sleptTooLong(record, now)) await this.restAfterLongSleep(ws, record);
+    }
     const { expired, nextAlarm } = expireAway(this.awayGuests(), now);
     const before = this.lastVisits();
     for (const guest of expired) {
@@ -270,12 +324,58 @@ export class WardRoom extends DurableObject<Env> {
       due = nextRetentionAlarm(earliestExpiry(this.ctx.storage.sql, RETENTION, now), now);
       this.setRetentionDue(due);
     }
-    const next = earlierAlarm(nextAlarm, due);
+    const next = earlierAlarm(earlierAlarm(nextAlarm, due), this.sleepDeadline());
     if (next !== null) await this.ctx.storage.setAlarm(next);
     if (expired.length > 0) {
       this.refreshCatVisits(before);
       await this.syncPresence(now);
     }
+  }
+
+  /** 지금 잠든 사람 가운데 가장 먼저 8시간이 되는 시각이에요. */
+  private sleepDeadline(): number | null {
+    return nextSleepDeadline(this.joined().map((entry) => entry.record));
+  }
+
+  /** 잠든 사람의 8시간 alarm을 맞춰요. 더 이른 alarm이 있으면 그대로 둬요. */
+  private async keepSleepAlarm(record: GuestRecord): Promise<void> {
+    if (!record.sleeping || record.sleptAt === undefined) return;
+    const wanted = alarmToSet(await this.ctx.storage.getAlarm(), record.sleptAt + SLEEP_LIMIT_MS);
+    if (wanted !== null) await this.ctx.storage.setAlarm(wanted);
+  }
+
+  /**
+   * 잠든 지 8시간이 지났어요. 깨운 것으로 알리고 연결을 닫아요. 쌓아 둔 평안은 다음에 들어올 때 전해요.
+   * 닫는 연결에 요약을 보내면 화면이 보여 주지 못하고 지나가서 여기서는 보내지 않아요.
+   */
+  private async restAfterLongSleep(ws: WebSocket, record: GuestRecord): Promise<void> {
+    const attachment = ws.deserializeAttachment() as Attachment | null;
+    if (!attachment?.joined) return;
+    const next = sleepChange(record, false, Date.now()) ?? record;
+    ws.serializeAttachment({ ...attachment, record: next } satisfies Attachment);
+    this.broadcast({ kind: "sleep", id: next.id, sleeping: false, hugOk: hugAvailable(next) }, ws);
+    await this.disconnect(ws, SLEPT_LONG_CODE, "slept-long");
+  }
+
+  /** 잠든 사람 몫으로 평안이나 선물을 쌓아요. */
+  private async keepFor(target: string, sender: GuestRecord, kind: "bless" | "gift", nowMs: number): Promise<void> {
+    const sql = this.ctx.storage.sql;
+    const senderKey = sender.key ?? (await hashGuest(sender.guestId));
+    const row = sql.exec<{ data: string }>("SELECT data FROM sleep_kept WHERE target = ?", target).toArray()[0];
+    const next = keepForSleeper(readKept(row?.data), senderKey, kind);
+    sql.exec("INSERT OR REPLACE INTO sleep_kept (target, data, at) VALUES (?, ?, ?)", target, JSON.stringify(next), nowMs);
+    await this.keepTidy();
+  }
+
+  /** 깨어난 사람에게 자는 동안 쌓인 것을 숫자로만 전하고 지워요. 이 연결에만 보내요. */
+  private deliverKept(ws: WebSocket, record: GuestRecord): void {
+    if (!record.key) return;
+    const sql = this.ctx.storage.sql;
+    const row = sql.exec<{ data: string }>("SELECT data FROM sleep_kept WHERE target = ?", record.key).toArray()[0];
+    if (!row) return;
+    sql.exec("DELETE FROM sleep_kept WHERE target = ?", record.key);
+    const summary = wakeSummary(readKept(row.data));
+    if (summary) this.send(ws, { v: PROTOCOL_VERSION, type: "slept-summary", people: summary.people, gifts: summary.gifts });
   }
 
   private retentionDue(): number | null {
@@ -362,22 +462,6 @@ export class WardRoom extends DurableObject<Env> {
     };
   }
 
-  /** 서로 다른 세 사람이 신고한 사람의 닉네임을 가려요. 이미 가려져 있으면 아무것도 하지 않아요. */
-  private hide(key: string): void {
-    for (const { ws, record } of this.joined()) {
-      if (record.key !== key || record.hidden) continue;
-      const next = { ...record, hidden: true };
-      this.save(ws, ws.deserializeAttachment() as Attachment, next);
-      this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
-    }
-    for (const guest of this.awayGuests()) {
-      if (guest.key !== key || guest.record.hidden) continue;
-      const next = { ...guest.record, hidden: true };
-      this.ctx.storage.sql.exec("UPDATE away SET record = ? WHERE key = ?", JSON.stringify(next), key);
-      this.broadcast({ kind: "update", guest: toPublic(next) });
-    }
-  }
-
   /** 지금 연결된 사람들이에요. 연결에 붙은 정보로 매번 다시 만들어요. */
   private joined(except?: WebSocket): { ws: WebSocket; record: GuestRecord }[] {
     return this.ctx.getWebSockets().flatMap((ws) => {
@@ -409,7 +493,9 @@ export class WardRoom extends DurableObject<Env> {
 
   private broadcast(event: WardEvent, except?: WebSocket): void {
     const text = JSON.stringify({ v: PROTOCOL_VERSION, type: "event", event } satisfies ServerMessage);
-    for (const { ws } of this.joined(except)) {
+    for (const { ws, record } of this.joined(except)) {
+      // 잠든 사람에게는 목례·한마디를 보내지 않고, 그분께 온 평안은 쌓아 뒀다가 깨어날 때 전해요.
+      if (withheldFromSleeper(event, record)) continue;
       try {
         ws.send(text);
       } catch {
@@ -418,14 +504,28 @@ export class WardRoom extends DurableObject<Env> {
     }
   }
 
+  /**
+   * 연결에 기록을 붙여요. 누워 있지 않은데 잠든 채면 깨워서 저장해요(일어나기, 걷기, 침대 옮기기, 퇴원 모두 여기를 지나요).
+   * 이미 들어와 있던 사람이 잠들거나 깨어나면 다른 사람에게 한 번 알리고, 깨어났으면 쌓인 것을 전해요.
+   */
   private save(ws: WebSocket, attachment: Attachment, record: GuestRecord): void {
+    const before = ws.deserializeAttachment() as Attachment | null;
+    const next = settleSleep(record);
     ws.serializeAttachment({
       joined: true,
       ward: attachment.ward,
       instance: attachment.instance,
       ip: attachment.ip ?? null,
-      record,
+      record: next,
     } satisfies Attachment);
+    // 꾹꾹이 뒤 곁에서 자던 고양이는 그 사람이 침대에서 내려오면 깨어나요.
+    if (before?.joined && before.record.lyingSince !== null && next.lyingSince === null) this.wakeCats(next.id);
+    // 막 들어온 연결은 join·update에 잠든 상태가 함께 가요.
+    if (!before?.joined) return;
+    const sleeping = Boolean(next.sleeping);
+    if (Boolean(before.record.sleeping) === sleeping) return;
+    this.broadcast({ kind: "sleep", id: next.id, sleeping, hugOk: hugAvailable(next) }, ws);
+    if (!sleeping) this.deliverKept(ws, next);
   }
 
   /** 이 병동의 번호예요. 연결이 처음 들어올 때 적어 둔 값이에요. */
@@ -436,7 +536,7 @@ export class WardRoom extends DurableObject<Env> {
     };
   }
 
-  /** 문병 링크의 주인이 이 병동에 있으면 그 기록이에요. 잠시 끊긴 주인도 자리를 지키고 있어요. */
+  /** 방명록 링크의 주인이 이 병동에 있으면 그 기록이에요. 잠시 끊긴 주인도 자리를 지키고 있어요. */
   private ownerHere(owner: string): { record: GuestRecord; ws: WebSocket | null } | null {
     const joined = this.joined().find((entry) => entry.record.key === owner);
     if (joined) return { record: joined.record, ws: joined.ws };
@@ -456,6 +556,157 @@ export class WardRoom extends DurableObject<Env> {
     }
     if (record.visit) await this.directory().releaseVisit(record.visit.session);
     if (record.linked) await this.directory().reportLocation(key, { ...this.place(), bed: record.bed });
+  }
+
+  private catState(cat: string): CatState {
+    const row = this.ctx.storage.sql.exec<{ data: string }>("SELECT data FROM cat_state WHERE cat = ?", cat).toArray()[0];
+    return row ? (JSON.parse(row.data) as CatState) : freshCatState();
+  }
+
+  private saveCatState(cat: string, state: CatState, nowMs: number): void {
+    this.ctx.storage.sql.exec("INSERT OR REPLACE INTO cat_state (cat, data, at) VALUES (?, ?, ?)", cat, JSON.stringify(state), nowMs);
+  }
+
+  /** 모두에게 보내는 놀이예요. 닉네임과 연달아 횟수는 담지 않아요. */
+  private catPlayMessage(cat: string, play: ActivePlay): CatPlayMessage {
+    return { catId: cat, kind: play.kind, by: play.by, at: play.at, until: play.until, seed: play.seed, x: play.x, z: play.z, bed: play.bed };
+  }
+
+  /** 들어온 사람에게 보내는 고양이 놀이와 쉬기예요. 방금 끝난 놀이도 담아 제자리로 돌아가는 모습까지 같게 보여요. */
+  private catSnapshot(nowMs: number): { catPlays: CatPlayMessage[]; catRests: { catId: string; until: number }[] } {
+    const catPlays: CatPlayMessage[] = [];
+    const catRests: { catId: string; until: number }[] = [];
+    const present = new Set(this.everyone().map((guest) => guest.id));
+    for (const row of this.ctx.storage.sql.exec<{ cat: string; data: string }>("SELECT cat, data FROM cat_state")) {
+      // 데리고 다니는 고양이는 주인이 병동에 있을 때만이에요.
+      if (wardCatRoom(row.cat) === null && !present.has(row.cat)) continue;
+      const state = JSON.parse(row.data) as CatState;
+      if (state.play && state.play.until > nowMs - CAT_RECENT_MS) catPlays.push(this.catPlayMessage(row.cat, state.play));
+      if (state.restUntil > nowMs) catRests.push({ catId: row.cat, until: state.restUntil });
+    }
+    return { catPlays, catRests };
+  }
+
+  /** 고양이와 놀기를 청했어요. 먼저 처리된 사람이 놀고, 장면은 각 화면이 그려요. */
+  private playWithCat(
+    ws: WebSocket,
+    attachment: Extract<Attachment, { joined: true }>,
+    cat: string,
+    kind: Extract<ClientMessage, { type: "cat-play" }>["kind"],
+    nowMs: number,
+  ): void {
+    const record = attachment.record;
+    const deny = (reason: DeniedReason): void => this.send(ws, { v: PROTOCOL_VERSION, type: "action-denied", action: "cat", reason });
+    // 연결마다 1초 간격, 30초에 여섯 번까지예요.
+    const tap = catTapAllowed(record.catTaps ?? [], nowMs);
+    if (!tap.ok) return deny("too-fast");
+    this.save(ws, attachment, { ...record, catTaps: [...tap.log] });
+
+    // 데리고 다니는 고양이는 주인이 고양이와 함께 병동에 있어야 해요.
+    const wardRoom = wardCatRoom(cat);
+    let owner: GuestRecord | null = null;
+    if (wardRoom === null) {
+      owner = this.everyone().find((guest) => guest.id === cat) ?? null;
+      if (!owner?.withCat) return deny("no-target");
+    }
+    const lyingBed = isLying(record) ? record.bed : null;
+    const decision = requestPlay(
+      this.catState(cat),
+      {
+        catId: cat,
+        kind,
+        owner: owner?.id ?? null,
+        requester: {
+          id: record.id,
+          nickname: publicNickname(record),
+          x: record.x,
+          z: record.z,
+          room: roomAt(record.x, record.z)?.index ?? null,
+          lyingBed,
+          lyingRoom: lyingBed === null ? null : (BEDS[lyingBed]?.roomIndex ?? null),
+        },
+      },
+      nowMs,
+      Math.random(),
+    );
+    switch (decision.kind) {
+      case "denied":
+        return deny(decision.reason);
+      case "busy":
+        this.send(ws, { v: PROTOCOL_VERSION, type: "cat-busy", catId: cat, nickname: decision.nickname, scene: decision.scene });
+        return;
+      case "resting":
+        if (decision.started) {
+          this.saveCatState(cat, decision.state, nowMs);
+          this.broadcast({ kind: "cat-rest", catId: cat, until: decision.until });
+        } else {
+          deny("resting");
+        }
+        return;
+      case "granted": {
+        this.saveCatState(cat, decision.state, nowMs);
+        // 나에게도 보내요. 모두 같은 시각과 시드로 장면을 그려요.
+        this.broadcast({ kind: "cat-play", play: this.catPlayMessage(cat, decision.play) });
+        if (kind !== "pet") return;
+        if (wardRoom !== null && record.key) this.countPet(record.key, nowMs);
+        // 다른 분의 고양이를 쓰다듬으면 주인 화면에만 알려요. 닉네임만 가요.
+        if (owner && owner.id !== record.id) {
+          const ownerWs = this.joined().find((entry) => entry.record.id === owner.id)?.ws;
+          if (ownerWs) this.send(ownerWs, { v: PROTOCOL_VERSION, type: "cat-petted", nickname: publicNickname(record) });
+        }
+        return;
+      }
+    }
+  }
+
+  private countPet(key: string, nowMs: number): void {
+    this.ctx.storage.sql.exec(
+      `INSERT INTO cat_pets (guest, day, count, at) VALUES (?, ?, 1, ?)
+       ON CONFLICT (guest, day) DO UPDATE SET count = count + 1, at = excluded.at`,
+      key,
+      koreanDay(new Date(nowMs)),
+      nowMs,
+    );
+  }
+
+  /** 침대에서 내려온 사람 곁에서 자던 고양이를 깨워요. 바뀐 고양이만 알려요. */
+  private wakeCats(guestId: string): void {
+    const nowMs = Date.now();
+    for (const cat of [...ROOMS.map((room) => wardCatId(room.index)), guestId]) {
+      const next = wakeFromKnead(this.catState(cat), guestId, nowMs);
+      if (!next?.play) continue;
+      this.saveCatState(cat, next, nowMs);
+      this.broadcast({ kind: "cat-wake", catId: cat, until: next.play.until });
+    }
+  }
+
+  /** 오늘이나 어제 많이 쓰다듬어 준 사람이 들어오면, 가장 가까운 병동 고양이가 먼저 다가와 비벼요. 모두에게 같은 장면이에요. */
+  private rubIfRemembered(record: GuestRecord, nowMs: number): void {
+    if (!record.key) return;
+    const sql = this.ctx.storage.sql;
+    const today = koreanDay(new Date(nowMs));
+    const yesterday = koreanDay(new Date(nowMs - DAY_MS));
+    const count = (day: string): number =>
+      sql.exec<{ count: number }>("SELECT count FROM cat_pets WHERE guest = ? AND day = ?", record.key, day).toArray()[0]?.count ?? 0;
+    const rubbed = sql.exec<{ day: string }>("SELECT day FROM cat_rubbed WHERE guest = ?", record.key).toArray()[0]?.day === today;
+    if (!shouldRub(count(today), count(yesterday), rubbed)) return;
+    // 그 사람과 가장 가까운 문의 병실 고양이예요.
+    let best = ROOMS[0];
+    let bestDistance = Infinity;
+    for (const room of ROOMS) {
+      const door = doorSpots(room).outside;
+      const distance = Math.hypot(door.x - record.x, door.z - record.z);
+      if (distance < bestDistance) {
+        bestDistance = distance;
+        best = room;
+      }
+    }
+    const cat = wardCatId(best.index);
+    const started = startRub(this.catState(cat), { id: record.id, nickname: publicNickname(record), x: record.x, z: record.z }, nowMs, Math.random());
+    if (!started) return;
+    this.saveCatState(cat, started.state, nowMs);
+    sql.exec("INSERT OR REPLACE INTO cat_rubbed (guest, day, at) VALUES (?, ?, ?)", record.key, today, nowMs);
+    this.broadcast({ kind: "cat-play", play: this.catPlayMessage(cat, started.play) });
   }
 
   private lastVisits(): CatVisit[] {
@@ -615,7 +866,7 @@ export class WardRoom extends DurableObject<Env> {
     // 퇴원하던 연결이 남아 있으면 이어받지 않고 새로 들어와요.
     const previous = (returning?.record ?? stillOpen)?.discharge ? null : (returning?.record ?? stillOpen);
 
-    // 문병 링크로 왔으면 directory에서 확인해요. 30초 안에 돌아온 문병객은 이미 받은 역할을 그대로 써요.
+    // 방명록 링크로 왔으면 directory에서 확인해요. 30초 안에 돌아온 문병객은 이미 받은 역할을 그대로 써요.
     let visit: { role: VisitRole; spot: { x: number; z: number } } | null = null;
     if (hello.visitToken && !previous?.visit) {
       // 닉네임이 맞지 않으면 링크를 세지 않고 먼저 돌려보내요.
@@ -690,7 +941,7 @@ export class WardRoom extends DurableObject<Env> {
       // 맡아 둔 사람이 더 없으면 alarm도 지워요. 쓸데없이 깨지 않게요.
       // 보관 기간 정리가 남아 있으면 그때로 맞춰 둬요.
       if (nextAlarmAt(away.filter((guest) => guest !== returning)) === null) {
-        const due = this.retentionDue();
+        const due = earlierAlarm(this.retentionDue(), this.sleepDeadline());
         if (due === null) await this.ctx.storage.deleteAlarm();
         else await this.ctx.storage.setAlarm(due);
       }
@@ -699,8 +950,17 @@ export class WardRoom extends DurableObject<Env> {
     // 새로 들어오면 directory에서 새 평안 주소를 받고, 없는 동안 도착한 평안을 꺼내요.
     // 30초 안에 돌아온 사람은 쓰던 주소를 그대로 써서 directory에 묻지 않아요.
     // 링크 주인이면 이번 주소와 병동 위치를 directory에 함께 적어요. 문병객은 자기 링크의 위치를 바꾸지 않아요.
+    // 새로 들어온 환자에게는 이 브라우저가 기억하는 지난번 침대를 먼저 돌려줘요. 비어 있을 때만이에요.
+    const seated =
+      admission.restored || admission.record.visit
+        ? admission.record
+        : seatOnEntry(
+            this.everyone(ws).filter((guest) => guest.id !== admission.replaces),
+            admission.record,
+            hello.seat,
+          );
     let record: GuestRecord = {
-      ...admission.record,
+      ...seated,
       // 30초 안에 돌아온 사람은 처음 들어온 시각을 그대로 써요.
       joinedAt: admission.record.joinedAt ?? now,
       key,
@@ -710,6 +970,9 @@ export class WardRoom extends DurableObject<Env> {
     };
     let inbox: SendableCard[] = [];
     let welcomeBack = false;
+    /** 30초 안에 다시 이어 directory를 부르지 않았으면 모르니 null이에요. 화면은 알던 값을 그대로 써요. */
+    let fiveLeafUsed: boolean | null = null;
+    let tree: { active: boolean; count: number } | null = null;
     if (!admission.restored || !record.address) {
       const place = record.visit
         ? null
@@ -718,6 +981,12 @@ export class WardRoom extends DurableObject<Env> {
       record = { ...record, address: entered.address, linked: entered.linked, visitDays: entered.visitDays };
       inbox = entered.inbox.filter(isCard);
       welcomeBack = entered.welcomeBack;
+      fiveLeafUsed = entered.fiveLeafUsed;
+      // 문병객에게는 사과나무를 그리지 않아요(자기 나무도 병실에서는 문병 중이라 감춰요).
+      tree = record.visit ? null : entered.tree;
+    } else if (!record.visit) {
+      // 30초 안에 다시 이은 주인이에요. 화면을 새로 열었을 수 있어서 나무만 다시 알려 줘요.
+      tree = await directory.treeOf(key);
     }
     const role = record.visit ?? null;
     const owner = role ? this.ownerHere(role.owner) : null;
@@ -737,15 +1006,22 @@ export class WardRoom extends DurableObject<Env> {
       seasonalGifts: seasonalGiftsAllowed(new Date(now)),
       serverNow: now,
       catVisits: catVisits(this.everyone()),
+      ...this.catSnapshot(now),
       restored: admission.restored,
       inbox,
       stats: this.stats(now),
       visit: role ? { ownerNickname: role.ownerNickname, ownerPresent: owner !== null, bed: role.bed } : null,
       greet: !admission.restored && shouldGreet(record.visitDays ?? 0),
       welcomeBack,
+      fiveLeafUsed,
       morningRooms: this.morningRooms(now),
       planters: this.planterTotals(),
     });
+    // 내 침대 옆 작은 사과나무예요. 이 연결에만 보내요. 다른 사람에게 가는 snapshot·event에는 사과가 없어요.
+    if (tree) this.send(ws, { v: PROTOCOL_VERSION, type: "my-tree", active: tree.active, count: tree.count });
+    // 잠든 채 다시 이어졌으면 8시간 alarm을 다시 맞추고, 깨어 있으면 자는 동안 쌓인 것을 전해요.
+    if (record.sleeping) await this.keepSleepAlarm(record);
+    else this.deliverKept(ws, record);
     if (admission.restored) {
       // 다른 사람에게는 자리를 비운 적이 없던 것처럼 보여요. 모습이 바뀌었을 때만 알려요.
       this.broadcast({ kind: "update", guest: toPublic(record) }, ws);
@@ -753,8 +1029,11 @@ export class WardRoom extends DurableObject<Env> {
       this.broadcast({ kind: "join", guest: toPublic(record) }, ws);
     }
     this.refreshCatVisits(before);
+    if (!admission.restored) this.rubIfRemembered(record, now);
     await this.syncPresence(now);
     this.countVisitor(key, now);
+    // 지난번 침대를 다시 받았으면 그 침대에 남겨져 있던 평안을 전해요.
+    if (!admission.restored && record.bed !== null) await this.deliverLeft(ws, record.bed, record, now);
     await this.openWindowIfMorning(roomAt(record.x, record.z)?.index ?? null, now);
     await this.keepTidy();
     // 새로 온 문병객이면 주인 화면에만 알려요.
@@ -791,47 +1070,107 @@ export class WardRoom extends DurableObject<Env> {
         if (spot.x !== message.x || spot.z !== message.z) {
           this.send(ws, { v: PROTOCOL_VERSION, type: "position-corrected", x: spot.x, z: spot.z });
         }
-        // 걸어가면 누워 있던 침대는 비워요.
-        const hadBed = record.bed !== null;
+        // 걸어가면 누워 있던 침대나 앉아 있던 벤치에서 내려와요. 침대 배정은 그대로예요.
+        const hadBed = record.lyingSince !== null;
+        const hadSeat = seatOf(record) !== null;
         const roomChanged = roomAt(record.x, record.z)?.index !== roomAt(spot.x, spot.z)?.index;
         // 고양이 방문은 병실을 옮기거나 일어날 때만 따지니, 그때만 저장소를 읽어요.
         const before = hadBed || roomChanged ? this.lastVisits() : [];
-        save({ ...record, x: spot.x, z: spot.z, bed: null, lyingSince: null });
+        save({ ...record, x: spot.x, z: spot.z, lyingSince: null, bench: null });
         if (hadBed) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        if (hadSeat) this.broadcast({ kind: "stand", id: record.id }, ws);
         this.broadcast({ kind: "walk", id: record.id, x: spot.x, z: spot.z }, ws);
         // 병실을 옮기거나 침대에서 일어났을 때만 고양이 방문을 다시 따져요.
         if (hadBed || roomChanged) this.refreshCatVisits(before);
         if (roomChanged) await this.openWindowIfMorning(roomAt(spot.x, spot.z)?.index ?? null, nowMs);
         return;
       }
+      case "claim-bed": {
+        // 먼저 처리된 사람이 가져가요. 잠시 끊긴 사람의 침대도 그 사람 것이에요.
+        const result = claimBed(this.everyone(ws), record, message.bedId);
+        if (!result.granted) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "bed-unavailable", bedId: message.bedId });
+          return;
+        }
+        const changed = result.record.bed !== record.bed;
+        const wasLying = record.lyingSince !== null;
+        const before = changed && wasLying ? this.lastVisits() : null;
+        save(result.record);
+        this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
+        if (!changed) return;
+        // 옮기면 원래 침대에서 먼저 내려와요. 다른 사람 화면의 이름표는 bed-claimed를 따라요.
+        if (wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "bed-claimed", id: record.id, bedId: message.bedId }, ws);
+        if (before) this.refreshCatVisits(before);
+        // 링크 주인이면 문병객이 찾아올 침대를 알려요.
+        if (record.linked && record.key) {
+          await this.directory().reportLocation(record.key, { ...this.place(), bed: message.bedId });
+        }
+        // 그 침대에 남겨져 있던 평안을 새 주인에게 전하고 바로 지워요.
+        await this.deliverLeft(ws, message.bedId, record, nowMs);
+        return;
+      }
+      case "release-bed": {
+        if (record.bed === null) return;
+        const wasLying = record.lyingSince !== null;
+        const before = wasLying ? this.lastVisits() : null;
+        save(releaseBed(record).record);
+        if (wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "bed-released", id: record.id }, ws);
+        if (before) this.refreshCatVisits(before);
+        return;
+      }
       case "lie-down": {
-        const result = claimBed(this.everyone(), record, message.bedId, nowMs);
+        // 내 침대에만 누워요. 배정은 claim-bed로 먼저 받아요.
+        const result = lieDown(record, message.bedId, nowMs);
         if (!result.granted) {
           this.send(ws, { v: PROTOCOL_VERSION, type: "bed-unavailable", bedId: message.bedId });
           return;
         }
         const before = this.lastVisits();
-        // 눕는 사람은 침대 곁 자리에 있는 것으로 봐요.
+        // 눕는 사람은 침대 곁 자리에 있는 것으로 봐요. 벤치에 앉아 있었으면 일어나요.
         const spot = bedApproach(BEDS[message.bedId]);
-        save({ ...result.record, x: spot.x, z: spot.z });
+        const hadSeat = seatOf(record) !== null;
+        save({ ...result.record, x: spot.x, z: spot.z, bench: null });
         this.send(ws, { v: PROTOCOL_VERSION, type: "bed-granted", bedId: message.bedId });
+        if (hadSeat) this.broadcast({ kind: "stand", id: record.id }, ws);
         this.broadcast({ kind: "lie", id: record.id, bedId: message.bedId }, ws);
         this.refreshCatVisits(before);
-        // 링크 주인이면 문병객이 찾아올 침대를 알려요.
-        if (record.linked && record.key) {
-          await this.directory().reportLocation(record.key, { ...this.place(), bed: message.bedId });
-        }
-        // 그 침대에 남겨져 있던 평안을 전하고 바로 지워요.
-        await this.deliverLeft(ws, message.bedId, record, nowMs);
         await this.openWindowIfMorning(BEDS[message.bedId].roomIndex, nowMs);
         return;
       }
       case "get-up": {
-        if (record.bed === null) return;
+        // 침대에서 내려오기만 해요. 침대는 계속 내 것이에요.
+        const next = standUp(record);
+        if (!next) return;
         const before = this.lastVisits();
-        save({ ...record, bed: null, lyingSince: null });
+        save(next);
         this.broadcast({ kind: "get-up", id: record.id }, ws);
         this.refreshCatVisits(before);
+        return;
+      }
+      case "sit": {
+        // 먼저 처리된 사람이 앉아요. 잠시 끊긴 사람의 자리도 그 사람 것이에요.
+        const result = takeSeat(this.everyone(ws), record, message.seat);
+        if (!result.granted) {
+          this.send(ws, { v: PROTOCOL_VERSION, type: "seat-unavailable", seat: message.seat });
+          return;
+        }
+        const before = result.wasLying ? this.lastVisits() : null;
+        save(result.record);
+        this.send(ws, { v: PROTOCOL_VERSION, type: "seat-granted", seat: message.seat });
+        if (result.record === record) return;
+        // 누워 있었으면 먼저 일어나요. 침대는 그대로 내 것이에요.
+        if (result.wasLying) this.broadcast({ kind: "get-up", id: record.id }, ws);
+        this.broadcast({ kind: "sit", id: record.id, seat: message.seat }, ws);
+        if (before) this.refreshCatVisits(before);
+        return;
+      }
+      case "stand": {
+        const next = leaveSeat(record);
+        if (!next) return;
+        save(next);
+        this.broadcast({ kind: "stand", id: record.id }, ws);
         return;
       }
       case "bow": {
@@ -860,7 +1199,13 @@ export class WardRoom extends DurableObject<Env> {
           return;
         }
         save({ ...record, lastAction: { ...record.lastAction, bless: nowMs }, blessings: (record.blessings ?? 0) + 1 });
+        // 잠든 분께는 빛이 날아가는 것만 남들이 보고, 그분 화면에는 띄우지 않고 쌓아 둬요.
         this.broadcast({ kind: "bless", id: record.id, ...target }, ws);
+        const sleeper = sleeperFor(this.everyone(), target, record.id);
+        if (sleeper?.key) {
+          await this.keepFor(sleeper.key, record, "bless", nowMs);
+          this.send(ws, { v: PROTOCOL_VERSION, type: "kept-quiet" });
+        }
         // 빈 침대면 다음에 누울 사람을 위해 남겨 둬요.
         if (target.bedId !== null && target.targetId === null && this.bedIsEmpty(target.bedId)) {
           await this.leaveOnBed(target.bedId, record, "bless", null, nowMs);
@@ -924,6 +1269,12 @@ export class WardRoom extends DurableObject<Env> {
         this.broadcast({ kind: "gift", id: record.id, gift: { stand, slot, item: message.item } });
         if (emptyBed) await this.leaveOnBed(stand, record, "gift", message.item, nowMs);
         if (toOwner) this.send(ws, { v: PROTOCOL_VERSION, type: "left-saved" });
+        // 잠든 분 머리맡이면 선물은 놓되 그분 화면에는 조용히 놓고, 깨어날 때 숫자로 알려요.
+        const sleeper = toOwner ? null : sleeperFor(this.everyone(), target, record.id);
+        if (sleeper?.key) {
+          await this.keepFor(sleeper.key, record, "gift", nowMs);
+          this.send(ws, { v: PROTOCOL_VERSION, type: "kept-quiet" });
+        }
         this.countBlessing(nowMs);
         await this.keepTidy();
         return;
@@ -957,16 +1308,17 @@ export class WardRoom extends DurableObject<Env> {
         else deny(action, result === "once-a-day" ? "once-a-day" : "no-target");
         return;
       }
-      case "visit-link": {
-        if (!actionReady(record, "link", nowMs)) return deny("visit-link", "too-fast");
+      case "guestbook": {
+        // 내 방명록이에요. 답은 이 연결(주인)에게만 보내요. 문병객은 visitorMay에서 이미 걸러졌어요.
+        if (!actionReady(record, "link", nowMs)) return deny("guestbook", "too-fast");
         const key = record.key ?? (await hashGuest(record.guestId));
         const directory = this.directory();
         let token: string | null = null;
         let linked = record.linked ?? false;
         if (message.action === "create") {
-          // 내 침대로 오는 링크라서 침대에 누워 있을 때만 만들 수 있어요.
-          if (record.bed === null) return deny("visit-link", "no-bed");
-          token = await directory.createVisitLink(
+          // 문병객이 주인 침대 곁으로 오므로 침대에 누워 있을 때만 만들 수 있어요.
+          if (record.bed === null) return deny("guestbook", "no-bed");
+          token = await directory.createGuestbookLink(
             key,
             { nickname: publicNickname(record), animal: record.animal, address: record.address },
             { ward: attachment.ward, instance: attachment.instance, bed: record.bed },
@@ -974,50 +1326,29 @@ export class WardRoom extends DurableObject<Env> {
           );
           linked = true;
         } else if (message.action === "off") {
-          await directory.disableVisitLink(key);
+          await directory.disableGuestbookLink(key);
           linked = false;
         }
-        const status = await directory.visitLinkStatus(key);
+        const status = await directory.guestbookStatus(key);
         linked = linked && status.active;
         save({ ...record, key, linked, lastAction: { ...record.lastAction, link: nowMs } });
-        this.send(ws, { v: PROTOCOL_VERSION, type: "visit-link", token, active: status.active, visits: status.visits });
+        this.sendGuestbook(ws, token, status);
         return;
       }
-      case "report": {
-        if (!actionReady(record, "report", nowMs)) return deny("report", "too-fast");
-        save({ ...record, lastAction: { ...record.lastAction, report: nowMs } });
-        const target = this.everyone().find((guest) => guest.id === message.targetId) ?? null;
-        const reporterHash = record.key ?? (await hashGuest(record.guestId));
-        if (!target?.key || target.key === reporterHash) {
-          this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: "no-target" });
-          return;
-        }
-        const place = this.place();
-        const outcome = await this.directory().report(
-          {
-            room: `ward-${place.ward}-${place.instance}`,
-            reason: message.reason,
-            reporterId: record.id,
-            reporterHash,
-            targetId: target.id,
-            targetHash: target.key,
-            targetIp: target.ip ?? null,
-            // 이미 가려졌어도 운영자가 볼 수 있게 원래 닉네임을 적어요.
-            targetNickname: target.nickname,
-            targetAnimal: target.animal,
-          },
-          nowMs,
-        );
-        this.send(ws, { v: PROTOCOL_VERSION, type: "report-result", result: outcome.result });
-        if (outcome.hide) this.hide(target.key);
+      case "hide-apple": {
+        // 자기 나무의 사과만 지울 수 있어요. 다른 사람의 사과 번호를 보내도 directory가 owner로 걸러요.
+        if (!actionReady(record, "link", nowMs)) return deny("guestbook", "too-fast");
+        const key = record.key ?? (await hashGuest(record.guestId));
+        save({ ...record, key, lastAction: { ...record.lastAction, link: nowMs } });
+        this.sendGuestbook(ws, null, await this.directory().hideApple(key, message.appleId));
         return;
       }
       case "sleep": {
-        if (Boolean(record.sleeping) === message.sleeping) return;
-        const next = { ...record, sleeping: message.sleeping };
+        // 누워 있을 때만 잠들어요. 같은 값이 다시 오면 아무것도 하지 않아요. 알리기와 깨어날 때의 요약은 save가 해요.
+        const next = sleepChange(record, message.sleeping, nowMs);
+        if (!next) return;
         save(next);
-        // 안아 주기를 받을 수 있는지가 바뀔 때만 다른 사람에게 알려요.
-        if (hugAvailable(next) !== hugAvailable(record)) this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
+        await this.keepSleepAlarm(next);
         return;
       }
       case "hug-request": {
@@ -1080,31 +1411,41 @@ export class WardRoom extends DurableObject<Env> {
         if (!hugStillPossible(from.record, record)) return;
         // 안아 주는 사람은 상대 곁으로 다가가요. 누워 있으면 침대 옆자리예요.
         // 안아 주는 사람이 누워 있었으면 일어나서 가요.
-        const spot = hugSpot(from.record, record);
-        const before = from.record.bed !== null ? this.lastVisits() : null;
+        // 침대 배정은 그대로 두고 자세만 바꿔요.
+        const lyingBed = isLying(record) ? record.bed : null;
+        const spot = hugSpot(from.record, { x: record.x, z: record.z, bed: lyingBed });
+        const before = from.record.lyingSince !== null ? this.lastVisits() : null;
         this.save(from.ws, from.ws.deserializeAttachment() as Attachment, {
           ...from.record,
           x: spot.x,
           z: spot.z,
-          bed: null,
           lyingSince: null,
+          bench: null,
         });
-        this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: record.bed });
+        // 벤치에 앉아 있던 사람은 둘 다 일어나서 안아요. 자기 화면은 hug를 보고 일어나요.
+        if (seatOf(from.record) !== null) this.broadcast({ kind: "stand", id: from.record.id }, from.ws);
+        const standing = leaveSeat(record);
+        if (standing) {
+          save(standing);
+          this.broadcast({ kind: "stand", id: record.id }, ws);
+        }
+        this.broadcast({ kind: "hug", a: from.record.id, b: record.id, bed: lyingBed });
         if (before) this.refreshCatVisits(before);
         return;
       }
       case "discharge": {
         if (canDischarge(record) !== "ok") return deny("discharge", "no-bed");
         const before = this.lastVisits();
-        const room = record.bed !== null ? BEDS[record.bed].roomIndex : (roomAt(record.x, record.z)?.index ?? null);
+        // 지금 서 있는 병실이 먼저이고, 병실 밖이면 내 침대가 있는 병실이에요.
+        const room = roomAt(record.x, record.z)?.index ?? (record.bed !== null ? BEDS[record.bed].roomIndex : null);
         const next = startDischarge({ ...record, lastAction: { ...record.lastAction, discharge: nowMs } }, nowMs, message.closeLink);
         save(next);
         const key = record.key ?? (await hashGuest(record.guestId));
         const directory = this.directory();
-        if (message.closeLink) await directory.disableVisitLink(key);
+        if (message.closeLink) await directory.disableGuestbookLink(key);
         await directory.markDischarged(key, nowMs);
         this.send(ws, { v: PROTOCOL_VERSION, type: "discharge-started", until: nowMs + FAREWELL_MS });
-        // 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
+        // 퇴원하면 침대를 바로 반납해요. 침대가 비고 옷이 바뀐 것은 모두에게, 퇴원 안내는 같은 병실 사람에게만 보내요.
         this.broadcast({ kind: "update", guest: toPublic(next) }, ws);
         if (room !== null) {
           const text = JSON.stringify({
@@ -1122,6 +1463,10 @@ export class WardRoom extends DurableObject<Env> {
           }
         }
         this.refreshCatVisits(before);
+        return;
+      }
+      case "cat-play": {
+        this.playWithCat(ws, attachment, message.catId, message.kind, nowMs);
         return;
       }
       case "inbox-ack": {
@@ -1150,6 +1495,11 @@ export class WardRoom extends DurableObject<Env> {
         return;
       }
     }
+  }
+
+  /** 내 방명록을 주인 한 사람의 연결에만 보내요. broadcast로는 보내지 않아요. */
+  private sendGuestbook(ws: WebSocket, token: string | null, status: GuestbookStatus): void {
+    this.send(ws, { v: PROTOCOL_VERSION, type: "guestbook", token, active: status.active, count: status.count, apples: status.apples });
   }
 
   /** 문병객이 주인 침대로 보냈는데 주인이 이 병동에 없으면 주인에게 전해요. */
@@ -1264,7 +1614,7 @@ export class WardRoom extends DurableObject<Env> {
     return this.env.DIRECTORY.getByName("directory");
   }
 
-  /** 아무도 누워 있지 않은 침대예요. 잠시 끊긴 사람의 침대도 누워 있는 것으로 봐요. */
+  /** 아무에게도 배정되지 않은 침대예요. 잠시 끊긴 사람의 침대도 그 사람 것이에요. */
   private bedIsEmpty(bed: number): boolean {
     return !this.everyone().some((guest) => guest.bed === bed);
   }
@@ -1328,6 +1678,7 @@ export class WardRoom extends DurableObject<Env> {
     sql.exec("DELETE FROM daily_visitors WHERE day != ?", day);
     sql.exec("DELETE FROM daily_stats WHERE day != ?", day);
     sql.exec("DELETE FROM morning_open WHERE day != ?", day);
+    sql.exec("DELETE FROM sleep_kept WHERE at <= ?", now.getTime() - KEPT_KEEP_MS);
   }
 }
 

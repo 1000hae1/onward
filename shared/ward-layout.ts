@@ -208,6 +208,15 @@ export const NIGHTSTANDS: readonly Placement[] = BEDS.map((bed) => {
   return placeInRoom(ROOMS[bed.roomIndex], sign * NIGHTSTAND_LOCAL_X, z + NIGHTSTAND_OFFSET_Z);
 });
 
+/**
+ * 방명록 주인 화면에만 그리는 작은 사과나무 자리예요. 침대 발치 쪽, 문병객이 서는 곁과 반대편이에요.
+ * 다른 사람 화면에는 그리지 않아서 걸어 다니는 길에는 넣지 않아요.
+ */
+export function appleTreeSpot(bed: BedPlacement): Placement {
+  const { sign, z } = bedLocal(bed.index);
+  return placeInRoom(ROOMS[bed.roomIndex], sign * 1.55, z - 0.82);
+}
+
 /** 침대마다 머리맡 벽에 수면등이 있어요. */
 export const SLEEP_LAMPS: readonly Placement[] = BEDS.map((bed) => {
   const { sign, z } = bedLocal(bed.index);
@@ -274,6 +283,55 @@ export const YARD_LAMPS: readonly { x: number; z: number }[] = [
   { x: -3.4, z: 35 },
   { x: 3.4, z: 35 },
 ];
+
+/**
+ * 앞마당 산책로 양옆의 벤치예요. 등받이가 울타리 쪽이고, 앉으면 산책로를 바라봐요.
+ * rotationY는 벤치 앞쪽 방향이에요. 0이면 +z를 봐요. 벤치 안쪽 좌표에서 x는 긴 쪽, +z는 앞쪽이에요.
+ */
+export const YARD_BENCHES: readonly Placement[] = [-1, 1].flatMap((side) =>
+  [29, 34].map((z) => ({ x: side * 7, z, rotationY: (-side * Math.PI) / 2 })),
+);
+export const YARD_BENCH = { length: 1.5, depth: 0.42, seatY: 0.46 };
+/** 벤치 하나에 두 자리예요. */
+export const SEATS_PER_BENCH = 2;
+export const BENCH_SEAT_COUNT = YARD_BENCHES.length * SEATS_PER_BENCH;
+const SEAT_LOCAL_X = [-0.38, 0.38] as const;
+/** 앉은 몸이 등받이 쪽으로 조금 들어가요. */
+const SEAT_LOCAL_Z = -0.02;
+/** 벤치를 장애물로 볼 때의 반폭이에요. 등받이까지 덮어요. */
+const BENCH_HALF_DEPTH = 0.28;
+const BENCH_HALF_LENGTH = YARD_BENCH.length / 2 + 0.03;
+/** 앉기 전에 서는 벤치 앞자리예요. 장애물 바깥, 캐릭터 반지름만큼 떨어져요. */
+const SEAT_APPROACH_LOCAL_Z = BENCH_HALF_DEPTH + PLAYER_RADIUS + 0.12;
+
+/** 자리 번호가 어느 벤치의 몇째 자리인지예요. */
+export function seatBench(seat: number): number {
+  return Math.floor(seat / SEATS_PER_BENCH);
+}
+
+/** 앉았을 때 엉덩이가 놓이는 자리예요. */
+export function seatRest(seat: number): { x: number; z: number } {
+  return roomToWorld(YARD_BENCHES[seatBench(seat)], SEAT_LOCAL_X[seat % SEATS_PER_BENCH], SEAT_LOCAL_Z);
+}
+
+/** 앉기 전에 서는 자리예요. 앉아 있는 사람의 걸어 다니는 자리도 여기예요. */
+export function seatApproach(seat: number): { x: number; z: number } {
+  return roomToWorld(YARD_BENCHES[seatBench(seat)], SEAT_LOCAL_X[seat % SEATS_PER_BENCH], SEAT_APPROACH_LOCAL_Z);
+}
+
+/** 앉아서 바라보는 방향이에요. */
+export function seatYaw(seat: number): number {
+  return YARD_BENCHES[seatBench(seat)].rotationY;
+}
+
+/** 탭으로 벤치를 고르는 상자예요. 앉은 아바타를 눌러도 잡히도록 위로 넉넉해요. */
+export const BENCH_BOXES: readonly WallBox[] = YARD_BENCHES.map((bench) => {
+  // 벤치는 90도 돌아 있어서 긴 쪽이 z축을 따라요.
+  const along = Math.abs(Math.sin(bench.rotationY)) > 0.5;
+  const halfX = along ? BENCH_HALF_DEPTH : BENCH_HALF_LENGTH;
+  const halfZ = along ? BENCH_HALF_LENGTH : BENCH_HALF_DEPTH;
+  return { minX: bench.x - halfX, maxX: bench.x + halfX, minZ: bench.z - halfZ, maxZ: bench.z + halfZ, minY: 0, maxY: 1.2 };
+});
 
 /** 눕기 전에 서는 침대 곁 자리예요. 문 쪽 옆면이라 링거와 협탁에 걸리지 않아요. */
 export function bedApproach(bed: BedPlacement): { x: number; z: number } {
@@ -427,6 +485,7 @@ export const OBSTACLES: readonly Rect[] = [
   ),
   ...ENTRANCE_PLANTERS.map((planter) => rectAround(planter.x, planter.z, 0.3, 0.3)),
   ...YARD_LAMPS.map((lamp) => rectAround(lamp.x, lamp.z, 0.1, 0.1)),
+  ...BENCH_BOXES.map(({ minX, maxX, minZ, maxZ }) => ({ minX, maxX, minZ, maxZ })),
 ];
 
 const doorRectOf = (room: WardRoom): Rect => {

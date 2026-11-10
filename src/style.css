@@ -27,12 +27,14 @@ body {
   height: 100%;
   display: block;
   touch-action: none;
+  /* 고양이를 길게 누를 때 iOS의 길게 누르기 메뉴가 뜨지 않게 해요. */
+  -webkit-touch-callout: none;
 }
 
 #hud-main,
 #hud-stats {
   display: block;
-  text-align: center;
+  text-align: left;
 }
 
 #hud-stats {
@@ -43,7 +45,8 @@ body {
 
 #notice {
   position: fixed;
-  top: calc(env(safe-area-inset-top) + 5.25rem);
+  /* 연결 안내 띠가 떠 있으면 그만큼 내려가요(top-stack.ts). */
+  top: calc(env(safe-area-inset-top) + 5.25rem + var(--banner-space, 0px));
   left: 50%;
   transform: translateX(-50%);
   max-width: calc(100vw - 1.5rem);
@@ -58,14 +61,20 @@ body {
   pointer-events: none;
 }
 
+/* 잠들기 버튼은 #action-bar 안, 행동 버튼 줄 위 오른쪽에 작게 붙어요. 메뉴가 열려도 그 위에 있어서 겹치지 않아요. */
 #sleep-root {
-  position: fixed;
-  left: 50%;
-  bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
-  transform: translateX(-50%);
+  justify-self: end;
 }
 
-#sleep-root button,
+#action-bar .sleep-button {
+  flex: none;
+  min-height: 2.75rem;
+  padding: 0 0.95rem;
+  border-radius: 999px;
+  background: rgba(27, 36, 51, 0.85);
+  font-size: 0.875rem;
+}
+
 #sleep-overlay button {
   min-height: 2.75rem;
   padding: 0 1.25rem;
@@ -101,19 +110,21 @@ body {
   text-align: center;
 }
 
+/* 병원 간판과 겹치지 않게 왼쪽 위에 둬요. 오른쪽 위 설정 단추 자리는 비워요. */
 #hud {
   position: fixed;
   top: calc(env(safe-area-inset-top) + 0.75rem);
-  left: 50%;
-  transform: translateX(-50%);
+  left: calc(env(safe-area-inset-left) + 0.75rem);
+  max-width: calc(100vw - env(safe-area-inset-left) - 7rem);
+  box-sizing: border-box;
   padding: 0.4rem 0.95rem;
-  border-radius: 999px;
+  border-radius: 1.1rem;
   /* 밝은 낮 장면 위에서도 글자 대비가 4.5:1 이상이에요(tests/contrast.test.ts). */
   background: rgba(27, 36, 51, 0.8);
   color: #f6efe2;
   font-size: 0.9375rem;
   letter-spacing: 0.02em;
-  white-space: nowrap;
+  word-break: keep-all;
   pointer-events: none;
 }
 
@@ -131,6 +142,11 @@ body {
   gap: 0.5rem;
   width: min(26rem, calc(100vw - 1.5rem));
   box-sizing: border-box;
+}
+
+/* 이모지가 붙어도 PC에서 글자가 한 줄에 들어가게 조금 넓혀요. */
+#action-bar {
+  width: min(32rem, calc(100vw - 1.5rem));
 }
 
 #entry {
@@ -267,15 +283,101 @@ a:focus-visible,
   word-break: keep-all;
 }
 
-.visit-link-text {
-  width: 100%;
-  box-sizing: border-box;
-  font: inherit;
-  padding: 0.5rem;
-  border-radius: 0.5rem;
-  border: 1px solid rgba(255, 255, 255, 0.3);
-  background: rgba(0, 0, 0, 0.25);
-  color: inherit;
+/* 선물 고르기 창이에요. 한 줄에 셋씩, 마지막 줄 둘은 가운데로 모여요. */
+#action-bar .gift-choices {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.375rem;
+}
+
+#action-bar .gift-choice {
+  flex: 0 0 calc((100% - 0.75rem) / 3);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 0.3rem;
+  min-height: 4.75rem;
+  padding: 0.5rem 0.25rem;
+  line-height: 1.2;
+  word-break: keep-all;
+}
+
+/* 아이콘은 이모지든 SVG든 28px이에요. aria-hidden이라 낭독기는 이름만 읽어요. */
+.gift-icon {
+  position: relative;
+  display: block;
+  flex: none;
+  width: 28px;
+  height: 28px;
+  font-size: 28px;
+  line-height: 28px;
+  text-align: center;
+}
+
+/* 오잎클로버는 오른쪽 위에 작은 반짝임이 겹쳐요. */
+.gift-icon-sparkle {
+  position: absolute;
+  top: -7px;
+  right: -10px;
+  font-size: 14px;
+  line-height: 1;
+}
+
+.gift-label {
+  font-size: 0.875rem;
+}
+
+.gift-note {
+  margin-top: -0.1rem;
+  font-size: 0.75rem;
+}
+
+/* 지금 고를 수 없는 버튼은 흐리게 보여요(제철이 아닌 선물, 오늘 이미 놓은 오잎클로버, 안아 주기). */
+#action-bar button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* 이모지 버튼이에요. 이모지는 aria-hidden이라 낭독기는 글자만 읽어요. */
+.emoji-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+}
+
+.button-emoji {
+  flex: none;
+  font-size: 1.15em;
+  line-height: 1;
+}
+
+/* 휴대폰 세로 화면에서는 이모지를 글자 위에 둬서 네 버튼이 한 줄에 들어가요. */
+@media (max-width: 420px) {
+  #action-bar .action-buttons .emoji-button {
+    flex-direction: column;
+    padding: 0.4rem 0.125rem;
+    font-size: 0.8125rem;
+    letter-spacing: -0.02em;
+  }
+}
+
+/* 아주 좁은 휴대폰(360px 무렵)에서도 "목례와 한마디"가 한 줄에 들어가게 여백을 조금 줄여요. */
+@media (max-width: 380px) {
+  #action-bar {
+    width: calc(100vw - 1rem);
+  }
+
+  #action-bar .action-buttons {
+    gap: 0.25rem;
+  }
+
+  #action-bar .action-buttons .emoji-button {
+    padding-inline: 0;
+    font-size: 0.78rem;
+  }
 }
 
 .action-choices {
@@ -377,6 +479,59 @@ a:focus-visible,
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.6);
 }
 
+/* 잠든 사람의 이름표 옆 작은 달이에요. 글자는 CSS가 붙여서 닉네임과 섞이지 않아요. */
+.head-name.asleep::after {
+  content: " 🌙";
+  font-size: 0.75em;
+}
+
+/* 잠든 사람 머리 위로 작은 z 두 개가 엇갈려 천천히 떠올랐다 사라져요. */
+.head-zz {
+  position: relative;
+  height: 1.4rem;
+  width: 2rem;
+}
+
+.head-zz span {
+  position: absolute;
+  bottom: 0;
+  left: 0.3rem;
+  color: #f4ead8;
+  font-size: 0.8rem;
+  font-style: italic;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+  opacity: 0;
+  animation: head-zz-rise 5s ease-in-out infinite;
+}
+
+.head-zz span:nth-child(2) {
+  left: 1rem;
+  font-size: 0.65rem;
+  animation-delay: 2.5s;
+}
+
+@keyframes head-zz-rise {
+  0% {
+    opacity: 0;
+    transform: translate(0, 0.3rem);
+  }
+  30% {
+    opacity: 0.85;
+  }
+  100% {
+    opacity: 0;
+    transform: translate(0.35rem, -1rem);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  /* 움직이지 않고 흐리게 떠 있어요. */
+  .head-zz span {
+    animation: none;
+    opacity: 0.6;
+  }
+}
+
 .head-bubble {
   padding: 0.35rem 0.75rem;
   border-radius: 1rem;
@@ -387,7 +542,7 @@ a:focus-visible,
 
 #left-cards {
   position: fixed;
-  top: calc(env(safe-area-inset-top) + 3.5rem);
+  top: calc(env(safe-area-inset-top) + 3.5rem + var(--banner-space, 0px));
   left: 50%;
   transform: translateX(-50%);
   display: grid;
@@ -475,16 +630,20 @@ a:focus-visible,
   }
 }
 
+/* 위쪽 병동 표시와 설정 단추 바로 아래예요. --top-stack-bottom은 top-stack.ts가 재서 넣어요. 버튼들보다 위에 떠요. */
 #connection-banner {
   position: fixed;
   left: 50%;
-  bottom: calc(env(safe-area-inset-bottom) + 4.25rem);
+  top: max(calc(env(safe-area-inset-top) + 0.75rem), calc(var(--top-stack-bottom, 0px) + 0.5rem));
   transform: translateX(-50%);
+  z-index: 40;
+  width: max-content;
   max-width: calc(100vw - 1.5rem);
   box-sizing: border-box;
   margin: 0;
   padding: 0.45rem 0.95rem;
-  border-radius: 999px;
+  border-radius: 1.1rem;
+  word-break: keep-all;
   background: rgba(255, 236, 205, 0.95);
   color: #3b2f22;
   font-size: 0.9375rem;
@@ -505,121 +664,6 @@ a:focus-visible,
   font-size: 0.9375rem;
   white-space: nowrap;
   pointer-events: none;
-}
-
-#loading {
-  position: fixed;
-  inset: 0;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 0.9rem;
-  padding: 1.5rem;
-  background: #1b2433;
-  font-size: clamp(1.125rem, 4vw, 1.5rem);
-  font-weight: 400;
-  letter-spacing: 0.08em;
-  text-align: center;
-  pointer-events: none;
-  transition: opacity 0.4s ease;
-}
-
-#loading[hidden] {
-  display: none;
-}
-
-#loading.loading-leaving {
-  opacity: 0;
-}
-
-.loading-screen p {
-  margin: 0;
-}
-
-.loading-track {
-  width: min(12rem, 60vw);
-  height: 3px;
-  overflow: hidden;
-  border-radius: 999px;
-  background: rgba(233, 228, 216, 0.16);
-}
-
-.loading-fill {
-  width: 100%;
-  height: 100%;
-  border-radius: inherit;
-  background: #f3cf95;
-  transform: scaleX(0);
-  transform-origin: left center;
-  transition: transform 0.45s ease-out;
-}
-
-.loading-slow {
-  font-size: 0.875rem;
-  letter-spacing: 0.04em;
-  color: rgba(233, 228, 216, 0.75);
-}
-
-/* 통통한 동물이 제자리에서 뒤뚱뒤뚱 걸어요. 몸은 좌우로 기우뚱하고 발은 번갈아 들려요. */
-.loading-critter {
-  overflow: visible;
-}
-
-.loading-shadow {
-  fill: rgba(0, 0, 0, 0.28);
-}
-
-.loading-body {
-  transform-box: view-box;
-  transform-origin: 60px 104px;
-  animation: loading-waddle 0.9s ease-in-out infinite;
-}
-
-.loading-foot {
-  animation: loading-step 0.9s ease-in-out infinite;
-}
-
-.loading-foot-right {
-  animation-delay: -0.45s;
-}
-
-@keyframes loading-waddle {
-  0%,
-  100% {
-    transform: rotate(-7deg) translateY(0);
-  }
-  25% {
-    transform: rotate(0deg) translateY(-3px);
-  }
-  50% {
-    transform: rotate(7deg) translateY(0);
-  }
-  75% {
-    transform: rotate(0deg) translateY(-3px);
-  }
-}
-
-@keyframes loading-step {
-  0%,
-  50%,
-  100% {
-    transform: translateY(0);
-  }
-  25% {
-    transform: translateY(-4px);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .loading-body,
-  .loading-foot {
-    animation: none;
-  }
-
-  .loading-fill,
-  #loading {
-    transition: none;
-  }
 }
 
 /* 잠들었을 때와 들어올 수 없을 때 화면 전체를 덮어요. 누르면 다시 이어지는 것은 scene이 맡아요. */
@@ -678,6 +722,10 @@ a:focus-visible,
   align-items: center;
   min-height: 2.75rem;
   color: #ffe2b8;
+}
+
+.settings-feedback {
+  margin-top: 0.5rem;
 }
 
 .settings-note {
@@ -760,6 +808,16 @@ a:focus-visible,
   gap: 0.75rem;
 }
 
+.farewell-feedback {
+  justify-self: center;
+  display: inline-flex;
+  align-items: center;
+  min-height: 2.75rem;
+  font-size: 0.8125rem;
+  color: #ffe2b8;
+  opacity: 0.85;
+}
+
 .farewell-card h1 {
   font-size: 1.125rem;
 }
@@ -812,4 +870,72 @@ a:focus-visible,
   font: inherit;
   cursor: pointer;
   pointer-events: auto;
+}
+
+/* 휴대폰에서는 병동을 위에 남기고, 키보드가 열리면 보이는 영역 안에서 스크롤해요. */
+@media (max-width: 899px), (orientation: portrait) {
+  #entry {
+    bottom: calc(var(--entry-keyboard-inset, 0px) + env(safe-area-inset-bottom) + 0.5rem);
+    max-height: calc(var(--entry-visible-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3.5rem);
+    overscroll-behavior: contain;
+    scroll-padding-block: 0.75rem;
+  }
+
+  #entry .entry-form {
+    gap: 0.375rem;
+    padding: 0.75rem;
+  }
+
+  #entry .picture-choice img {
+    max-width: 4.75rem;
+  }
+
+  #entry .entry-message:empty {
+    display: none;
+  }
+
+  #entry .entry-note {
+    line-height: 1.35;
+  }
+}
+
+#entry .entry-drag-handle {
+  display: none;
+}
+
+@media (max-width: 899px), (orientation: portrait) {
+  #entry .entry-drag-handle {
+    display: grid;
+    place-items: center;
+    gap: 0.2rem;
+    flex: none;
+    min-height: 2.75rem;
+    padding: 0;
+    margin-block: -0.5rem -0.25rem;
+    width: 100%;
+    background: transparent;
+    color: #f6efe2;
+    font-size: 0.75rem;
+    touch-action: none;
+  }
+
+  #entry .entry-drag-handle::before {
+    content: "";
+    width: 2.5rem;
+    height: 0.25rem;
+    border-radius: 1rem;
+    background: #f6efe2;
+    opacity: 0.7;
+  }
+
+  #entry.entry-collapsed {
+    max-height: min(15rem, calc(var(--entry-visible-height, 100dvh) - env(safe-area-inset-top) - env(safe-area-inset-bottom) - 3.5rem));
+  }
+
+  #entry.entry-collapsed .entry-drag-handle {
+    position: sticky;
+    top: -0.25rem;
+    z-index: 1;
+    background: #30343b;
+  }
 }

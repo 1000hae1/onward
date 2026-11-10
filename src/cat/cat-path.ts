@@ -52,6 +52,18 @@ export interface CatVisitPlan {
 
 export type CatPose = "walk" | "sit" | "curl" | "hop";
 
+/** 놀이가 끝난 뒤 돌아가기예요. at부터 from(침대 위였으면 fromSeat에서 내려와)에서 다음 자리로 걸어가요. */
+export interface CatResume {
+  at: number;
+  from: CatPoint;
+  fromSeat: CatPoint | null;
+}
+
+/** 돌아가기가 끝나는 칸이에요. 칸이 거의 끝날 때 돌아가기 시작하면 다음 칸의 자리로 가서, 칸이 바뀔 때 순간 이동하지 않아요. */
+export function resumeSlot(resume: CatResume): number {
+  return slotOf(resume.at + CAT_SLOT_MS / 2);
+}
+
 export interface CatFrame {
   x: number;
   y: number;
@@ -169,9 +181,23 @@ function slotSeat(room: CatRoom, slot: number, taken: (bed: number) => boolean):
   return { point: bedCatSeat(BEDS[goal.bed], false), yaw: bedCatYaw(BEDS[goal.bed]), pose: "curl" };
 }
 
-/** 칸 단위로 돌아다닐 때 time에 있을 자리예요. */
-function wanderFrame(room: CatRoom, time: number, taken: (bed: number) => boolean): CatFrame {
+/** 칸 단위로 돌아다닐 때 time에 있을 자리예요. 놀이가 끝난 뒤면 놀던 자리에서 돌아가요. */
+function wanderFrame(room: CatRoom, time: number, taken: (bed: number) => boolean, resume: CatResume | null = null): CatFrame {
   const slot = slotOf(time);
+  if (resume && time >= resume.at && slot <= resumeSlot(resume)) {
+    const target = resumeSlot(resume);
+    return legFrame(
+      room,
+      {
+        start: resume.at,
+        from: resume.from,
+        fromSeat: resume.fromSeat,
+        to: goalPoint(room, slotGoal(room, target)),
+        seat: slotSeat(room, target, taken),
+      },
+      time,
+    );
+  }
   const previous = slotEnd(room, slot - 1, taken);
   return legFrame(
     room,
@@ -195,8 +221,25 @@ export function catFrameAt(
   time: number,
   taken: (bed: number) => boolean,
   visit: CatVisitPlan | null,
+  resume: CatResume | null = null,
 ): CatFrame {
-  if (visit && time >= visit.at && (visit.until === null || time < visit.until)) {
+  const visiting = visit !== null && time >= visit.at && (visit.until === null || time < visit.until);
+  if (visiting && resume && time >= resume.at && resume.at >= visit.at) {
+    // 찾아가 있던 중에 놀았으면, 놀던 자리에서 다시 그 침대 발치로 가요.
+    const bed = BEDS[visit.bed];
+    return legFrame(
+      room,
+      {
+        start: resume.at,
+        from: resume.from,
+        fromSeat: resume.fromSeat,
+        to: bedApproach(bed),
+        seat: { point: bedCatSeat(bed, true), yaw: bedCatYaw(bed), pose: "sit" },
+      },
+      time,
+    );
+  }
+  if (visit && visiting) {
     // 출발할 때의 자리에서 그 침대 발치로 가요.
     const startSlot = slotOf(visit.at);
     const started = wanderFrame(room, visit.at, taken);
@@ -232,7 +275,7 @@ export function catFrameAt(
       time,
     );
   }
-  return wanderFrame(room, time, taken);
+  return wanderFrame(room, time, taken, resume);
 }
 
 /** 코를 맞대도 되는지 알려 줘요. 바닥에 앉아 있을 때만이고, 너무 자주 하지 않아요. */

@@ -12,7 +12,42 @@ export interface CatPose {
   legBackRight: number;
   /** 눈을 뜬 정도예요. 1이면 다 떠요. */
   eyeOpen: number;
+  /** 몸을 옆으로 굴린 각도예요. 털실을 안고 뒹굴 때 써요. */
+  bodyRoll: number;
+  /** 몸 뒤쪽을 좌우로 흔드는 각도예요. 엉덩이를 씰룩일 때 써요. */
+  bodyYaw: number;
+  /** 고개를 옆으로 기울인 각도예요. 손에 머리를 비빌 때 써요. */
+  headRoll: number;
 }
+
+/** 놀이할 때 더하는 자세예요. 모두 0이면 평소 자세예요. */
+export interface CatPlayPose {
+  /** 0~1 값이에요. 눈을 가늘게 감은 정도예요. */
+  squint: number;
+  headRoll: number;
+  /** 0~1 값이에요. 앞발 하나를 들어 톡 치는 정도예요. */
+  paw: number;
+  /** 몸을 옆으로 굴린 각도예요. */
+  roll: number;
+  wiggle: number;
+  /** 0~1 값이에요. 몸을 낮추고 노려보는 정도예요. */
+  crouch: number;
+  /** 꾹꾹이 위상이에요. 0이 아니면 앞발을 번갈아 눌러요. */
+  knead: number;
+  /** 0~1 값이에요. 고개를 들어 위를 보는 정도예요. */
+  lookUp: number;
+}
+
+export const restPlayPose = (): CatPlayPose => ({
+  squint: 0,
+  headRoll: 0,
+  paw: 0,
+  roll: 0,
+  wiggle: 0,
+  crouch: 0,
+  knead: 0,
+  lookUp: 0,
+});
 
 export interface CatPoseInput {
   walkPhase: number;
@@ -25,6 +60,8 @@ export interface CatPoseInput {
   blink: number;
   /** 0~1 값이에요. 코를 맞대려고 고개를 내민 정도예요. */
   nose: number;
+  /** 놀이 자세예요. 없으면 평소 자세예요. */
+  play?: CatPlayPose;
 }
 
 const WALK_LEG_SWING = 0.55;
@@ -40,6 +77,12 @@ const CURL_BACK_LEG = -1.45;
 const LOOK_UP_HEAD = -0.5;
 const NOSE_HEAD = 0.3;
 const CLOSED_EYE = 0.1;
+const SQUINT_EYE = 0.28;
+const CROUCH_LOWER = 0.07;
+const CROUCH_HEAD = -0.15;
+/** 앞발로 톡 칠 때 앞으로 드는 각도예요. */
+const PAW_LIFT = -1.1;
+const KNEAD_LIFT = -0.55;
 
 /** 눈을 한 번 천천히 감았다 뜨는 시간이에요. */
 const BLINK_SECONDS = 1.8;
@@ -56,6 +99,9 @@ export function createCatPose(): CatPose {
     legBackLeft: 0,
     legBackRight: 0,
     eyeOpen: 1,
+    bodyRoll: 0,
+    bodyYaw: 0,
+    headRoll: 0,
   };
 }
 
@@ -101,5 +147,28 @@ export function composeCatPose(out: CatPose, input: CatPoseInput): CatPose {
   out.headPitch = mix(out.headPitch, NOSE_HEAD, nose);
   out.headPitch = mix(out.headPitch, LOOK_UP_HEAD, lookUp);
   out.eyeOpen = mix(1, CLOSED_EYE, blink);
+  out.bodyRoll = 0;
+  out.bodyYaw = 0;
+  out.headRoll = 0;
+
+  const play = input.play;
+  if (play) {
+    if (play.crouch > 0) {
+      out.bodyLower = mix(out.bodyLower, CROUCH_LOWER, play.crouch);
+      out.bodyPitch = mix(out.bodyPitch, 0.12, play.crouch);
+      out.headPitch = mix(out.headPitch, CROUCH_HEAD, play.crouch);
+    }
+    if (play.paw > 0) out.legFrontRight = mix(out.legFrontRight, PAW_LIFT, play.paw);
+    if (play.knead !== 0) {
+      // 앞발을 번갈아 눌러요.
+      out.legFrontLeft += Math.max(0, Math.sin(play.knead)) * KNEAD_LIFT;
+      out.legFrontRight += Math.max(0, -Math.sin(play.knead)) * KNEAD_LIFT;
+    }
+    out.headPitch = mix(out.headPitch, LOOK_UP_HEAD, play.lookUp);
+    out.headRoll = play.headRoll;
+    out.bodyRoll = play.roll;
+    out.bodyYaw = play.wiggle;
+    out.eyeOpen = Math.min(out.eyeOpen, mix(1, SQUINT_EYE, play.squint));
+  }
   return out;
 }

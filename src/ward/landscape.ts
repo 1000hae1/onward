@@ -15,7 +15,7 @@ import {
 } from "three";
 import type { Object3D } from "three";
 import { RoundedBoxGeometry } from "three/addons/geometries/RoundedBoxGeometry.js";
-import { BUILDING, ENTRANCE_GARDENS, ROOMS, YARD, YARD_LAMPS } from "../../shared/ward-layout";
+import { BUILDING, ENTRANCE_GARDENS, ROOMS, YARD, YARD_BENCH, YARD_BENCHES, YARD_LAMPS } from "../../shared/ward-layout";
 import { addInstances, createRandom, repeatAt, transform } from "./parts";
 
 /** 정원 안 자리는 화단 크기에 대한 비율이에요. 나무는 [가로, 세로, 크기]예요. */
@@ -270,14 +270,12 @@ function buildGarden(parent: Object3D): MeshBasicMaterial {
       transform(-SIDE_PATH_X - 1.2, 0, z, Math.PI / 2),
       transform(SIDE_PATH_X + 1.2, 0, z, -Math.PI / 2),
     ]),
-    transform(-7, 0, 29, Math.PI / 2),
-    transform(7, 0, 29, -Math.PI / 2),
-    transform(-7, 0, 34, Math.PI / 2),
-    transform(7, 0, 34, -Math.PI / 2),
+    // 앞마당 벤치는 앉을 수 있어요. 자리는 ward-layout에서 함께 정해요.
+    ...YARD_BENCHES.map((bench) => transform(bench.x, 0, bench.z, bench.rotationY)),
   ];
   addInstances(
     parent,
-    new RoundedBoxGeometry(1.5, 0.08, 0.42, 2, 0.03),
+    new RoundedBoxGeometry(YARD_BENCH.length, 0.08, YARD_BENCH.depth, 2, 0.03),
     lambert("#c9bda8"),
     repeatAt(benches, [transform(0, 0.42, 0), transform(0, 0.68, -0.2, 0, 1, 1, 0.3)]),
   );

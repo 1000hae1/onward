@@ -15,22 +15,70 @@ function readNumber(value: string | null, max: number, fallback: number): number
   return number >= 1 && number <= max ? number : fallback;
 }
 
-export function readWardParams(search: string): WardParams {
+/**
+ * 주소에 instance가 없으면 이 브라우저가 기억하는 자리(같은 병동일 때)의 병실로 가요.
+ * 다시 들어왔을 때 예전 침대가 비어 있으면 같은 병실·같은 침대를 먼저 받으려고요. 판단은 서버가 해요.
+ */
+export function readWardParams(search: string, seat: Seat | null = null): WardParams {
   const params = new URLSearchParams(search);
+  const ward = readNumber(params.get("ward"), MAX_WARD, DEFAULT_WARD);
+  const remembered = seat && seat.ward === ward ? seat.instance : DEFAULT_INSTANCE;
   return {
-    ward: readNumber(params.get("ward"), MAX_WARD, DEFAULT_WARD),
-    instance: readNumber(params.get("instance"), MAX_INSTANCE, DEFAULT_INSTANCE),
+    ward,
+    instance: readNumber(params.get("instance"), MAX_INSTANCE, remembered),
   };
 }
 
 /**
- * 상단의 병동 이름이에요. 두 기기가 같은 병실인지 견줘 볼 수 있게 병실 번호(instance)도 보여 줘요.
+ * 상단의 병동 이름이에요. "3병동 · 4/36"처럼 병동과 인원을 보여 줘요.
+ * 1호가 아니면 두 기기가 같은 병실인지 견줘 볼 수 있게 호수도 붙여요.
  * 서버에 닿지 않아 혼자 머무는 중이면 그렇다고 알려요.
  */
 export function wardLabel(ward: number, instance: number, count: number | null, capacity: number, solo = false): string {
-  const name = `온기병동 ${ward}병동 ${instance}호`;
+  const name = instance === DEFAULT_INSTANCE ? `${ward}병동` : `${ward}병동 ${instance}호`;
   if (count !== null) return `${name} · ${count}/${capacity}`;
   return solo ? `${name} · 혼자 머무는 중` : name;
+}
+
+/** 이 브라우저가 기억하는 내 자리예요. 병동, 병실(instance), 침대 번호만 있어요. */
+export interface Seat {
+  ward: number;
+  instance: number;
+  bed: number;
+}
+
+const SEAT_KEY = "onward.seat";
+
+/** 저장된 글자를 자리로 읽어요. 모양이 틀리면 null이에요. */
+export function parseSeat(raw: string | null, bedCount: number): Seat | null {
+  if (raw === null || raw.length > 64) return null;
+  const match = /^(\d{1,2})\.(\d{1,2})\.(\d{1,2})$/.exec(raw);
+  if (!match) return null;
+  const [ward, instance, bed] = match.slice(1).map(Number);
+  if (ward < 1 || ward > MAX_WARD || instance < 1 || instance > MAX_INSTANCE || bed >= bedCount) return null;
+  return { ward, instance, bed };
+}
+
+export function formatSeat(seat: Seat): string {
+  return `${seat.ward}.${seat.instance}.${seat.bed}`;
+}
+
+export function loadSeat(bedCount: number): Seat | null {
+  try {
+    return parseSeat(window.localStorage.getItem(SEAT_KEY), bedCount);
+  } catch {
+    return null;
+  }
+}
+
+/** 내 침대가 바뀔 때 불러요. null이면 지워요(퇴원했거나 침대를 내놓았어요). */
+export function saveSeat(seat: Seat | null): void {
+  try {
+    if (seat) window.localStorage.setItem(SEAT_KEY, formatSeat(seat));
+    else window.localStorage.removeItem(SEAT_KEY);
+  } catch {
+    // 저장하지 못하면 다음에는 새로 침대를 골라요.
+  }
 }
 
 /** 예전에 이 브라우저가 스스로 만들던 값이에요. 이제는 쓰지 않아서 보이면 지워요. */

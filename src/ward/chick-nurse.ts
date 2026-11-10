@@ -4,6 +4,7 @@ import { blobs, merged, paint, place } from "../avatar/shapes.ts";
 import type { BlobSpec, Vec3 } from "../avatar/species";
 import type { Placement } from "../../shared/ward-layout";
 import { nurseBowAngle, NURSE_BOW_SECONDS } from "./nurse-greeting";
+import { addLanternShading } from "../avatar/lantern-shading";
 
 /**
  * 간호사실의 병아리 간호사예요. 이 병동만의 모습으로 그렸어요.
@@ -85,11 +86,12 @@ export interface ChickNurse {
 let shared: { lower: BufferGeometry; upper: BufferGeometry; material: MeshLambertMaterial } | null = null;
 
 function parts(): NonNullable<typeof shared> {
-  shared ??= {
-    lower: buildLower(),
-    upper: buildUpper(),
-    material: new MeshLambertMaterial({ vertexColors: true }),
-  };
+  if (!shared) {
+    const material = new MeshLambertMaterial({ vertexColors: true });
+    // 소등 뒤에는 머리 위 등불이 간호사도 비춰요.
+    addLanternShading(material);
+    shared = { lower: buildLower(), upper: buildUpper(), material };
+  }
   return shared;
 }
 

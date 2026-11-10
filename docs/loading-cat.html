@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>온기병동 로딩 화면 · 치즈 뚱냥이 (참고용 원본)</title>
+<!--
+  이 파일은 로딩 화면 고양이의 참고용 원본이에요. 브라우저로 바로 열어 움직임을 확인할 수 있어요.
+  옮길 것: 1) 아래 <style>의 '고양이 움직임' CSS  2) #loading 안의 고양이 SVG  3) 맨 아래 스크립트의 setStride / showError / showSlow 동작
+-->
+<style>
+:root { --night: #1b2433; --text: #e9e4d8; --muted: rgba(233,228,216,.72); --cheese: #F2B45A; }
+html, body { margin: 0; height: 100%; background: var(--night); color: var(--text); font-family: "Apple SD Gothic Neo", "Noto Sans KR", system-ui, sans-serif; }
+#loading { position: fixed; inset: 0; display: grid; place-content: center; justify-items: center; gap: .9rem; text-align: center; font-size: clamp(1.125rem, 4vw, 1.5rem); letter-spacing: .08em; transition: opacity .4s ease; }
+#loading p { margin: 0; }
+.loading-track { width: min(12rem, 60vw); height: 3px; overflow: hidden; border-radius: 999px; background: rgba(233,228,216,.16); }
+.loading-fill { width: 100%; height: 100%; background: var(--cheese); transform: scaleX(0); transform-origin: left center; transition: transform .45s ease-out; }
+.loading-slow { font-size: .875rem; letter-spacing: .04em; color: var(--muted); }
+.loading-error { display: grid; gap: .8rem; justify-items: center; font-size: .9375rem; letter-spacing: .02em; line-height: 1.6; }
+.loading-retry { font: inherit; font-size: .9375rem; color: #1b2433; background: var(--cheese); border: 0; border-radius: 999px; padding: .5rem 1.2rem; cursor: pointer; }
+#loading.is-error .loading-track, #loading.is-error .loading-title, #loading.is-error .loading-slow { display: none; }
+
+/* ---- 고양이 움직임: transform·opacity만 ---- */
+/* 제자리에서 다다다 달려요. 앞다리 둘과 뒷다리 둘이 함께 뻗었다 모이고, 몸은 늘어났다 웅크리며 살짝 떠요.
+   한 걸음 길이는 --stride(기본 0.45초). 로딩이 진행될수록 짧아져서 더 빨리 달려요. */
+.cat-roam { --stride: 0.45s; }
+.cat { display: block; overflow: visible; }
+.cat g { transform-box: view-box; }
+.cat .walk, .cat .sit { transition: opacity 0.35s ease; }
+.cat .sit { opacity: 0; }
+.cat .bob { transform-origin: 80px 72px; animation: run-body var(--stride) ease-in-out infinite; }
+.cat .head { transform-origin: 112px 58px; animation: run-head var(--stride) ease-in-out infinite; }
+.cat .tail { transform-origin: 40px 60px; animation: run-tail calc(var(--stride) * 2) ease-in-out infinite; }
+.cat .fore { animation: run-fore var(--stride) ease-in-out infinite; }
+.cat .hind { animation: run-hind var(--stride) ease-in-out infinite; }
+.cat .leg-ff, .cat .leg-hf { animation-delay: calc(var(--stride) * -0.12); }
+.cat .leg-hf { transform-origin: 48px 74px; }
+.cat .leg-ff { transform-origin: 98px 74px; }
+.cat .leg-hn { transform-origin: 58px 74px; }
+.cat .leg-fn { transform-origin: 108px 74px; }
+.cat .shadow { transform-box: fill-box; transform-origin: center; animation: run-shadow var(--stride) ease-in-out infinite; }
+.cat .dust { transform-box: fill-box; transform-origin: center; opacity: 0; animation: run-dust var(--stride) linear infinite; }
+.cat .dust-2 { animation-delay: calc(var(--stride) * -0.5); }
+.cat .eyes { transform-box: fill-box; transform-origin: center; animation: cat-blink 4s ease-in-out infinite; }
+.cat .breath { transform-origin: 84px 94px; animation: cat-breath 3.2s ease-in-out infinite; }
+.cat .tilt { transform-origin: 104px 46px; transform: rotate(-12deg); }
+
+/* 0%: 앞다리는 앞으로, 뒷다리는 뒤로 쭉 뻗고 몸이 길어져요. 50%: 네 다리를 배 밑으로 모으고 몸이 동그랗게 떠요. */
+@keyframes run-fore { 0%, 100% { transform: rotate(-38deg); } 50% { transform: rotate(28deg); } }
+@keyframes run-hind { 0%, 100% { transform: rotate(36deg); } 50% { transform: rotate(-30deg); } }
+@keyframes run-body { 0%, 100% { transform: translateY(0) scale(1.05, 0.96); } 50% { transform: translateY(-5px) scale(0.95, 1.04); } }
+@keyframes run-head { 0%, 100% { transform: translateY(1px) rotate(-2deg); } 50% { transform: translateY(-2px) rotate(2deg); } }
+@keyframes run-tail { 0%, 100% { transform: rotate(-12deg); } 50% { transform: rotate(10deg); } }
+@keyframes run-shadow { 0%, 100% { transform: scaleX(1.05); opacity: 0.9; } 50% { transform: scaleX(0.85); opacity: 0.6; } }
+@keyframes run-dust { 0% { transform: translate(0, 0) scale(0.6); opacity: 0; } 20% { opacity: 0.55; } 100% { transform: translate(-22px, -4px) scale(1.3); opacity: 0; } }
+@keyframes cat-blink { 0%, 92%, 100% { transform: scaleY(1); } 96% { transform: scaleY(0.1); } }
+@keyframes cat-breath { 0%, 100% { transform: scale(1, 1); } 50% { transform: scale(1.015, 1.03); } }
+
+/* 연결 실패: 달리기를 멈추고, 따로 그린 앉은 자세로 부드럽게 바뀌어요. 고개를 갸웃하고 숨을 쉬어요. */
+.is-sitting .walk { opacity: 0; }
+.is-sitting .sit { opacity: 1; }
+
+/* 움직임 줄이기: 가만히 서서 눈만 깜빡여요. */
+.reduce .bob, .reduce .head, .reduce .tail, .reduce .fore, .reduce .hind, .reduce .shadow, .reduce .dust, .reduce .breath { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .cat .bob, .cat .head, .cat .tail, .cat .fore, .cat .hind, .cat .shadow, .cat .dust, .cat .breath { animation: none; }
+}
+</style>
+</head>
+<body>
+<div id="loading" role="status" aria-live="polite">
+  <div id="loading-cat">
+<div class="cat-roam">
+<svg class="cat" viewBox="0 0 160 100" width="140" height="88" aria-hidden="true" focusable="false">
+  <g class="cat-flip">
+    <!-- 걷는 모습: 오른쪽을 보는 옆모습 -->
+    <g class="walk">
+      <ellipse class="shadow" cx="80" cy="95" rx="44" ry="4" fill="rgba(0,0,0,.3)"/>
+      <circle class="dust" cx="42" cy="90" r="3.5" fill="rgba(233,228,216,.55)"/>
+      <circle class="dust dust-2" cx="50" cy="92" r="2.6" fill="rgba(233,228,216,.5)"/>
+      <!-- 먼 쪽 다리: 조금 어둡게 -->
+      <g class="leg hind leg-hf"><rect x="41.5" y="70" width="13" height="22" rx="6.5" fill="#E2A04C"/><ellipse cx="49" cy="92" rx="7" ry="3.6" fill="#EBD0A6"/></g>
+      <g class="leg fore leg-ff"><rect x="91.5" y="70" width="13" height="22" rx="6.5" fill="#E2A04C"/><ellipse cx="99" cy="92" rx="7" ry="3.6" fill="#EBD0A6"/></g>
+      <g class="bob">
+        <g class="tail" fill="none" stroke-linecap="round" stroke-width="9">
+          <path d="M40 60 C24 60 17 48 20 36 C22 28 30 26 32 32" stroke="#F2B45A"/>
+          <path d="M40 60 C24 60 17 48 20 36 C22 28 30 26 32 32" stroke="#D98A2E" stroke-dasharray="3 7" stroke-dashoffset="-8" stroke-linecap="butt" stroke-width="7"/>
+        </g>
+        <ellipse cx="78" cy="62" rx="44" ry="25" fill="#F2B45A"/>
+        <ellipse cx="86" cy="80" rx="19" ry="6" fill="#FBE3BE"/>
+        <path d="M62 40q3 5 0 10M74 38q3 5 0 10M86 39q3 5 0 9" fill="none" stroke="#D98A2E" stroke-width="3" stroke-linecap="round"/>
+        <g class="head">
+          <path d="M105 37 L109 21 L119 31 Z" fill="#E2A04C" stroke="#E2A04C" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M124 30 L134 19 L137 35 Z" fill="#F2B45A" stroke="#F2B45A" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M127 30 L133 24 L134.5 32 Z" fill="#FBE3BE" stroke="#FBE3BE" stroke-width="1.5" stroke-linejoin="round"/>
+          <circle cx="120" cy="50" r="20" fill="#F2B45A"/>
+          <path d="M113 33l1 5M118 31v5M123 32l-1 5" stroke="#D98A2E" stroke-width="2.4" stroke-linecap="round"/>
+          <ellipse cx="132" cy="57" rx="8.5" ry="6.5" fill="#FBE3BE"/>
+          <path d="M137.5 52.5h4l-2 2.4z" fill="#E8908A" stroke="#E8908A" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M136 59q2 1.4 4-.2" fill="none" stroke="#3D2E1F" stroke-width="1.2" stroke-linecap="round"/>
+          <path d="M140 56l11-2M140 58l11 1" stroke="#FBE3BE" stroke-width="0.9" stroke-linecap="round" opacity=".85"/>
+          <g class="eyes"><circle cx="128" cy="47" r="2.6" fill="#3D2E1F"/></g>
+          <ellipse cx="124" cy="56" rx="3.6" ry="2.2" fill="#E8908A" opacity=".35"/>
+        </g>
+      </g>
+      <!-- 가까운 쪽 다리 -->
+      <g class="leg hind leg-hn"><rect x="51" y="70" width="14" height="22" rx="7" fill="#F2B45A"/><ellipse cx="59" cy="92" rx="7.5" ry="3.8" fill="#FBE3BE"/></g>
+      <g class="leg fore leg-fn"><rect x="101" y="70" width="14" height="22" rx="7" fill="#F2B45A"/><ellipse cx="109" cy="92" rx="7.5" ry="3.8" fill="#FBE3BE"/></g>
+    </g>
+    <!-- 앉은 모습: 엉덩이를 내리고 앞발은 곧게, 꼬리는 발 앞으로 감고 고개를 갸웃 -->
+    <g class="sit">
+      <ellipse cx="86" cy="95" rx="36" ry="4" fill="rgba(0,0,0,.3)"/>
+      <g class="breath">
+        <rect x="87" y="66" width="12" height="26" rx="6" fill="#E2A04C"/>
+        <ellipse cx="70" cy="74" rx="27" ry="21" fill="#F2B45A"/>
+        <path d="M58 58q3 5 0 9M69 56q3 5 0 10M80 57q3 4 0 8" fill="none" stroke="#D98A2E" stroke-width="3" stroke-linecap="round"/>
+        <ellipse cx="94" cy="62" rx="21" ry="27" fill="#F2B45A"/>
+        <ellipse cx="100" cy="68" rx="10" ry="15" fill="#FBE3BE"/>
+        <rect x="96" y="68" width="13" height="25" rx="6.5" fill="#F2B45A"/>
+        <ellipse cx="94" cy="92.5" rx="7" ry="3.4" fill="#EBD0A6"/>
+        <ellipse cx="103" cy="92.5" rx="7.5" ry="3.6" fill="#FBE3BE"/>
+        <g fill="none" stroke-linecap="round" stroke-width="9">
+          <path d="M50 88 Q72 98 112 92" stroke="#F2B45A"/>
+          <path d="M50 88 Q72 98 112 92" stroke="#D98A2E" stroke-dasharray="3 9" stroke-dashoffset="-4" stroke-linecap="butt" stroke-width="7" opacity=".85"/>
+        </g>
+        <g class="tilt">
+          <path d="M88 26 L92 10 L102 20 Z" fill="#E2A04C" stroke="#E2A04C" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M107 19 L117 8 L120 24 Z" fill="#F2B45A" stroke="#F2B45A" stroke-width="5" stroke-linejoin="round"/>
+          <path d="M110 19 L116 13 L117.5 21 Z" fill="#FBE3BE" stroke="#FBE3BE" stroke-width="1.5" stroke-linejoin="round"/>
+          <circle cx="104" cy="38" r="19" fill="#F2B45A"/>
+          <path d="M97 22l1 5M102 20v5M107 21l-1 5" stroke="#D98A2E" stroke-width="2.4" stroke-linecap="round"/>
+          <ellipse cx="115" cy="45" rx="8" ry="6" fill="#FBE3BE"/>
+          <path d="M120 40.5h4l-2 2.4z" fill="#E8908A" stroke="#E8908A" stroke-width="1.5" stroke-linejoin="round"/>
+          <path d="M118.5 47q2 1.4 4-.2" fill="none" stroke="#3D2E1F" stroke-width="1.2" stroke-linecap="round"/>
+          <path d="M123 44l10-2M123 46l10 1" stroke="#FBE3BE" stroke-width="0.9" stroke-linecap="round" opacity=".85"/>
+          <g class="eyes"><circle cx="111" cy="35" r="2.6" fill="#3D2E1F"/></g>
+          <ellipse cx="107" cy="44" rx="3.4" ry="2.1" fill="#E8908A" opacity=".35"/>
+        </g>
+      </g>
+    </g>
+  </g>
+</svg>
+</div>
+  </div>
+  <p class="loading-title">병동을 여는 중</p>
+  <div class="loading-track" role="progressbar" aria-label="병동을 여는 중" aria-valuemin="0" aria-valuemax="100"><div class="loading-fill" id="loading-fill"></div></div>
+  <p class="loading-slow" id="loading-slow" hidden>조금만 기다려 주세요</p>
+  <div class="loading-error" id="loading-error" hidden>
+    <p>병원 서버에 닿지 않아요. 잠시 후 다시 시도해 주세요</p>
+    <button type="button" class="loading-retry" id="loading-retry">다시 시도</button>
+  </div>
+</div>
+<script>
+  // 실제 앱에서는 아래 함수들을 로딩 진행·실패 이벤트에 연결해요.
+  const root = document.getElementById("loading");
+  const catWrap = document.getElementById("loading-cat");
+  const roam = catWrap.querySelector(".cat-roam");
+  const fill = document.getElementById("loading-fill");
+  const slow = document.getElementById("loading-slow");
+  const error = document.getElementById("loading-error");
+
+  // 걸음 길이(초). 작을수록 빨리 달려요.
+  function setStride(sec) { roam.style.setProperty("--stride", sec + "s"); }
+
+  // 진행률 0~1: 막대를 채우고, 진행될수록 0.55초 → 0.30초로 빨라져요.
+  function setProgress(p) {
+    p = Math.max(0, Math.min(1, p));
+    fill.style.transform = "scaleX(" + p + ")";
+    root.querySelector('[role="progressbar"]').setAttribute("aria-valuenow", String(Math.round(p * 100)));
+    if (slow.hidden) setStride((0.55 - 0.25 * p).toFixed(2));
+  }
+
+  // 8초가 지나면: 안내 문구와 함께 조금 지쳐서 느려져요.
+  function showSlow() { slow.hidden = false; setStride(0.62); }
+
+  // 연결 실패: 앉아서 고개를 갸웃하고 다시 시도 버튼을 보여줘요.
+  function showError() { root.classList.add("is-error"); catWrap.classList.add("is-sitting"); error.hidden = false; slow.hidden = true; }
+  function clearError() { root.classList.remove("is-error"); catWrap.classList.remove("is-sitting"); error.hidden = true; }
+
+  // 준비 완료: 0.4초 동안 사라져요.
+  function hideLoading() { root.style.opacity = "0"; setTimeout(() => root.remove(), 400); }
+
+  // ---- 미리보기용 데모 (실제 앱에서는 지워요) ----
+  let p = 0; setProgress(0);
+  const demo = setInterval(() => { p += 0.12; setProgress(p); if (p >= 0.96) { clearInterval(demo); setTimeout(showError, 900); } }, 700);
+  document.getElementById("loading-retry").addEventListener("click", () => { clearError(); p = 0; setProgress(0); });
+</script>
+</body>
+</html>

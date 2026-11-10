@@ -6,18 +6,18 @@
   "main": "./worker/index.ts",
   "compatibility_date": "2026-11-05",
   "assets": {
-    // /api/*, /ws, /admin/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요(/privacy 포함).
+    // /api/*, /ws, /admin/* 만 Worker가 먼저 받고, 나머지는 정적 에셋으로 처리해요(/guestbook/* 화면도 index.html로 가요).
     "run_worker_first": ["/api/*", "/ws", "/admin", "/admin/*"],
     "not_found_handling": "single-page-application"
   },
-  // Workers 로그예요. 자동 요청 로그(invocation_logs)는 꺼요. 요청 URL에 문병 토큰이 들어갈 수 있어서예요.
+  // Workers 로그예요. 자동 요청 로그(invocation_logs)는 꺼요. 요청 URL에 방명록 토큰이 들어갈 수 있어서예요.
   // 직접 남기는 로그는 worker/log.ts를 거쳐 길 이름·상태·오류 종류만 남아요. guestId·IP·닉네임은 남기지 않아요.
   "observability": {
     "enabled": true,
     "head_sampling_rate": 1,
     "redact_query_string": true,
     "logs": { "enabled": true, "invocation_logs": false },
-    // 추적(traces)에는 요청 URL 전체가 담겨요. 문병 토큰이 남지 않게 꺼 둬요.
+    // 추적(traces)에는 요청 URL 전체가 담겨요. 방명록 토큰이 남지 않게 꺼 둬요.
     "traces": { "enabled": false }
   },
   "durable_objects": {

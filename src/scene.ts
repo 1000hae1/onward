@@ -1,11 +1,13 @@
-import { PerspectiveCamera, Scene, Vector3, WebGLRenderer } from "three";
+import { NeutralToneMapping, PerspectiveCamera, Scene, SRGBColorSpace, Vector3, WebGLRenderer } from "three";
 import { nicknameMessage } from "../shared/nickname";
-import { PROTOCOL_VERSION, WARD_CAPACITY } from "../shared/protocol";
+import { BED_COUNT, PROTOCOL_VERSION, WARD_CAPACITY } from "../shared/protocol";
 import type { WardEvent } from "../shared/protocol";
 import { CAT_VISIT_AFTER_MS, readVersion } from "../shared/ward-rules";
 import { BEDS } from "../shared/ward-layout";
 import type { CatVisitPlan } from "./cat/cat-path";
 import { createCats } from "./cat/cats";
+import { createCatPlayFlow } from "./ward/cat-play-flow";
+import type { CatPlayFlow } from "./ward/cat-play-flow";
 import { createRemoteGuests } from "./net/remote-guests";
 import { loadMetList, rememberPerson, saveMetList } from "./net/met-list";
 import type { MetList } from "./net/met-list";
@@ -14,9 +16,13 @@ import { FIVE_LEAF_ITEM, inboxAckUpTo } from "../shared/left-blessings";
 import { koreanDay } from "../shared/ward-rules";
 import type { BlessingCardMessage, Guest } from "../shared/protocol";
 import { createWardClient } from "./net/ward-client";
-import { loadGuestToken, readWardParams, storageWorks, wardLabel } from "./net/ward-params";
+import { loadGuestToken, loadSeat, readWardParams, saveSeat, storageWorks, wardLabel } from "./net/ward-params";
+import { bedGuide, bedGuideText } from "../shared/bed-rules";
+import { BENCH_FULL_TEXT, SEAT_TAKEN_TEXT } from "../shared/bench-rules";
 import { NO_STORAGE_TEXT } from "./ui/entry-text";
 import { createButton } from "./ui/widgets";
+import { followTopStack } from "./ui/top-stack";
+import { createFiveLeafMemory } from "./net/five-leaf";
 import { lampPlacedText, lampSlotPosition } from "../shared/offering-rules";
 import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
@@ -34,6 +40,7 @@ import { buildFacilities } from "./ward/facilities";
 import { bedPlates, createBedPlatesView } from "./ward/bed-plates";
 import { createNurseGreeter } from "./ward/nurse-greeting";
 import { buildHospital } from "./ward/hospital";
+import { signLitFor } from "./ward/signboard-layout";
 import { buildLandscape } from "./ward/landscape";
 import { buildWard } from "./ward/room";
 import { buildSky } from "./ward/sky";
@@ -55,11 +62,15 @@ import type { NightRecord } from "../shared/daily";
 import type { WardStats } from "../shared/protocol";
 import { createNotice } from "./ui/notice";
 import { createSleepMode } from "./ui/sleep-mode";
+import { KEPT_QUIET_TEXT, SLEEPING_PERSON_TEXT, SLEPT_LONG_TEXT, sleptSummaryText } from "../shared/sleep-rules";
 import { readClockShiftMs, readDebugFlag } from "./net/ward-params";
 import { buildWinter } from "./ward/winter";
-import { forgetVisitToken, previewVisit, takeVisitToken } from "./net/visit-link";
+import { fetchGuestbook, forgetVisitToken, takeVisitToken } from "./net/guestbook-api";
+import type { GuestbookMessage, OwnerGuestbook } from "./guestbook/owner-panel";
+import { createAppleTree } from "./ward/apple-tree-view";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
+import { CAT_NOT_LYING_TEXT, CAT_PET_ONLY_TEXT, CAT_REST_TEXT } from "../shared/cat-play-rules";
 import { HUG_DECLINED_TEXT, HUG_DENIED_TEXT, hugMenuState, hugOfferText, hugSpot } from "../shared/hug-rules";
 import type { HugDenied } from "../shared/hug-rules";
 import { isMorningWindow } from "../shared/morning";
@@ -70,6 +81,7 @@ import { bedHeadSpot, doorSpots, roomAt, ROOMS, windowLampSpot } from "../shared
 import { createPlanters } from "./ward/planter-view";
 import { createMorningWindows } from "./ward/morning-window";
 import { createWarmGlows } from "./ward/warm-glow";
+import { createHeadLanterns } from "./ward/head-lanterns";
 import { createMoments } from "./ui/moments";
 import { LIGHT_DELAY_SECONDS } from "./ui/action-bar";
 import { BED_TRANSITION_SECONDS } from "./avatar/pose";
@@ -89,12 +101,20 @@ import { blessedMeText, bowText, createAnnouncer, giftForMeText } from "./ui/ann
 import { blessingText, giftName } from "../shared/gestures";
 
 const MAX_FRAME_SECONDS = 0.05;
+/** 병아리 간호사 머리 꼭대기에서 등불까지의 높이예요. */
+const NURSE_LANTERN_ABOVE = 0.28;
 /** 수면 모드에서는 화면이 거의 검으니 초당 4번만 그려요. */
 const SLEEP_FRAME_SECONDS = 0.25;
 const SLEEP_MAX_FRAME_SECONDS = 0.3;
 const NIGHTS_KEY = "onward.nights";
 /** 침대를 옮기려는 사이 다른 분이 먼저 누웠을 때예요. */
 const BED_MOVE_TAKEN_TEXT = "방금 다른 분이 누우셨어요.";
+/** 침대를 받은 뒤 눕기 요청의 답을 이만큼 기다렸다가, 눕지 않으면 남겨진 평안을 그냥 보여 줘요. */
+const PENDING_LEFT_WAIT_MS = 1500;
+/** 처음 침대를 고르려는 사이 다른 분이 먼저 받았을 때예요. */
+const BED_CLAIM_TAKEN_TEXT = "방금 다른 분이 자리를 잡았어요.";
+/** 다시 이어지는 사이 내 침대를 잃었을 때예요(30초가 넘게 끊겼어요). */
+const BED_LOST_TEXT = "다시 이어지는 사이 침대가 비워졌어요. 빈 침대를 다시 골라 주세요.";
 const PORTRAIT_FOV = 68;
 const LANDSCAPE_FOV = 54;
 /** 캐릭터를 화면 아래쪽에 두어 앞이 잘 보이게 해요. 화면 높이에 대한 비율이에요. */
@@ -121,7 +141,7 @@ const DENIED_TEXT: Record<DeniedReason, string> = {
   "too-soon": HUG_DENIED_TEXT["too-soon"],
   unavailable: HUG_DENIED_TEXT.unavailable,
   "not-morning": "좋은 아침 인사는 아침 6시 30분부터 9시까지 건넬 수 있어요.",
-  "no-bed": "침대에 누운 뒤 만들 수 있어요.",
+  "no-bed": "내 침대를 고른 뒤 만들 수 있어요.",
   "once-a-day": "그분께는 오늘 이미 남겼어요. 내일 또 남겨 주세요.",
   "out-of-season": "귤·홍시·호빵은 11월부터 2월까지 놓을 수 있어요.",
   "gift-limit": "오늘은 선물을 넉넉히 놓았어요. 내일 또 놓아 주세요.",
@@ -129,14 +149,9 @@ const DENIED_TEXT: Record<DeniedReason, string> = {
   "not-in-room": "병실에 들어가면 놓을 수 있어요.",
   "no-target": "그곳에는 보낼 수 없어요.",
   "too-fast": "조금 천천히 눌러 주세요.",
-};
-
-/** 신고에 대한 서버의 답이에요. */
-const REPORT_TEXT: Record<"saved" | "limit" | "already" | "no-target", string> = {
-  saved: "신고를 받았어요. 운영자가 살펴볼게요.",
-  limit: "오늘은 신고를 더 할 수 없어요. 내일 다시 해 주세요.",
-  already: "이미 신고하신 분이에요. 운영자가 살펴볼게요.",
-  "no-target": "지금은 신고할 수 없어요.",
+  "pet-only": CAT_PET_ONLY_TEXT,
+  "not-lying": CAT_NOT_LYING_TEXT,
+  resting: CAT_REST_TEXT,
 };
 
 /** 휴대폰이면 눈 입자와 해상도를 줄여서 버벅이지 않게 해요. */
@@ -163,8 +178,11 @@ function readQualityOverride(search: string): Quality | null {
   return value === "light" || value === "normal" ? value : null;
 }
 
-/** 병실을 만들고 화면에 그리기 시작해요. WebGL을 쓸 수 없으면 오류를 던져요. */
-export function startScene(canvas: HTMLCanvasElement): void {
+/**
+ * 병실을 만들고 화면에 그리기 시작해요. WebGL을 쓸 수 없으면 오류를 던져요.
+ * health는 로딩 화면에서 받은 /api/health 대답이에요. 서버 버전을 견줄 때 써요.
+ */
+export function startScene(canvas: HTMLCanvasElement, health: string): void {
   const phone = isPhoneLike();
   let view: ViewPrefs = loadViewPrefs();
   const hints = deviceHints();
@@ -174,6 +192,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
   // 안티에일리어싱은 만들 때만 정할 수 있어요. 가볍게면 끄고 시작해요.
   const renderer = new WebGLRenderer({ canvas, antialias: quality === "normal", powerPreference: "low-power" });
   renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
+  // 색은 sRGB로 내보내요. 톤 매핑은 아주 밝은 곳만 눌러 주는 Neutral이라 낮 화면의 색은 거의 그대로이고,
+  // 밤에는 노출을 조금 올려도 색조와 채도가 흐려지지 않아요.
+  renderer.outputColorSpace = SRGBColorSpace;
+  renderer.toneMapping = NeutralToneMapping;
+  renderer.toneMappingExposure = 1;
 
   const scene = new Scene();
   const camera = new PerspectiveCamera(PORTRAIT_FOV, 1, 0.12, 520);
@@ -181,7 +204,9 @@ export function startScene(canvas: HTMLCanvasElement): void {
   const softCircle = createSoftCircleTexture();
   const room = buildWard(scene, softCircle);
   const facilities = buildFacilities(scene);
-  const hospital = buildHospital(scene);
+  const hospital = buildHospital(scene, {
+    anisotropy: Math.min(8, renderer.capabilities.getMaxAnisotropy()),
+  });
   const landscape = buildLandscape(scene, {
     forestTrees: phone ? 140 : 320,
     ridgeSegments: phone ? 96 : 160,
@@ -206,7 +231,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
     hospital,
     landscape,
     sky,
+    setExposure: (exposure) => {
+      renderer.toneMappingExposure = exposure;
+    },
   });
+  /** 캐릭터마다 머리 위에 떠 있는 작은 등불이에요. */
+  const lanterns = createHeadLanterns(scene, softCircle);
+  const nurseLanternPoint = new Vector3();
+  const myLanternPoint = new Vector3();
   const reduceMotion = window.matchMedia("(prefers-reduced-motion: reduce)");
   winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
   const savedProfile = loadProfile();
@@ -224,16 +256,52 @@ export function startScene(canvas: HTMLCanvasElement): void {
   };
   const remotes = createRemoteGuests(scene, player.nav, remoteLabels, offerings, myHead);
   remotes.setQuality(quality);
+  lanterns.setRealLights(quality === "normal");
+  /** 간판 별 반짝임과 빛 번짐은 보통 품질이고 움직임 줄이기가 아닐 때만 켜요. */
+  const syncSignboard = (): void => hospital.signboard.setLively(quality === "normal" && !reduceMotion.matches);
+  syncSignboard();
   /** 품질을 바꿔요. 안티에일리어싱만 빼고 바로 바뀌어요. */
   const applyQuality = (next: Quality): void => {
     quality = next;
     renderer.setPixelRatio(pixelRatioFor(quality, window.devicePixelRatio, phone));
     winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
     remotes.setQuality(quality);
+    lanterns.setRealLights(quality === "normal");
+    syncSignboard();
   };
-  // 움직임 줄이기 설정을 바꾸면 눈의 양도 바로 따라가요.
-  reduceMotion.addEventListener("change", () => winter.setSnowAmount(snowFraction(quality, reduceMotion.matches)));
+  // 움직임 줄이기 설정을 바꾸면 눈의 양과 간판 반짝임도 바로 따라가요.
+  reduceMotion.addEventListener("change", () => {
+    winter.setSnowAmount(snowFraction(quality, reduceMotion.matches));
+    syncSignboard();
+  });
   const planters = createPlanters(scene);
+  /** 내 침대 옆 작은 사과나무예요. 서버가 나에게만 알려 줄 때만 그려요. 다른 사람의 나무는 그릴 정보가 없어요. */
+  const appleTree = createAppleTree(scene);
+  /** 켜진 방명록 링크가 있는지와 사과 수예요. 나만 알아요. */
+  let myTree: { active: boolean; count: number } | null = null;
+  let ownerGuestbook: OwnerGuestbook | null = null;
+  /** 아직 화면을 불러오는 중에 온 방명록이에요. 불러오면 바로 채워요. */
+  let pendingGuestbook: GuestbookMessage | null = null;
+  /** 방명록 화면은 처음 열 때 따로 불러와요. 방명록 링크 화면과 Three.js를 나눠 두려고요. */
+  const openOwnerGuestbook = (): void => {
+    if (ownerGuestbook) {
+      ownerGuestbook.open();
+      return;
+    }
+    const root = element("guestbook");
+    if (!root) return;
+    void import("./guestbook/owner-panel").then(({ createOwnerGuestbook }) => {
+      ownerGuestbook ??= createOwnerGuestbook(root, {
+        nickname: () => current.nickname,
+        request: (action) => client.send({ type: "guestbook", action }),
+        hide: (appleId) => client.send({ type: "hide-apple", appleId }),
+        onClose: () => undefined,
+      });
+      if (pendingGuestbook) ownerGuestbook.update(pendingGuestbook);
+      pendingGuestbook = null;
+      ownerGuestbook.open();
+    });
+  };
   const morningWindows = createMorningWindows(scene);
   /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
   const morningPreview = parseTimeOverride(window.location.search) === "morning";
@@ -252,6 +320,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let lastLying: number | null = null;
   // 서버 시계는 아래에서 연결을 만든 뒤 이어 줘요.
   let serverNow = (): number => Date.now();
+  /** 오잎클로버를 오늘 놓았는지예요. 서버가 알려 준 대로만 고쳐요. */
+  const fiveLeaf = createFiveLeafMemory((() => {
+    try {
+      return window.localStorage;
+    } catch {
+      return null;
+    }
+  })());
+  const today = (): string => koreanDay(new Date(serverNow()));
+  /** 자리에 없는 분께 오잎클로버를 남기는 중이면 true예요. left-saved가 오면 오늘 놓은 것으로 적어요. */
+  let leavingFiveLeaf = false;
   let online = (): boolean => false;
   const cats = createCats(
     scene,
@@ -261,11 +340,15 @@ export function startScene(canvas: HTMLCanvasElement): void {
       isTaken: (bed) => player.claimedBed === bed || remotes.isBedTaken(bed),
       visitFor: (roomIndex) =>
         online() ? (serverVisits.get(roomIndex) ?? null) : localVisit?.room === roomIndex ? localVisit.plan : null,
+      personAt: (id) => (online() && id !== myId ? remotes.position(id) : { x: player.walkX, z: player.walkZ }),
     },
     false,
   );
+  /** 고양이와 놀기예요. 연결을 만든 뒤 이어 줘요. */
+  let catFlow: CatPlayFlow | null = null;
+  player.setLongPress((origin, reach) => catFlow?.longPress(origin, reach) ?? false);
   player.setTapFilter((origin, reach) => {
-    if (cats.tap(origin, reach)) return true;
+    if (catFlow?.tap(origin, reach)) return true;
     // 창가 화분을 누르면 이 병실에 모인 평안을 알려 줘요. 그 병실 안에 있을 때만이에요.
     const planterRoom = planters.tap(origin, reach);
     if (planterRoom !== null && roomAt(player.walkX, player.walkZ)?.index === planterRoom) {
@@ -275,10 +358,17 @@ export function startScene(canvas: HTMLCanvasElement): void {
     // 다른 동물을 누르면 메뉴가 나와요. 서버에 닿아 있을 때만이에요.
     const guest = client.online ? remotes.tap(origin, reach) : null;
     if (!guest || !actionBar) return false;
+    openPersonMenu(guest);
+    return true;
+  });
+  /** 다른 동물 메뉴를 열어요. 그 동물을 누르거나, 그분의 침대를 눌렀을 때예요. */
+  const openPersonMenu = (guest: Guest): void => {
+    if (!actionBar) return;
     const where = remotes.position(guest.id) ?? { x: guest.x, z: guest.z };
     actionBar.openPerson({
       id: guest.id,
       nickname: guest.nickname,
+      sleepingNote: remotes.isAsleep(guest.id) ? SLEEPING_PERSON_TEXT : null,
       hug: hugMenuState({
         online: client.online,
         leaving: dischargeUntil !== null,
@@ -288,8 +378,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         nowMs: Date.now(),
       }),
     });
-    return true;
-  });
+  };
 
   let pickerShift: number | null = ENTRY_VIEW_SHIFT;
   let viewShift: number | null = null;
@@ -335,8 +424,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let current = profile;
   let entered = false;
 
-  const params = readWardParams(window.location.search);
-  /** 문병 링크로 따라 들어온 토큰이에요. 링크를 미리 확인한 뒤에 입장 화면을 열어요. */
+  const params = readWardParams(window.location.search, loadSeat(BED_COUNT));
+  /** 방명록에서 [병실에 문병 가기]로 넘어온 토큰이에요. 링크를 미리 확인한 뒤에 입장 화면을 열어요. */
   const visitToken = takeVisitToken();
   /** 링크가 열려서 문병 온 주인의 닉네임이에요. 일반 입장이면 null이에요. */
   let visitOwner: string | null = null;
@@ -382,6 +471,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     const low = event.bed !== null;
     const face = low ? BEDS[event.bed as number] : b;
     const travel = Math.hypot(spot.x - a.x, spot.z - a.z) / HUG_WALK_SPEED;
+    // 벤치에 앉아 있던 안기는 사람은 일어나서 기다려요. 서버는 이미 자리를 비웠어요.
+    if (event.b === myId) player.leaveSeat();
     if (event.a === myId) {
       player.whenUp(() =>
         player.walkToSpot(spot.x, spot.z, () => {
@@ -416,7 +507,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     });
   };
 
-  /** 퇴원을 받아 줬어요. 평상복으로 갈아입고 문 쪽으로 천천히 걸어 나가요. */
+  /** 퇴원을 받아 줬어요. 환자복을 벗고 문 쪽으로 천천히 걸어 나가요. */
   const beginDischarge = (until: number): void => {
     dischargeUntil = until;
     farewellsReceived = 0;
@@ -426,7 +517,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (settingsRoot) settingsRoot.hidden = true;
     const bed = player.claimedBed;
     const room = roomAt(player.walkX, player.walkZ) ?? (bed !== null ? ROOMS[BEDS[bed].roomIndex] : null);
-    // 저장하지 않고 이번에만 평상복이에요. 다음에 들어올 때는 원래 옷이에요.
+    // 저장하지 않고 이번에만 문병객 모습이에요. 다음에 들어올 때는 원래 옷이에요.
     player.setChoice({ species: current.species, outfit: "visitor" });
     player.setInputEnabled(false);
     notice?.show("오늘 퇴원해요. 평안히 다녀가세요.", 5);
@@ -454,11 +545,12 @@ export function startScene(canvas: HTMLCanvasElement): void {
   };
   let myId = "";
   /** 침대를 받으면 서버가 남겨진 평안을 바로 보내 줘요. 걸어가서 다 누웠을 때 보여 줘요. */
-  let pendingLeft: { bedId: number; cards: BlessingCardMessage[] } | null = null;
+  let pendingLeft: { bedId: number; cards: BlessingCardMessage[]; at: number } | null = null;
 
   const gateRoot = element("gate");
   const gate = gateRoot ? createGate(gateRoot) : null;
   const banner = element("connection-banner");
+  if (banner) followTopStack(banner);
   const setBanner = (text: string | null, action?: { label: string; run: () => void }): void => {
     if (!banner) return;
     banner.textContent = text ?? "";
@@ -470,18 +562,11 @@ export function startScene(canvas: HTMLCanvasElement): void {
     setBanner("새 버전이 나왔어요. 새로고침해 주세요.", { label: "새로고침", run: () => window.location.reload() });
   };
   // 들어가기 전에 서버 버전을 먼저 견줘요. 예전 번들을 캐시로 쓰고 있으면 바로 알려요.
-  void fetch("/api/health", { cache: "no-store" })
-    .then((response) => response.text())
-    .then((text) => {
-      const version = readVersion(text);
-      if (version !== null && version !== PROTOCOL_VERSION) showOutdated();
-    })
-    .catch(() => {
-      // 서버에 닿지 않으면 연결할 때 다시 알려요.
-    });
+  const serverVersion = readVersion(health);
+  if (serverVersion !== null && serverVersion !== PROTOCOL_VERSION) showOutdated();
 
   const client = createWardClient(params, {
-    onSnapshot(snapshot) {
+    onSnapshot(snapshot, reconnected) {
       myId = snapshot.you;
       debug?.setPublicId(snapshot.you);
       debug?.setPlace(client.ward, client.instance);
@@ -499,6 +584,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         );
       }
       remotes.reset(snapshot.guests, snapshot.you);
+      catFlow?.reset(snapshot.catPlays, snapshot.catRests);
       remember(snapshot.guests, snapshot.you);
       // 내가 없는 동안 도착한 평안이 있으면 들어오자마자 보여 줘요.
       blessingCards?.showInbox(snapshot.inbox, client.serverNow());
@@ -518,6 +604,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
       // 자주 온 분이면 병동 고양이가 문 앞으로 나와 반겨요. 이 화면에서만 보여요.
       if (snapshot.greet) cats.welcome({ x: player.walkX, z: player.walkZ });
       if (snapshot.welcomeBack) notice?.show(WELCOME_BACK_TEXT, 5);
+      if (snapshot.fiveLeafUsed === true) fiveLeaf.mark(today());
+      else if (snapshot.fiveLeafUsed === false) fiveLeaf.clear();
       // 다시 이어졌으면 지금 잠들어 있는지를 서버에 다시 알려요. 같으면 서버는 아무것도 하지 않아요.
       client.send({ type: "sleep", sleeping: sleep?.sleeping ?? false });
       setBanner(null);
@@ -526,26 +614,42 @@ export function startScene(canvas: HTMLCanvasElement): void {
       refreshSlot(false);
       // 서버가 기억하는 내 자리와 이 화면의 자리가 다를 때만 맞춰요. 30초 안에 돌아왔으면 대개 같아요.
       const me = snapshot.guests.find((guest) => guest.id === snapshot.you);
+      // 내 침대는 서버가 정해요. 30초 안에 돌아왔거나 예전 자리가 비어 있었으면 같은 침대예요.
+      const hadBed = player.ownedBed;
+      const serverBed = snapshot.visit ? null : (me?.bed ?? null);
+      player.setOwnedBed(serverBed);
+      if (reconnected && hadBed !== null && serverBed !== hadBed) toast(BED_LOST_TEXT);
+      // 누운 자세만 맞춰요. 내 침대에 누워 있는데 서버는 모르면 다시 눕겠다고 알려요.
       const bed = player.claimedBed;
-      if (bed !== null && me?.bed !== bed) {
+      if (bed !== null && !me?.lying) {
         void client.askBed(bed).then((granted) => {
-          if (!granted) {
-            player.forceGetUp();
-            toast("다시 이어지는 사이 다른 분이 침대에 누웠어요.");
-          }
+          if (!granted) player.forceGetUp();
         });
-      } else if (bed === null && me && me.bed !== null) {
+      } else if (bed === null && me?.lying) {
         client.send({ type: "get-up" });
       }
-      if (bed === null && me && Math.hypot(me.x - player.walkX, me.z - player.walkZ) > 0.3) {
+      // 벤치 자리도 맞춰요. 내가 앉아 있는데 서버는 모르면 다시 앉겠다고 하고, 안 되면 일어나요.
+      const seat = player.seat;
+      const serverSeat = me?.bench ?? null;
+      if (seat !== null && serverSeat !== seat) {
+        void client.askSeat(seat).then((granted) => {
+          if (!granted) player.leaveSeat();
+        });
+      } else if (seat === null && serverSeat !== null) {
+        client.send({ type: "stand" });
+      }
+      if (bed === null && seat === null && me && Math.hypot(me.x - player.walkX, me.z - player.walkZ) > 0.3) {
         client.send({ type: "walk-to", x: player.walkX, z: player.walkZ });
       }
     },
     onEvent(event: WardEvent) {
       announce(event);
       if (event.kind === "gift") {
+        if (event.id === myId && event.gift.item === FIVE_LEAF_ITEM) fiveLeaf.mark(today());
         const from = remotes.handSpot(event.id) ?? player.handSpot();
-        offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion());
+        // 잠든 동안 내 머리맡에 온 선물은 날아오지 않고 조용히 놓여 있어요. 깨어나면 숫자로 알려 줘요.
+        const quiet = (sleep?.sleeping ?? false) && event.gift.stand === player.claimedBed;
+        offerings.placeGift(from, event.gift.stand, event.gift.slot, event.gift.item, stillMotion() || quiet);
         return;
       }
       if (event.kind === "lamp") {
@@ -583,6 +687,18 @@ export function startScene(canvas: HTMLCanvasElement): void {
         return;
       }
       if (event.kind === "leave") moments?.dismissFarewell(event.id);
+      if (event.kind === "cat-play") {
+        catFlow?.onPlay(event.play);
+        return;
+      }
+      if (event.kind === "cat-rest") {
+        catFlow?.onRest(event.catId, event.until);
+        return;
+      }
+      if (event.kind === "cat-wake") {
+        catFlow?.onWake(event.catId, event.until);
+        return;
+      }
       if (event.kind === "cat-visit") {
         const before = serverVisits.get(event.room);
         if (event.visit) {
@@ -607,25 +723,36 @@ export function startScene(canvas: HTMLCanvasElement): void {
       reopenEntry(nicknameMessage(problem));
     },
     onDenied(denied) {
+      if (denied.action === "cat" && catFlow?.onDenied(denied.reason)) return;
       if (denied.action === "discharge") {
-        toast("침대에 누운 뒤 퇴원할 수 있어요.");
+        toast("내 침대를 고른 뒤 퇴원할 수 있어요.");
         return;
       }
       if (denied.action === "hug" && denied.reason in HUG_DENIED_TEXT) {
         toast(HUG_DENIED_TEXT[denied.reason as HugDenied]);
         return;
       }
+      if (denied.action === "gift") leavingFiveLeaf = false;
       if (denied.reason === "gift-limit" && denied.item === FIVE_LEAF_ITEM) {
+        fiveLeaf.mark(today());
         toast("오잎클로버는 내일 다시 놓을 수 있어요.");
         return;
       }
       toast(DENIED_TEXT[denied.reason]);
     },
     onLeftBlessings(message) {
-      pendingLeft = { bedId: message.bedId, cards: message.cards };
+      pendingLeft = { bedId: message.bedId, cards: message.cards, at: performance.now() };
     },
     onLeftSaved() {
+      if (leavingFiveLeaf) fiveLeaf.mark(today());
+      leavingFiveLeaf = false;
       toast("남겨두었어요. 다음에 들어오시면 전해져요.");
+    },
+    onKeptQuiet() {
+      toast(KEPT_QUIET_TEXT);
+    },
+    onSleptSummary(people, gifts) {
+      notice?.show(sleptSummaryText(people, gifts), 8);
     },
     onVisitDenied(reason) {
       if (reason === "busy") {
@@ -638,8 +765,15 @@ export function startScene(canvas: HTMLCanvasElement): void {
       visitOwner = null;
       notice?.show(VISIT_CLOSED_TEXT, 8);
     },
-    onVisitLink(status) {
-      actionBar?.showVisitLink(status);
+    onGuestbook(message) {
+      myTree = { active: message.active, count: message.count };
+      appleTree.setTree(myTree);
+      if (ownerGuestbook) ownerGuestbook.update(message);
+      else pendingGuestbook = message;
+    },
+    onMyTree(tree) {
+      myTree = tree;
+      appleTree.setTree(tree);
     },
     onVisitorArrived(nickname) {
       notice?.show(visitorArrivedText(nickname));
@@ -651,9 +785,6 @@ export function startScene(canvas: HTMLCanvasElement): void {
       applyProfile(next);
       settings?.setProfile(next);
       toast(`닉네임이 '${nickname}'(으)로 바뀌었어요.`);
-    },
-    onReportResult(result) {
-      toast(REPORT_TEXT[result]);
     },
     onHugOffer(requestId, fromId) {
       const from = remotes.guests().find((guest) => guest.id === fromId);
@@ -669,6 +800,12 @@ export function startScene(canvas: HTMLCanvasElement): void {
     onFarewellCount(count) {
       farewellsReceived = count;
     },
+    onCatBusy(nickname, scene) {
+      catFlow?.onBusy(nickname, scene);
+    },
+    onCatPetted(nickname) {
+      catFlow?.onPetted(nickname);
+    },
     onMessageType(kind) {
       debug?.setLastMessage(kind);
     },
@@ -679,12 +816,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
         if (status === "online") gate?.hide();
         return;
       }
-      if (status === "paused") {
+      if (status === "paused" || status === "rested") {
+        // 잠든 지 8시간이 지나 서버가 쉬게 했으면 수면 모드도 끝내요. 누르면 다시 이어요.
+        if (status === "rested") sleep?.wake();
         setHud(null);
         setStats(null);
         remotes.reset([], "");
         setBanner(null);
-        gate?.show("잠들었어요. 화면을 누르면 다시 병실로 돌아가요");
+        gate?.show(status === "rested" ? SLEPT_LONG_TEXT : "잠들었어요. 화면을 누르면 다시 병실로 돌아가요");
         return;
       }
       if (status === "blocked" || status === "limited") {
@@ -717,6 +856,20 @@ export function startScene(canvas: HTMLCanvasElement): void {
   });
 
   serverNow = () => client.serverNow();
+  catFlow = createCatPlayFlow({
+    cats,
+    remotes,
+    player,
+    online: () => client.online,
+    myId: () => myId,
+    myNickname: () => current.nickname,
+    serverNow: () => serverNow(),
+    send: (catId, kind) => client.send({ type: "cat-play", catId, kind }),
+    openMenu: (menu) => actionBar?.openCat(menu),
+    toast: (text) => toast(text),
+    leaving: () => dischargeUntil !== null,
+  });
+  remotes.setYarnSource((roomIndex) => cats.yarnIn(roomIndex));
   online = () => client.online;
 
   /** 나에게 온 평안과 선물, 같은 병실의 한마디를 화면 낭독기가 읽게 해요. 화면 모습은 그대로예요. */
@@ -724,6 +877,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (!announcer || !myId) return;
     if (event.kind !== "bless" && event.kind !== "gift" && event.kind !== "bow") return;
     if (event.id === myId) return;
+    // 잠든 동안에는 읽지 않아요. 깨어나면 한 번에 알려 줘요.
+    if (sleep?.sleeping) return;
     const nickname = remotes.guests().find((guest) => guest.id === event.id)?.nickname;
     if (!nickname) return;
     const myBed = player.claimedBed;
@@ -746,30 +901,70 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   player.setNet({
     askBed: (bed) => client.askBed(bed),
-    isBedTaken: (bed) => client.online && remotes.isBedTaken(bed),
+    claimBed: (bed) => client.claimBed(bed),
+    isBedTaken: (bed) => client.online && remotes.ownerOfBed(bed) !== null,
+    othersBed: (bed) => {
+      // 다른 분의 침대예요. 눕지 않고 그분 메뉴를 보여 줘요. 내 침대가 없으면 고를 수 있는 곳도 알려요.
+      const owner = remotes.ownerOfBed(bed);
+      if (owner) openPersonMenu(owner);
+      const guide = currentBedGuide();
+      if (guide && guide.kind !== "pick-here") toast(bedGuideText(guide));
+      else if (!owner) toast("다른 분의 침대예요.");
+    },
     walkTo: (x, z) => client.send({ type: "walk-to", x, z }),
     getUp: () => client.send({ type: "get-up" }),
-    bedRefused: (moving) => toast(moving ? BED_MOVE_TAKEN_TEXT : "다른 분이 먼저 자리를 잡았어요."),
+    bedRefused: (moving) => {
+      const guide = moving ? null : currentBedGuide();
+      const hint = guide && guide.kind !== "pick-here" ? ` ${bedGuideText(guide)}` : "";
+      toast((moving ? BED_MOVE_TAKEN_TEXT : BED_CLAIM_TAKEN_TEXT) + hint);
+    },
+    askSeat: (seat) => client.askSeat(seat),
+    isSeatTaken: (seat) => client.online && remotes.isSeatTaken(seat),
+    standUp: () => client.send({ type: "stand" }),
+    seatRefused: (full) => toast(full ? BENCH_FULL_TEXT : SEAT_TAKEN_TEXT),
+  });
+  player.setClaimConfirm((_bed, proceed) => {
+    if (actionBar) actionBar.confirmClaim(proceed);
+    else proceed();
   });
   player.setMoveConfirm((_bed, proceed) => {
     if (actionBar) actionBar.confirmMove(proceed);
     else proceed();
   });
 
-  // 가운데 병아리 간호사가 현관으로 들어서는 분께 고개 숙여 인사해요. 내 화면에서만 보여요.
-  const greeter = facilities.nurses[Math.floor(facilities.nurses.length / 2)];
-  const nurseLabelRoot = document.createElement("div");
-  remoteLabels?.append(nurseLabelRoot);
-  const nurseLabel = createHeadLabels(nurseLabelRoot);
-  const nursePoint = new Vector3();
+  // 병아리 간호사 모두 현관으로 들어서는 분께 인사해요. 내 화면에서만 보여요.
+  const nurseGreetings = facilities.nurses.map((nurse) => {
+    const root = document.createElement("div");
+    remoteLabels?.append(root);
+    return { nurse, label: createHeadLabels(root), point: new Vector3() };
+  });
   const nextGreeting = createNurseGreeter({ getItem: readStorage, setItem: writeStorage });
   player.setLobbyListener(() => {
-    if (!entered || !greeter) return;
+    if (!entered || nurseGreetings.length === 0) return;
     const text = nextGreeting();
-    greeter.bow(reduceMotion.matches);
-    nurseLabel.showBubble(text);
-    announcer?.say(`간호사가 "${text}" 하고 인사했어요.`);
+    for (const { nurse, label } of nurseGreetings) {
+      nurse.bow(reduceMotion.matches);
+      label.showBubble(text);
+    }
+    announcer?.say(`간호사들이 "${text}" 하고 인사했어요.`);
   });
+
+  /** 내 침대가 없는 환자에게 침대 고르는 법을 알려 줄지예요. 침대가 다 차도 병동에는 머물 수 있어요. */
+  const currentBedGuide = () =>
+    entered && !visitingNow && dischargeUntil === null
+      ? bedGuide(
+          {
+            canLie: current.outfit === "patient",
+            ownedBed: player.ownedBed,
+            myRoom: roomAt(player.walkX, player.walkZ)?.index ?? null,
+          },
+          (bed) => client.online && remotes.ownerOfBed(bed) !== null,
+        )
+      : null;
+  /** 안내는 병실에 들어설 때마다 한 번이에요. */
+  let guidedRoom: number | null = null;
+  /** 이 브라우저에 마지막으로 적어 둔 내 침대예요. undefined면 아직 적지 않았어요. */
+  let savedSeat: number | null | undefined;
 
   const platesRoot = element("bed-plates");
   const plates = platesRoot ? createBedPlatesView(platesRoot) : null;
@@ -781,7 +976,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     labels?.setName(next.nickname);
   };
 
-  /** 문병객으로 고른 평상복은 저장하지 않아요. 다음에 일반으로 들어올 때는 원래 옷이에요. */
+  /** 문병객으로 고른 옷차림은 저장하지 않아요. 다음에 일반으로 들어올 때는 원래 옷이에요. */
   const persist = (next: Profile): void => {
     saveProfile(visitOwner ? { ...next, outfit: profile.outfit } : next);
   };
@@ -802,6 +997,13 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (settingsRoot) {
       settings = createSettings(settingsRoot, {
         initial: chosen,
+        canUsePersonalActions: () => {
+          if (client.online && !visitingNow && dischargeUntil === null) return true;
+          toast("병동에 연결된 뒤 이용할 수 있어요.");
+          return false;
+        },
+        onOpenGuestbook: openOwnerGuestbook,
+        onDischarge: () => actionBar?.openDischarge(),
         view,
         onViewChange: (next) => {
           const choiceChanged = next.quality !== view.quality;
@@ -833,6 +1035,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
         labels,
         stillMotion,
         visiting: () => visitingNow,
+        guestbookActive: () => myTree?.active ?? false,
         people: () =>
           client.online
             ? metList.people.map((person) => {
@@ -848,14 +1051,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
         sink: {
           online: () => client.online,
           blessPerson: (targetId) => client.send({ type: "bless", targetId }),
-          leaveFor: (address, kind, item) =>
-            client.send(item === undefined ? { type: "leave-for", address, kind } : { type: "leave-for", address, kind, item }),
+          leaveFor: (address, kind, item) => {
+            leavingFiveLeaf = item === FIVE_LEAF_ITEM;
+            client.send(item === undefined ? { type: "leave-for", address, kind } : { type: "leave-for", address, kind, item });
+          },
           bless: (bedId) => client.send({ type: "bless", bedId }),
           bow: (phrase) => client.send({ type: "bow", phrase }),
           gift: (bedId, item) => client.send({ type: "gift", bedId, item }),
           lamp: () => client.send({ type: "lamp" }),
-          visitLink: (action) => client.send({ type: "visit-link", action }),
-          report: (targetId, reason) => client.send({ type: "report", targetId, reason }),
           hug: (targetId) => {
             hugSentAt.set(targetId, Date.now());
             client.send({ type: "hug-request", targetId });
@@ -863,6 +1066,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
           discharge: (closeLink) => client.send({ type: "discharge", closeLink }),
         },
         morning: () => isMorningWindow(serverNow()),
+        fiveLeafUsed: () => fiveLeaf.used(today()),
       });
     }
   };
@@ -883,7 +1087,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
     });
   };
 
-  /** 문병 링크로 왔으면 제목이 바뀌고 옷은 평상복이에요. */
+  /** 방명록 링크로 왔으면 제목이 바뀌고 옷은 문병객 모습이에요. */
   const visitEntry = (): { title?: string; lockOutfit?: "visitor" } =>
     visitOwner ? { title: visitTitle(visitOwner), lockOutfit: "visitor" } : {};
 
@@ -908,7 +1112,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
 
   if (visitToken) {
     // 링크를 먼저 확인해요. 열리면 주인이 있는 병동으로 가고, 아니면 일반 입장으로 안내해요.
-    void previewVisit(visitToken).then((preview) => {
+    void fetchGuestbook(visitToken).then((preview) => {
       if (preview?.open) {
         visitOwner = preview.ownerNickname;
         client.setVisit({ token: visitToken, ward: preview.ward, instance: preview.instance });
@@ -931,6 +1135,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
   let slot = readSlot();
   let nextChangeAt = nextSlotChange(displayNow());
   lighting.setSlot(slot, true);
+  lanterns.setSlot(slot);
+  hospital.signboard.setLit(signLitFor(slot), true);
 
   /** 지금 누워 있는 사람 수예요. 나도 포함해요. */
   const sleepers = (): number => remotes.lyingCount() + (player.lyingBed !== null ? 1 : 0);
@@ -942,6 +1148,8 @@ export function startScene(canvas: HTMLCanvasElement): void {
     if (next === slot) return;
     slot = next;
     lighting.setSlot(slot, reduceMotion.matches || !announce);
+    lanterns.setSlot(slot);
+    hospital.signboard.setLit(signLitFor(slot), reduceMotion.matches || !announce);
     if (announce && slot === "night" && entered) notice?.show(lightsOutText(sleepers()));
   }
 
@@ -970,11 +1178,13 @@ export function startScene(canvas: HTMLCanvasElement): void {
           buttonRoot: sleepRoot,
           overlay: sleepOverlay,
           onChange: (sleeping) => {
-            // 카메라는 내 침대를 비추는 자리에 고정하고, 서버로는 아무것도 보내지 않아요.
+            // 카메라는 내 침대를 비추는 자리에 고정해요. 내 모습도 남들이 보는 것처럼 눈을 감고 이불을 덮어요.
             player.setCameraLocked(sleeping);
+            player.setAsleep(sleeping);
+            labels?.setAsleep(sleeping);
             player.setInputEnabled(!sleeping);
             lastInputMs = Date.now();
-            // 잠든 동안에는 안아 주기 요청이 오지 않게 서버에 알려요.
+            // 서버가 같은 병동 사람들에게 한 번 알려요. 잠든 동안 안아 주기·목례·한마디는 오지 않고, 평안은 쌓여요.
             client.send({ type: "sleep", sleeping });
           },
         })
@@ -1092,13 +1302,14 @@ export function startScene(canvas: HTMLCanvasElement): void {
     cats.update(dt, reduceMotion.matches);
     offerings.update(dt, reduceMotion.matches);
     planters.update(dt, reduceMotion.matches);
+    appleTree.setBed(visitingNow ? null : player.lyingBed);
     morningWindows.update(dt, reduceMotion.matches);
     glows.update(dt, reduceMotion.matches);
     moments?.update(dt);
     if (hugBack) {
       hugBack.left -= dt;
       if (hugBack.left <= 0) {
-        if (player.lyingBed === null) {
+        if (player.lyingBed === null && !player.seated) {
           player.faceToward(hugBack.face.x, hugBack.face.z);
           player.playGesture("hug");
         }
@@ -1113,7 +1324,7 @@ export function startScene(canvas: HTMLCanvasElement): void {
       if (player.lyingBed === pendingLeft.bedId) {
         blessingCards?.showBedCards(pendingLeft.cards, serverNow());
         pendingLeft = null;
-      } else if (player.claimedBed !== pendingLeft.bedId) {
+      } else if (player.claimedBed !== pendingLeft.bedId && performance.now() - pendingLeft.at > PENDING_LEFT_WAIT_MS) {
         // 눕기 전에 다른 곳으로 가면 그 침대의 평안은 다음 사람을 위해 이미 지워졌으니 그대로 보여 줘요.
         blessingCards?.showBedCards(pendingLeft.cards, serverNow());
         pendingLeft = null;
@@ -1125,13 +1336,40 @@ export function startScene(canvas: HTMLCanvasElement): void {
     sky.update(motionDt);
     lighting.setFocus(player.x, player.z);
     lighting.update(dt);
+    hospital.signboard.update(dt);
+    // 등불은 모든 캐릭터가 자리를 잡은 뒤에 따라가요.
+    for (const nurse of facilities.nurses) nurse.update(dt);
+    lanterns.begin();
+    const myLanternGround = player.lanternWorld(myLanternPoint);
+    if (myLanternGround !== null) lanterns.add(player, myLanternPoint, myLanternGround, sleep?.sleeping ?? false);
+    remotes.lanterns(lanterns.add);
+    cats.lanterns(lanterns.add);
+    for (const nurse of facilities.nurses) {
+      nurse.headWorld(nurseLanternPoint);
+      nurseLanternPoint.y += NURSE_LANTERN_ABOVE;
+      lanterns.add(nurse, nurseLanternPoint, 0);
+    }
+    lanterns.update(dt, camera, reduceMotion.matches);
     renderer.render(scene, camera);
     // 머리 위 글자는 카메라가 다 움직인 뒤에 맞춰요.
     labels?.update(dt, camera, player.headWorld(headPoint));
-    for (const nurse of facilities.nurses) nurse.update(dt);
-    nurseLabel.update(dt, camera, greeter ? greeter.headWorld(nursePoint) : null);
+    for (const { nurse, label, point } of nurseGreetings) {
+      label.update(dt, camera, nurse.headWorld(point));
+    }
+    // 병실에 들어설 때 내 침대가 없으면 고르는 법을 알려요.
+    const roomNow = roomAt(player.walkX, player.walkZ)?.index ?? null;
+    if (roomNow !== guidedRoom) {
+      guidedRoom = roomNow;
+      const guide = roomNow === null ? null : currentBedGuide();
+      if (guide) toast(bedGuideText(guide));
+    }
+    // 내 침대가 바뀌면 다음 방문을 위해 기억해 둬요. 서버에 이어져 있을 때만 적어요.
+    if (client.online && entered && !visitingNow && player.ownedBed !== savedSeat) {
+      savedSeat = player.ownedBed;
+      saveSeat(savedSeat === null ? null : { ward: client.ward, instance: client.instance, bed: savedSeat });
+    }
     if (plates) {
-      const mine = entered && !visitingNow ? { nickname: current.nickname, bed: player.claimedBed } : null;
+      const mine = entered && !visitingNow ? { nickname: current.nickname, bed: player.ownedBed } : null;
       plates.sync(bedPlates(remotes.guests(), mine));
       plates.update(camera, { x: player.walkX, z: player.walkZ });
     }

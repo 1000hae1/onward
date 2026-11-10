@@ -10,7 +10,8 @@ import type { ClientMessage, ServerMessage, WardEvent } from "../../shared/proto
 import type { NicknameProblem } from "../../shared/nickname";
 import { readVersion } from "../../shared/ward-rules";
 import type { Profile } from "../ui/profile";
-import { loadGuestToken, MAX_INSTANCE, saveGuestToken } from "./ward-params";
+import { BED_COUNT } from "../../shared/protocol";
+import { loadGuestToken, loadSeat, MAX_INSTANCE, saveGuestToken } from "./ward-params";
 import type { WardParams } from "./ward-params";
 
 /** 연결을 유지하려고 보내는 간격이에요. 서버는 깨어나지 않고 자동으로 답해요. */
@@ -43,6 +44,8 @@ const BED_ANSWER_MS = 5000;
 const REPLACED_CODE = 4000;
 /** 서버가 들어올 수 없다고 닫았어요. 다시 잇지 않아요. */
 const DENIED_CODE = 4003;
+/** 잠든 지 8시간이 지나 서버가 연결을 쉬었어요. 누를 때까지 다시 잇지 않아요. */
+const SLEPT_LONG_CODE = 4009;
 
 /**
  * offline은 한 번도 닿지 못한 때, reconnecting은 이어졌다가 끊긴 때예요.
@@ -58,6 +61,8 @@ export type ConnectionStatus =
   | "outdated"
   /** 오래 입력이 없어 이 화면이 연결을 잠시 닫았어요. 누르면 다시 이어요. */
   | "paused"
+  /** 잠든 지 8시간이 지나 서버가 연결을 쉬었어요. 누르면 다시 이어요. */
+  | "rested"
   /** 운영자가 입장을 막았어요. */
   | "blocked"
   /** 새 게스트를 너무 많이 만들어 잠시 들어올 수 없어요. */
@@ -74,14 +79,20 @@ export interface WardClientHandlers {
   onDenied(denied: Denied): void;
   onLeftBlessings(message: Extract<ServerMessage, { type: "left-blessings" }>): void;
   onLeftSaved(): void;
+  /** 잠든 분께 보낸 평안이나 선물을 깨지 않게 쌓아 뒀어요. */
+  onKeptQuiet(): void;
+  /** 자는 동안 평안을 빌어 준 사람 수와 놓인 선물 수예요. */
+  onSleptSummary(people: number, gifts: number): void;
   onStatus(status: ConnectionStatus, instance: number): void;
-  /** 문병 링크로 들어오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
+  /** 방명록 링크로 문병 오지 못했어요. closed면 일반 입장으로 이어졌고, busy면 들어가지 않았어요. */
   onVisitDenied(reason: "closed" | "busy"): void;
-  onVisitLink(status: Extract<ServerMessage, { type: "visit-link" }>): void;
+  /** 내 방명록이에요. 서버가 이 연결(주인)에게만 보내요. */
+  onGuestbook(message: Extract<ServerMessage, { type: "guestbook" }>): void;
+  /** 내 침대 옆 작은 사과나무를 그릴지예요. 들어올 때 주인에게만 와요. */
+  onMyTree(tree: { active: boolean; count: number }): void;
   onVisitorArrived(nickname: string): void;
   /** 운영자가 내 닉네임을 자동 닉네임으로 되돌렸어요. */
   onNicknameReset(nickname: string): void;
-  onReportResult(result: Extract<ServerMessage, { type: "report-result" }>["result"]): void;
   /** 누군가 나를 안아 주려고 해요. fromId는 공개 번호예요. */
   onHugOffer(requestId: string, fromId: string): void;
   /** 내가 보낸 안아 주기에 상대가 [다음에요]를 눌렀어요. */
@@ -89,6 +100,10 @@ export interface WardClientHandlers {
   /** 퇴원을 받아 줬어요. until까지 배웅을 모아요(서버 시각). */
   onDischargeStarted(until: number): void;
   onFarewellCount(count: number): void;
+  /** 내가 누른 고양이가 다른 분과 놀고 있어요. */
+  onCatBusy(nickname: string, scene: Extract<ServerMessage, { type: "cat-busy" }>["scene"]): void;
+  /** 누군가 내 고양이를 쓰다듬어 줬어요. */
+  onCatPetted(nickname: string): void;
   /** 받은 메시지의 종류예요. ?debug=1 표시에만 써요. event는 "event:join"처럼 알려 줘요. */
   onMessageType?(kind: string): void;
 }
@@ -101,9 +116,13 @@ export interface WardClient {
   /** 들어가거나, 들어간 뒤 모습을 바꿀 때 보내요. */
   hello(profile: Profile): void;
   send(message: DistributiveOmit<ClientMessage, "v">): void;
-  /** 침대를 달라고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
+  /** 내 침대에 눕겠다고 해요. 서버에 닿지 않을 때는 혼자 쓰는 화면이라 바로 허락해요. */
   askBed(bed: number): Promise<boolean>;
-  /** 문병 링크로 들어갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
+  /** 이 침대를 내 침대로 달라고 해요(처음 고르기, 옮기기). 서버에 닿지 않을 때는 바로 허락해요. */
+  claimBed(bed: number): Promise<boolean>;
+  /** 앞마당 벤치 자리에 앉겠다고 해요. 서버에 닿지 않을 때는 바로 허락해요. */
+  askSeat(seat: number): Promise<boolean>;
+  /** 방명록 링크로 문병 갈 병동과 토큰이에요. hello를 보내기 전에 정해요. null이면 일반 입장이에요. */
   setVisit(visit: { token: string; ward: number; instance: number } | null): void;
   readonly ward: number;
   /** 오래 입력이 없을 때 연결을 닫아요. 다시 잇지 않고 resume을 기다려요. */
@@ -129,7 +148,7 @@ export function createWardClient(
   let profile: Profile | null = null;
   let instance = params.instance;
   let ward = params.ward;
-  /** 문병 링크 토큰이에요. 서버가 받거나 거절하면 지워서 다시 이을 때 보내지 않아요. */
+  /** 방명록 링크 토큰이에요. 서버가 받거나 거절하면 지워서 다시 이을 때 보내지 않아요. */
   let visitToken: string | null = null;
   let overflow = 0;
   let retry = 0;
@@ -146,6 +165,7 @@ export function createWardClient(
   /** 서버 시각에서 이 기기 시각을 뺀 값이에요. */
   let clockOffset = 0;
   const bedAnswers = new Map<number, (granted: boolean) => void>();
+  const seatAnswers = new Map<number, (granted: boolean) => void>();
 
   const helloMessage = (current: Profile): ClientMessage => ({
     v: PROTOCOL_VERSION,
@@ -157,7 +177,47 @@ export function createWardClient(
     withCat: current.withCat,
     hugsOff: current.hugsOff,
     ...(visitToken ? { visitToken } : {}),
+    ...seatHint(),
   });
+
+  /** 이 브라우저가 기억하는 지난번 침대예요. 지금 가는 병동·병실과 같을 때만 보내요. 문병 갈 때는 보내지 않아요. */
+  const seatHint = (): { seat?: number } => {
+    if (visitToken) return {};
+    const seat = loadSeat(BED_COUNT);
+    return seat && seat.ward === ward && seat.instance === instance ? { seat: seat.bed } : {};
+  };
+
+  /** 침대 요청을 보내고 bed-granted나 bed-unavailable을 기다려요. 같은 침대의 앞선 요청은 거절로 끝내요. */
+  const askAboutBed = (type: "lie-down" | "claim-bed", bed: number): Promise<boolean> => {
+    if (!online) return Promise.resolve(true);
+    bedAnswers.get(bed)?.(false);
+    return new Promise((resolve) => {
+      bedAnswers.set(bed, resolve);
+      rawSend({ v: PROTOCOL_VERSION, type, bedId: bed });
+      setTimeout(() => {
+        if (bedAnswers.get(bed) === resolve) {
+          bedAnswers.delete(bed);
+          resolve(false);
+        }
+      }, BED_ANSWER_MS);
+    });
+  };
+
+  /** 벤치 자리 요청을 보내고 seat-granted나 seat-unavailable을 기다려요. 같은 자리의 앞선 요청은 거절로 끝내요. */
+  const askAboutSeat = (seat: number): Promise<boolean> => {
+    if (!online) return Promise.resolve(true);
+    seatAnswers.get(seat)?.(false);
+    return new Promise((resolve) => {
+      seatAnswers.set(seat, resolve);
+      rawSend({ v: PROTOCOL_VERSION, type: "sit", seat });
+      setTimeout(() => {
+        if (seatAnswers.get(seat) === resolve) {
+          seatAnswers.delete(seat);
+          resolve(false);
+        }
+      }, BED_ANSWER_MS);
+    });
+  };
 
   const rawSend = (message: ClientMessage): void => {
     if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -183,6 +243,8 @@ export function createWardClient(
   const settleBeds = (granted: boolean): void => {
     for (const answer of bedAnswers.values()) answer(granted);
     bedAnswers.clear();
+    for (const answer of seatAnswers.values()) answer(granted);
+    seatAnswers.clear();
   };
 
   const handle = (message: ServerMessage): void => {
@@ -214,6 +276,13 @@ export function createWardClient(
         answer?.(message.type === "bed-granted");
         return;
       }
+      case "seat-granted":
+      case "seat-unavailable": {
+        const answer = seatAnswers.get(message.seat);
+        seatAnswers.delete(message.seat);
+        answer?.(message.type === "seat-granted");
+        return;
+      }
       case "nickname-rejected":
         handlers.onNicknameRejected(message.problem);
         return;
@@ -235,12 +304,21 @@ export function createWardClient(
       case "left-saved":
         handlers.onLeftSaved();
         return;
+      case "kept-quiet":
+        handlers.onKeptQuiet();
+        return;
+      case "slept-summary":
+        handlers.onSleptSummary(message.people, message.gifts);
+        return;
       case "visit-denied":
         if (message.reason === "closed") visitToken = null;
         handlers.onVisitDenied(message.reason);
         return;
-      case "visit-link":
-        handlers.onVisitLink(message);
+      case "guestbook":
+        handlers.onGuestbook(message);
+        return;
+      case "my-tree":
+        handlers.onMyTree({ active: message.active, count: message.count });
         return;
       case "visitor-arrived":
         handlers.onVisitorArrived(message.nickname);
@@ -261,9 +339,6 @@ export function createWardClient(
       case "nickname-reset":
         handlers.onNicknameReset(message.nickname);
         return;
-      case "report-result":
-        handlers.onReportResult(message.result);
-        return;
       case "hug-offer":
         handlers.onHugOffer(message.requestId, message.fromId);
         return;
@@ -275,6 +350,12 @@ export function createWardClient(
         return;
       case "farewell-count":
         handlers.onFarewellCount(message.count);
+        return;
+      case "cat-busy":
+        handlers.onCatBusy(message.nickname, message.scene);
+        return;
+      case "cat-petted":
+        handlers.onCatPetted(message.nickname);
         return;
     }
   };
@@ -341,6 +422,14 @@ export function createWardClient(
       if (stopped) return;
       if (paused) {
         handlers.onStatus("paused", instance);
+        return;
+      }
+      if (event.code === SLEPT_LONG_CODE) {
+        // 오래 입력이 없을 때처럼 쉬어요. resume을 부르면 같은 병실로 다시 이어요.
+        paused = true;
+        if (retryTimer) clearTimeout(retryTimer);
+        retryTimer = null;
+        handlers.onStatus("rested", instance);
         return;
       }
       if (event.code === DENIED_CODE) {
@@ -428,18 +517,13 @@ export function createWardClient(
       rawSend({ v: PROTOCOL_VERSION, ...message } as ClientMessage);
     },
     askBed(bed) {
-      if (!online) return Promise.resolve(true);
-      bedAnswers.get(bed)?.(false);
-      return new Promise((resolve) => {
-        bedAnswers.set(bed, resolve);
-        rawSend({ v: PROTOCOL_VERSION, type: "lie-down", bedId: bed });
-        setTimeout(() => {
-          if (bedAnswers.get(bed) === resolve) {
-            bedAnswers.delete(bed);
-            resolve(false);
-          }
-        }, BED_ANSWER_MS);
-      });
+      return askAboutBed("lie-down", bed);
+    },
+    claimBed(bed) {
+      return askAboutBed("claim-bed", bed);
+    },
+    askSeat(seat) {
+      return askAboutSeat(seat);
     },
   };
 }

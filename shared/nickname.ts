@@ -56,13 +56,27 @@ export function checkNickname(raw: string): NicknameCheck {
   const length = Array.from(value).length;
   if (length < NICKNAME_MIN) return { ok: false, problem: "short" };
   if (length > NICKNAME_MAX) return { ok: false, problem: "long" };
-  if (LOOKS_LIKE_EMAIL.test(value)) return { ok: false, problem: "email" };
-  if (LOOKS_LIKE_URL.test(value)) return { ok: false, problem: "url" };
-  if (REPEATED_DIGITS.test(value)) return { ok: false, problem: "digits" };
+  const problem = textProblem(value);
+  return problem ? { ok: false, problem } : { ok: true, value };
+}
+
+/**
+ * 길이 말고 내용만 살펴요. 이메일·주소·숫자 연속·금칙어 가운데 걸리는 것이 있으면 그 이유예요.
+ * 닉네임과 사과의 짧은 글이 같은 규칙을 써요.
+ */
+export function textProblem(value: string): Exclude<NicknameProblem, "short" | "long"> | null {
+  if (LOOKS_LIKE_EMAIL.test(value)) return "email";
+  if (LOOKS_LIKE_URL.test(value)) return "url";
+  if (REPEATED_DIGITS.test(value)) return "digits";
   // 띄어 쓰거나 기호를 끼워도 걸러지도록 붙여서 살펴봐요.
   const squeezed = value.replace(SEPARATORS, "").toLowerCase();
-  if (BANNED_WORDS.some((word) => squeezed.includes(word))) return { ok: false, problem: "banned" };
-  return { ok: true, value };
+  if (BANNED_WORDS.some((word) => squeezed.includes(word))) return "banned";
+  return null;
+}
+
+/** 앞뒤 공백을 지우고 사이 공백은 하나로 줄여요. 보이지 않는 글자도 지워요. */
+export function tidyText(raw: string): string {
+  return tidy(raw);
 }
 
 /** '형용사 + 동물' 닉네임을 지어요. pick은 0 이상 1 미만의 수예요. */

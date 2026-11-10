@@ -3,6 +3,7 @@ import {
   addLatest,
   dailyKey,
   encodeAddress,
+  FIVE_LEAF_ITEM,
   fiveLeafAllowed,
   INBOX_PER_GUEST,
   KEEP_MS,
@@ -18,18 +19,18 @@ import {
   VISIT_SESSION_MS,
 } from "../shared/visit-rules.ts";
 import type { VisitLinkRow } from "../shared/visit-rules.ts";
+import { APPLE_KEEP_MS, checkApple, checkApplePost, HOUR_MS as APPLE_HOUR_MS, ownerTree, slotFor, visitorTree } from "../shared/guestbook-rules.ts";
+import type { AppleCard, AppleDraft, AppleProblem, StoredApple } from "../shared/guestbook-rules.ts";
 import {
   ADMIN_FAILS_PER_HOUR,
-  decideReport,
   deleteExpired,
   earliestExpiry,
   KEEP,
   NEW_GUESTS_PER_HOUR,
   nextRetentionAlarm,
-  REPORT_REASONS,
   underHourlyLimit,
 } from "../shared/safety-rules.ts";
-import type { Moderation, ReportResult, RetentionRule } from "../shared/safety-rules.ts";
+import type { Moderation, RetentionRule } from "../shared/safety-rules.ts";
 import { koreanDay } from "../shared/ward-rules.ts";
 import { countVisitDay, VISIT_DAYS_KEEP_MS } from "../shared/return-rules.ts";
 import { presenceChange, statsTimestamp, tally } from "../shared/presence-rules.ts";
@@ -39,19 +40,6 @@ import type { MetricsRow, MetricsView } from "../shared/metrics-rules.ts";
 
 /** 날짜별 지표에 더할 수 있는 칸이에요. 표 이름과 열 이름을 SQL에 넣으므로 이 목록 밖의 값은 받지 않아요. */
 type MetricColumn = "entries" | "unique_guests" | "returning_guests" | "stay_ms" | "stays" | "blessings" | "visit_entries";
-
-/** 병실 서버가 신고를 넘길 때 담는 것이에요. 해시와 공개 번호만 있어요. */
-export interface ReportInput {
-  room: string;
-  reason: number;
-  reporterId: string;
-  reporterHash: string;
-  targetId: string;
-  targetHash: string;
-  targetIp: string | null;
-  targetNickname: string;
-  targetAnimal: string;
-}
 
 /** 들어오려는 사람에 대해 directory가 아는 것이에요. */
 export interface GuestStanding {
@@ -87,8 +75,11 @@ const RETENTION: readonly RetentionRule[] = [
   { table: "gift_daily", kind: "day", column: "day" },
   { table: "visit_attempt", kind: "at", column: "at", keepMs: KEEP.visitAttempt },
   { table: "visit_session", kind: "at", column: "started", keepMs: VISIT_SESSION_MS },
-  // 꺼진 문병 링크는 만든 지 7일이 지나면 지워요. 켜진 링크는 주인이 끌 때까지 둬요.
-  { table: "visit_link", kind: "at", column: "created", keepMs: KEEP_MS, where: "off = 1" },
+  // 꺼진 방명록 링크는 만든 지 7일이 지나면 지워요. 켜진 링크는 주인이 끌 때까지 둬요.
+  { table: "guestbook_link", kind: "at", column: "created", keepMs: KEEP_MS, where: "off = 1" },
+  // 사과는 1년 동안 둬요. 주인이 숨긴 사과는 그 자리에서 바로 지워요.
+  { table: "apple", kind: "at", column: "at", keepMs: APPLE_KEEP_MS },
+  { table: "apple_seq", kind: "at", column: "at", keepMs: APPLE_KEEP_MS },
   { table: "report", kind: "at", column: "at", keepMs: KEEP.report },
   { table: "hidden_guest", kind: "at", column: "at", keepMs: KEEP.report },
   { table: "nickname_reset", kind: "at", column: "at", keepMs: KEEP.report },
@@ -118,18 +109,40 @@ export interface OwnerProfile {
   address: string;
 }
 
-export interface VisitLinkStatus {
+/** 주인이 보는 내 방명록이에요. */
+export interface GuestbookStatus {
   active: boolean;
-  visits: number;
+  count: number;
+  apples: AppleCard[];
+}
+
+/** 링크로 온 사람이 보는 방명록이에요. 사과는 개수와 자기가 단 것만이에요. */
+export type GuestbookViewResult =
+  | { open: true; ownerNickname: string; ownerAnimal: string; ward: number; instance: number; count: number; mine: AppleCard[] }
+  | { open: false };
+
+export type AddAppleResult =
+  | { result: "saved"; apple: AppleCard; count: number }
+  | { result: "closed" }
+  | { result: "limit" }
+  | ({ result: "invalid" } & AppleProblem);
+
+interface AppleSqlRow {
+  id: number;
+  owner: string;
+  name: string;
+  phrase: number;
+  note: string | null;
+  at: number;
+  link_hash: string;
+  writer_hash: string;
+  slot: number;
+  [key: string]: SqlStorageValue;
 }
 
 export type VisitResolution =
   | { kind: "ok"; owner: string; ownerNickname: string; bed: number; session: string }
   | { kind: "closed" | "busy" | "self" };
-
-export type VisitPreviewResult =
-  | { open: true; ownerNickname: string; ownerAnimal: string; ward: number; instance: number }
-  | { open: false };
 
 interface LinkSqlRow {
   token_hash: string;
@@ -148,7 +161,7 @@ interface LinkSqlRow {
 
 /**
  * 병동 전체가 함께 쓰는 Durable Object예요. 이름은 directory 하나뿐이에요.
- * 표는 기능별로 나눠 두어서, 나중에 문병 링크 표가 따로 붙어도 서로 섞이지 않아요.
+ * 표는 기능별로 나눠 두어서, 방명록 링크와 사과 표가 다른 표와 섞이지 않아요.
  *
  * 받는 것은 모두 해시예요. guestId와 평안 주소 원문은 저장하지 않아요.
  * 주기적으로 도는 일은 없어요. 오래된 기록은 요청이 올 때 함께 정리하고,
@@ -171,12 +184,23 @@ export class Directory extends DurableObject<Env> {
     // 하루 한 번만 놓을 수 있는 선물이에요. 지금은 오잎클로버예요.
     sql.exec(`CREATE TABLE IF NOT EXISTS gift_daily (
       guest TEXT NOT NULL, item INTEGER NOT NULL, day TEXT NOT NULL, PRIMARY KEY (guest, item))`);
-    // 문병 링크예요. 토큰 원본은 두지 않고 해시만 둬요. 한 사람당 하나라 owner가 겹치지 않아요.
-    sql.exec(`CREATE TABLE IF NOT EXISTS visit_link (
+    // 예전 /visit 문병 링크 표예요. 방명록 링크로 바뀌어서 지워요. 예전 링크는 모두 열리지 않아요.
+    sql.exec("DROP TABLE IF EXISTS visit_link");
+    // 방명록 링크예요. 토큰 원본은 두지 않고 해시만 둬요. 한 사람당 하나라 owner가 겹치지 않아요.
+    // 이 링크를 받은 사람만 사과를 달고 [병실에 문병 가기]로 들어올 수 있어요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS guestbook_link (
       token_hash TEXT PRIMARY KEY, owner TEXT NOT NULL UNIQUE, address_hash TEXT NOT NULL,
       nickname TEXT NOT NULL, animal TEXT NOT NULL, created INTEGER NOT NULL,
       off INTEGER NOT NULL DEFAULT 0, visits INTEGER NOT NULL DEFAULT 0,
       ward INTEGER NOT NULL, instance INTEGER NOT NULL, bed INTEGER NOT NULL)`);
+    // 사과(방명록 글)예요. 주인만 내용을 봐요. 사람은 해시로만 적어요(주인 guestId 해시, 링크 토큰 해시, 단 브라우저 열쇠 해시).
+    sql.exec(`CREATE TABLE IF NOT EXISTS apple (
+      id INTEGER PRIMARY KEY AUTOINCREMENT, owner TEXT NOT NULL, name TEXT NOT NULL, phrase INTEGER NOT NULL,
+      note TEXT, at INTEGER NOT NULL, link_hash TEXT NOT NULL, writer_hash TEXT NOT NULL, slot INTEGER NOT NULL)`);
+    sql.exec("CREATE INDEX IF NOT EXISTS apple_owner ON apple (owner)");
+    sql.exec("CREATE INDEX IF NOT EXISTS apple_link ON apple (link_hash, at)");
+    // 주인마다 다음 사과가 열릴 순번이에요. 자리 번호(순번 % 40)를 정해요.
+    sql.exec(`CREATE TABLE IF NOT EXISTS apple_seq (owner TEXT PRIMARY KEY, next INTEGER NOT NULL, at INTEGER NOT NULL)`);
     // 링크마다 들어온 시각이에요. 1시간에 30번을 세려고 두고, 1시간이 지나면 지워요.
     sql.exec(`CREATE TABLE IF NOT EXISTS visit_attempt (owner TEXT NOT NULL, at INTEGER NOT NULL)`);
     sql.exec("CREATE INDEX IF NOT EXISTS visit_attempt_owner ON visit_attempt (owner)");
@@ -343,55 +367,6 @@ export class Directory extends DurableObject<Env> {
     await this.keepTidy();
   }
 
-  /* ───────────── 신고 ───────────── */
-
-  /** 신고를 받아요. 서로 다른 세 사람이 신고하면 hide가 true이고, 병실 서버가 닉네임을 가려요. */
-  async report(input: ReportInput, nowMs: number): Promise<{ result: ReportResult; hide: boolean }> {
-    const sql = this.ctx.storage.sql;
-    const day = koreanDay(new Date(nowMs));
-    const reason = REPORT_REASONS[input.reason];
-    if (!reason || !ROOM_PATTERN.test(input.room)) return { result: "no-target", hide: false };
-    const reporterToday = sql
-      .exec<{ n: number }>("SELECT COUNT(*) AS n FROM report WHERE reporter_hash = ? AND day = ?", input.reporterHash, day)
-      .one().n;
-    const openReporters = sql
-      .exec<{ reporter_hash: string }>(
-        "SELECT DISTINCT reporter_hash FROM report WHERE target_hash = ? AND handled = 0",
-        input.targetHash,
-      )
-      .toArray()
-      .map((row) => row.reporter_hash);
-    const alreadyHidden = sql.exec("SELECT 1 FROM hidden_guest WHERE guest_hash = ?", input.targetHash).toArray().length > 0;
-    const decision = decideReport({
-      reporter: input.reporterHash,
-      target: input.targetHash,
-      reporterToday,
-      openReporters,
-      alreadyHidden,
-    });
-    if (decision.result !== "saved") return decision;
-    sql.exec(
-      `INSERT INTO report (at, day, room, reason, nickname, animal, reporter_id, reporter_hash, target_id, target_hash, target_ip)
-       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-      nowMs,
-      day,
-      input.room,
-      reason,
-      input.targetNickname,
-      input.targetAnimal,
-      input.reporterId,
-      input.reporterHash,
-      input.targetId,
-      input.targetHash,
-      input.targetIp,
-    );
-    if (decision.hide) {
-      sql.exec("INSERT OR IGNORE INTO hidden_guest (guest_hash, at) VALUES (?, ?)", input.targetHash, nowMs);
-    }
-    await this.keepTidy();
-    return { result: alreadyHidden ? "saved" : decision.result, hide: alreadyHidden || decision.hide };
-  }
-
   /* ───────────── 운영자 ───────────── */
 
   async listReports(limit: number): Promise<ReportRow[]> {
@@ -476,14 +451,23 @@ export class Directory extends DurableObject<Env> {
     return { ok: true, affected };
   }
 
-  /** 문병 링크를 꺼요. */
-  async adminRevokeVisitLink(guestHash: string, reason: string, nowMs: number): Promise<AdminResult> {
+  /** 방명록 링크를 꺼요. */
+  async adminRevokeGuestbookLink(guestHash: string, reason: string, nowMs: number): Promise<AdminResult> {
     const before = this.linksOf(guestHash);
     if (before.length === 0) return { ok: false, error: "unknown_guest" };
-    await this.disableVisitLink(guestHash);
-    this.audit("revoke-visit-link", `guest:${guestHash}`, reason, nowMs);
+    await this.disableGuestbookLink(guestHash);
+    this.audit("revoke-guestbook-link", `guest:${guestHash}`, reason, nowMs);
     await this.keepTidy();
     return { ok: true, affected: before.filter((row) => !row.off).length };
+  }
+
+  /** 사과 하나를 지워요. 사유와 함께 audit_log에 남겨요. 내용은 기록에 옮기지 않아요. */
+  async adminHideApple(appleId: number, reason: string, nowMs: number): Promise<AdminResult | { ok: false; error: "unknown_apple" }> {
+    const deleted = this.ctx.storage.sql.exec("DELETE FROM apple WHERE id = ?", appleId).rowsWritten;
+    if (deleted === 0) return { ok: false, error: "unknown_apple" };
+    this.audit("hide-apple", `apple:${appleId}`, reason, nowMs);
+    await this.keepTidy();
+    return { ok: true, affected: deleted };
   }
 
   /** 확인해 보니 문제가 없을 때 가림을 풀어요. */
@@ -533,13 +517,23 @@ export class Directory extends DurableObject<Env> {
 
   /**
    * 들어온 사람에게 새 평안 주소를 주고, 없는 동안 도착한 평안을 꺼내 줘요. 꺼낸 것은 지워요.
-   * place가 있으면 켜진 문병 링크의 주소와 위치도 새로 적어요. linked는 켜진 링크가 있는지예요.
+   * place가 있으면 켜진 방명록 링크의 주소와 위치도 새로 적어요. linked는 켜진 링크가 있는지예요.
+   * tree는 주인 화면에만 그리는 작은 사과나무예요. 링크가 켜져 있거나 사과가 있으면 있어요.
    */
   async enter(
     owner: string,
     nowMs: number,
     place: (OwnerPlace & { nickname: string; animal: string }) | null = null,
-  ): Promise<{ address: string; inbox: BlessingCard[]; linked: boolean; visitDays: number; welcomeBack: boolean }> {
+  ): Promise<{
+    address: string;
+    inbox: BlessingCard[];
+    linked: boolean;
+    visitDays: number;
+    welcomeBack: boolean;
+    tree: { active: boolean; count: number } | null;
+    /** 오잎클로버를 오늘(한국 날짜) 이미 놓았는지예요. 선물 고르기 창에서 버튼을 흐리게 하려고요. */
+    fiveLeafUsed: boolean;
+  }> {
     this.tidy(nowMs);
     const address = encodeAddress(crypto.getRandomValues(new Uint8Array(16)));
     const sql = this.ctx.storage.sql;
@@ -553,7 +547,7 @@ export class Directory extends DurableObject<Env> {
     let linked = false;
     if (place) {
       const cursor = sql.exec(
-        `UPDATE visit_link SET address_hash = ?, nickname = ?, animal = ?, ward = ?, instance = ?, bed = COALESCE(?, bed)
+        `UPDATE guestbook_link SET address_hash = ?, nickname = ?, animal = ?, ward = ?, instance = ?, bed = COALESCE(?, bed)
          WHERE owner = ? AND off = 0`,
         addressHash,
         place.nickname,
@@ -580,8 +574,11 @@ export class Directory extends DurableObject<Env> {
     // 오늘 처음 온 사람이면 서로 다른 사람 수에 더하고, 예전 날에도 왔으면 다시 온 사람에도 더해요.
     this.bump(nowMs, { entries: 1, unique_guests: day.counted ? 1 : 0, returning_guests: day.counted && day.before ? 1 : 0 });
     const welcomeBack = sql.exec("DELETE FROM discharged WHERE guest_hash = ?", owner).rowsWritten > 0;
+    const active = this.linksOf(owner).some((row) => !row.off);
+    const count = this.appleCount(owner);
     await this.keepTidy();
-    return { address, inbox, linked, visitDays, welcomeBack };
+    const fiveLeafUsed = !fiveLeafAllowed(this.dailyGiftDay(owner, FIVE_LEAF_ITEM), koreanDay(new Date(nowMs)));
+    return { address, inbox, linked, visitDays, welcomeBack, tree: active || count > 0 ? { active, count } : null, fiveLeafUsed };
   }
 
   /** 화면이 받았다고 알린 평안을 지워요. upTo 시각까지 남겨진 것만이에요. 그사이 새로 온 것은 남아요. */
@@ -661,20 +658,27 @@ export class Directory extends DurableObject<Env> {
     return "saved";
   }
 
+  /** 하루 한 번만 놓을 수 있는 선물을 마지막으로 놓은 한국 날짜예요. 놓은 적이 없으면 null이에요. */
+  private dailyGiftDay(guest: string, item: number): string | null {
+    return (
+      this.ctx.storage.sql
+        .exec<{ day: string }>("SELECT day FROM gift_daily WHERE guest = ? AND item = ?", guest, item)
+        .toArray()[0]?.day ?? null
+    );
+  }
+
   /** 하루 한 번만 놓을 수 있는 선물을 오늘 처음 놓는지 보고, 처음이면 적어 둬요. */
   async useDailyGift(guest: string, item: number, day: string): Promise<boolean> {
     const sql = this.ctx.storage.sql;
-    const last = sql
-      .exec<{ day: string }>("SELECT day FROM gift_daily WHERE guest = ? AND item = ?", guest, item)
-      .toArray()[0]?.day ?? null;
+    const last = this.dailyGiftDay(guest, item);
     if (!fiveLeafAllowed(last, day)) return false;
     sql.exec("INSERT OR REPLACE INTO gift_daily (guest, item, day) VALUES (?, ?, ?)", guest, item, day);
     await this.keepTidy();
     return true;
   }
 
-  /** 내 침대로 오는 문병 링크를 새로 만들어요. 예전 링크는 바로 열리지 않아요. 토큰 원본은 돌려주기만 해요. */
-  async createVisitLink(owner: string, profile: OwnerProfile, place: OwnerPlace & { bed: number }, nowMs: number): Promise<string> {
+  /** 내 방명록 링크를 새로 만들어요. 예전 링크는 바로 열리지 않아요. 토큰 원본은 돌려주기만 하고 해시만 둬요. */
+  async createGuestbookLink(owner: string, profile: OwnerProfile, place: OwnerPlace & { bed: number }, nowMs: number): Promise<string> {
     const token = encodeAddress(crypto.getRandomValues(new Uint8Array(16)));
     const sql = this.ctx.storage.sql;
     const rows = this.linksOf(owner);
@@ -689,7 +693,7 @@ export class Directory extends DurableObject<Env> {
       instance: place.instance,
       bed: place.bed,
     });
-    sql.exec("DELETE FROM visit_link WHERE owner = ?", owner);
+    sql.exec("DELETE FROM guestbook_link WHERE owner = ?", owner);
     sql.exec("DELETE FROM visit_attempt WHERE owner = ?", owner);
     sql.exec("DELETE FROM visit_session WHERE owner = ?", owner);
     for (const row of next.filter((entry) => entry.owner === owner)) this.writeLink(row);
@@ -697,24 +701,39 @@ export class Directory extends DurableObject<Env> {
     return token;
   }
 
-  /** 링크를 꺼요. 꺼진 링크로는 아무도 들어오지 못해요. */
-  async disableVisitLink(owner: string): Promise<VisitLinkStatus> {
+  /** 링크를 꺼요. 꺼진 링크로는 사과를 달 수도, 문병 올 수도 없어요. */
+  async disableGuestbookLink(owner: string): Promise<GuestbookStatus> {
     const next = turnOffLink(this.linksOf(owner), owner);
     for (const row of next) {
-      this.ctx.storage.sql.exec("UPDATE visit_link SET off = ? WHERE token_hash = ?", row.off ? 1 : 0, row.tokenHash);
+      this.ctx.storage.sql.exec("UPDATE guestbook_link SET off = ? WHERE token_hash = ?", row.off ? 1 : 0, row.tokenHash);
     }
-    return this.visitLinkStatus(owner);
+    return this.guestbookStatus(owner);
   }
 
-  async visitLinkStatus(owner: string): Promise<VisitLinkStatus> {
+  /** 주인이 보는 내 방명록이에요. 주인의 연결에서만 불러요. */
+  async guestbookStatus(owner: string): Promise<GuestbookStatus> {
     const link = this.linksOf(owner)[0];
-    return link ? { active: !link.off, visits: link.visits } : { active: false, visits: 0 };
+    const tree = ownerTree(this.applesOf(owner));
+    return { active: link ? !link.off : false, count: tree.count, apples: tree.apples };
+  }
+
+  /** 내 침대 옆 작은 사과나무를 그릴지예요. 30초 안에 다시 이은 주인에게 써요. 내용은 담지 않아요. */
+  async treeOf(owner: string): Promise<{ active: boolean; count: number } | null> {
+    const active = this.linksOf(owner).some((row) => !row.off);
+    const count = this.appleCount(owner);
+    return active || count > 0 ? { active, count } : null;
+  }
+
+  /** 주인이 사과를 숨겨요. 자기 나무의 사과만 지울 수 있고, 바로 지워요. */
+  async hideApple(owner: string, appleId: number): Promise<GuestbookStatus> {
+    this.ctx.storage.sql.exec("DELETE FROM apple WHERE id = ? AND owner = ?", appleId, owner);
+    return this.guestbookStatus(owner);
   }
 
   /** 링크가 있는 주인이 침대를 받거나 병동을 나갈 때 병실 서버가 알려 줘요. 주기적으로 묻지 않아요. */
   async reportLocation(owner: string, place: OwnerPlace): Promise<void> {
     this.ctx.storage.sql.exec(
-      "UPDATE visit_link SET ward = ?, instance = ?, bed = COALESCE(?, bed) WHERE owner = ? AND off = 0",
+      "UPDATE guestbook_link SET ward = ?, instance = ?, bed = COALESCE(?, bed) WHERE owner = ? AND off = 0",
       place.ward,
       place.instance,
       place.bed,
@@ -722,11 +741,86 @@ export class Directory extends DurableObject<Env> {
     );
   }
 
-  /** 입장 화면에 보여 줄 주인과 들어갈 병동이에요. 세지 않고 보기만 해요. */
-  async previewVisit(token: string): Promise<VisitPreviewResult> {
+  /**
+   * 링크로 온 사람이 보는 방명록이에요. 세지 않고 보기만 해요.
+   * writer는 그 브라우저의 열쇠예요. 그 열쇠로 단 사과만 내용을 돌려줘요.
+   */
+  async viewGuestbook(token: string, writer: string | null): Promise<GuestbookViewResult> {
     const link = await this.linkForToken(token);
     if (!link || link.off) return { open: false };
-    return { open: true, ownerNickname: link.nickname, ownerAnimal: link.animal, ward: link.ward, instance: link.instance };
+    const tree = visitorTree(this.applesOf(link.owner), writer ? await hashWriter(writer) : null);
+    return {
+      open: true,
+      ownerNickname: link.nickname,
+      ownerAnimal: link.animal,
+      ward: link.ward,
+      instance: link.instance,
+      count: tree.count,
+      mine: tree.mine,
+    };
+  }
+
+  /** 링크로 온 사람이 사과를 달아요. 토큰, 꺼짐, 시간당 10개, 이름과 짧은 글을 모두 여기서 살펴요. */
+  async addApple(token: string, writer: string, draft: AppleDraft, nowMs: number): Promise<AddAppleResult> {
+    const sql = this.ctx.storage.sql;
+    const tokenHash = await hashToken(token);
+    const link = await this.linkForToken(token);
+    const recent = sql
+      .exec<{ at: number }>("SELECT at FROM apple WHERE link_hash = ? AND at > ?", tokenHash, nowMs - APPLE_HOUR_MS)
+      .toArray()
+      .map((row) => row.at);
+    const post = checkApplePost(link, recent, nowMs);
+    if (post.kind !== "ok") return { result: post.kind };
+    const checked = checkApple(draft);
+    if (!checked.ok) {
+      const { ok: _ok, ...problem } = checked;
+      return { result: "invalid", ...problem };
+    }
+    const owner = post.link.owner;
+    const seq = sql.exec<{ next: number }>("SELECT next FROM apple_seq WHERE owner = ?", owner).toArray()[0]?.next ?? 0;
+    sql.exec("INSERT OR REPLACE INTO apple_seq (owner, next, at) VALUES (?, ?, ?)", owner, seq + 1, nowMs);
+    const slot = slotFor(seq);
+    const id = sql
+      .exec<{ id: number }>(
+        `INSERT INTO apple (owner, name, phrase, note, at, link_hash, writer_hash, slot)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?) RETURNING id`,
+        owner,
+        checked.value.name,
+        checked.value.phrase,
+        checked.value.note,
+        nowMs,
+        tokenHash,
+        await hashWriter(writer),
+        slot,
+      )
+      .one().id;
+    await this.keepTidy();
+    return {
+      result: "saved",
+      apple: { id, slot, name: checked.value.name, phrase: checked.value.phrase, note: checked.value.note, at: nowMs },
+      count: this.appleCount(owner),
+    };
+  }
+
+  private applesOf(owner: string): StoredApple[] {
+    return this.ctx.storage.sql
+      .exec<AppleSqlRow>("SELECT * FROM apple WHERE owner = ? ORDER BY id ASC", owner)
+      .toArray()
+      .map((row) => ({
+        id: row.id,
+        owner: row.owner,
+        name: row.name,
+        phrase: row.phrase,
+        note: row.note,
+        at: row.at,
+        linkHash: row.link_hash,
+        writerHash: row.writer_hash,
+        slot: row.slot,
+      }));
+  }
+
+  private appleCount(owner: string): number {
+    return this.ctx.storage.sql.exec<{ n: number }>("SELECT COUNT(*) AS n FROM apple WHERE owner = ?", owner).one().n;
   }
 
   /** 링크로 들어오는 사람을 받을지 정해요. 받으면 문병 온 횟수를 하나 더하고 자리 번호를 줘요. */
@@ -746,7 +840,7 @@ export class Directory extends DurableObject<Env> {
     const session = crypto.randomUUID();
     sql.exec("INSERT INTO visit_attempt (owner, at) VALUES (?, ?)", owner, nowMs);
     sql.exec("INSERT INTO visit_session (id, owner, started) VALUES (?, ?, ?)", session, owner, nowMs);
-    sql.exec("UPDATE visit_link SET visits = visits + 1 WHERE owner = ?", owner);
+    sql.exec("UPDATE guestbook_link SET visits = visits + 1 WHERE owner = ?", owner);
     this.bump(nowMs, { visit_entries: 1 });
     await this.keepTidy();
     return { kind: "ok", owner, ownerNickname: check.link.nickname, bed: check.link.bed, session };
@@ -759,7 +853,7 @@ export class Directory extends DurableObject<Env> {
 
   private linksOf(owner: string): VisitLinkRow[] {
     return this.ctx.storage.sql
-      .exec<LinkSqlRow>("SELECT * FROM visit_link WHERE owner = ?", owner)
+      .exec<LinkSqlRow>("SELECT * FROM guestbook_link WHERE owner = ?", owner)
       .toArray()
       .map(toLinkRow);
   }
@@ -767,7 +861,7 @@ export class Directory extends DurableObject<Env> {
   private async linkForToken(token: string): Promise<VisitLinkRow | null> {
     const tokenHash = await hashToken(token);
     const rows = this.ctx.storage.sql
-      .exec<LinkSqlRow>("SELECT * FROM visit_link WHERE token_hash = ?", tokenHash)
+      .exec<LinkSqlRow>("SELECT * FROM guestbook_link WHERE token_hash = ?", tokenHash)
       .toArray()
       .map(toLinkRow);
     return findLink(rows, tokenHash);
@@ -775,7 +869,7 @@ export class Directory extends DurableObject<Env> {
 
   private writeLink(row: VisitLinkRow): void {
     this.ctx.storage.sql.exec(
-      `INSERT INTO visit_link (token_hash, owner, address_hash, nickname, animal, created, off, visits, ward, instance, bed)
+      `INSERT INTO guestbook_link (token_hash, owner, address_hash, nickname, animal, created, off, visits, ward, instance, bed)
        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
       row.tokenHash,
       row.owner,
@@ -809,7 +903,12 @@ async function hashAddress(address: string): Promise<string> {
 }
 
 async function hashToken(token: string): Promise<string> {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`onward-visit:${token}`));
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`onward-guestbook:${token}`));
+  return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashWriter(writer: string): Promise<string> {
+  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`onward-apple-writer:${writer}`));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 

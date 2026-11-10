@@ -2,9 +2,13 @@ import type { Profile } from "./profile";
 import type { ViewPrefs } from "./view-prefs";
 import type { QualityChoice } from "../ward/quality";
 import { createButton, createChoiceRow, createText } from "./widgets";
+import { FEEDBACK_FORM_URL } from "../config";
 
 export interface SettingsOptions {
   initial: Profile;
+  canUsePersonalActions(): boolean;
+  onOpenGuestbook(): void;
+  onDischarge(): void;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
   /** 가볍게 보기와 글자 크게예요. 이 기기에만 저장해요. */
@@ -26,6 +30,13 @@ function link(text: string, href: string, newTab: boolean): HTMLAnchorElement {
     anchor.target = "_blank";
     anchor.rel = "noopener noreferrer";
   }
+  return anchor;
+}
+
+/** [의견보내기]예요. 새 탭으로 열어요. */
+function feedbackLink(): HTMLAnchorElement {
+  const anchor = link("의견보내기(1분이면 돼요)", FEEDBACK_FORM_URL, true);
+  anchor.classList.add("settings-feedback");
   return anchor;
 }
 
@@ -85,14 +96,28 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
     qualityNote,
     createText("p", "글자 크게"),
     largeTextRow.element,
+    createButton("내 사과나무", () => {
+      if (!options.canUsePersonalActions()) return;
+      setOpen(false);
+      options.onOpenGuestbook();
+    }),
+    createButton("퇴원하기", () => {
+      if (!options.canUsePersonalActions()) return;
+      setOpen(false);
+      options.onDischarge();
+    }),
+    feedbackLink(),
     (() => {
       const help = document.createElement("div");
       help.className = "settings-help";
       help.append(
         createText("p", "마음이 많이 힘들 때는 109(자살예방상담전화, 24시간)에 전화해 주세요."),
         link("109에 전화하기", "tel:109", false),
-        link("개인정보 처리방침", "/privacy", true),
-        link("만든 사람과 출처", "/credits", true),
+        // 개인정보 처리방침은 잠시 내려 두었어요. 페이지는 docs/disabled/privacy.html에 있어요.
+        // 다시 켜려면 그 파일을 public/privacy.html로 옮기고 아래 줄의 주석을 풀어 주세요.
+        // link("개인정보 처리방침", "/privacy", true),
+        // 만든 사람과 출처 링크는 잠시 내려 두었어요. 다시 켜려면 아래 줄의 주석을 풀어 주세요.
+        // link("만든 사람과 출처", "/credits", true),
       );
       return help;
     })(),

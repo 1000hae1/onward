@@ -1,6 +1,7 @@
 import { HUG_ANSWER_MS } from "../../shared/hug-rules";
 import { FAREWELL_MS } from "../../shared/discharge-rules";
 import { createButton, createText } from "./widgets";
+import { FEEDBACK_FORM_URL } from "../config";
 
 /** 배웅하기를 누른 뒤 고맙다는 말을 잠깐 보여 주는 시간이에요. */
 const THANKS_SECONDS = 2;
@@ -113,6 +114,7 @@ export function createMoments(root: HTMLElement): Moments {
         createText("h1", text),
         createText("p", "언제든 다시 들러 주세요."),
         createButton("입장 화면으로", finish),
+        feedbackLink(),
       );
       root.append(element);
       card = { element, left: CARD_SECONDS, onTimeout: finish };
@@ -137,4 +139,15 @@ export function createMoments(root: HTMLElement): Moments {
       }
     },
   };
+}
+
+/** 퇴원 카드 아래의 작은 의견 링크예요. 새 탭으로 열어서 카드 흐름은 그대로 두어요. */
+function feedbackLink(): HTMLAnchorElement {
+  const anchor = document.createElement("a");
+  anchor.className = "farewell-feedback";
+  anchor.href = FEEDBACK_FORM_URL;
+  anchor.target = "_blank";
+  anchor.rel = "noopener noreferrer";
+  anchor.textContent = "온기병동에 의견 남기기";
+  return anchor;
 }

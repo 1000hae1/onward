@@ -9,6 +9,8 @@ const LABEL_LIFT = 0.42;
 export interface HeadLabels {
   setName(name: string): void;
   showBubble(text: string): void;
+  /** 잠들면 이름 옆에 작은 🌙가 붙고, 머리 위로 "z z"가 천천히 떠올랐다 사라져요. */
+  setAsleep(asleep: boolean): void;
   /** 화면을 그린 뒤에 불러요. headWorld가 null이면 아바타가 안 보이는 때예요. */
   update(dt: number, camera: Camera, headWorld: Vector3 | null): void;
   dispose(): void;
@@ -22,7 +24,17 @@ export function createHeadLabels(root: HTMLElement): HeadLabels {
   bubble.hidden = true;
   const name = document.createElement("p");
   name.className = "head-name";
-  root.append(bubble, name);
+  // 글자는 화면이 정한 "z" 두 개뿐이에요. 낭독기는 이름표의 🌙로 알 수 있어서 읽지 않게 해요.
+  const snore = document.createElement("p");
+  snore.className = "head-zz";
+  snore.setAttribute("aria-hidden", "true");
+  for (let index = 0; index < 2; index++) {
+    const letter = document.createElement("span");
+    letter.textContent = "z";
+    snore.append(letter);
+  }
+  snore.hidden = true;
+  root.append(snore, bubble, name);
 
   const point = new Vector3();
   let bubbleLeft = 0;
@@ -39,6 +51,12 @@ export function createHeadLabels(root: HTMLElement): HeadLabels {
   return {
     setName(text) {
       name.textContent = text;
+    },
+    setAsleep(asleep) {
+      // 매 프레임 불러도 바뀔 때만 DOM을 고쳐요.
+      if (snore.hidden === !asleep) return;
+      snore.hidden = !asleep;
+      name.classList.toggle("asleep", asleep);
     },
     showBubble(text) {
       bubble.textContent = text;

@@ -59,11 +59,13 @@ test("수면 모드이거나 요청 받지 않기를 켠 사람에게는 보낼 
   );
 });
 
-test("메뉴에 보일지는 hugOk 하나로만 알려서 잠들었는지 껐는지는 남이 몰라요", () => {
+test("잠든 것은 모두에게 보이지만, 안아 주기를 꺼 둔 설정은 남이 몰라요", () => {
   assert.equal(toPublic(person("aaaaaaaa")).hugOk, true);
   assert.equal(toPublic(person("aaaaaaaa", { sleeping: true })).hugOk, false);
+  assert.equal(toPublic(person("aaaaaaaa", { sleeping: true })).sleeping, true);
   assert.equal(toPublic(person("aaaaaaaa", { hugsOff: true })).hugOk, false);
-  assert.equal(JSON.stringify(toPublic(person("aaaaaaaa", { sleeping: true }))).includes("sleeping"), false);
+  assert.equal(toPublic(person("aaaaaaaa", { hugsOff: true })).sleeping, false);
+  assert.equal(JSON.stringify(toPublic(person("aaaaaaaa", { hugsOff: true }))).includes("hugsOff"), false);
   assert.equal(hugAvailable(person("aaaaaaaa", { hugsOff: false, sleeping: false })), true);
 });
 

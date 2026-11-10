@@ -9,7 +9,6 @@ import {
   HOUR_MS,
   linkOpen,
   MAX_VISITORS_PER_LINK,
-  readVisitPath,
   recentAttempts,
   replaceLink,
   turnOffLink,
@@ -20,7 +19,8 @@ import {
   visitTitle,
 } from "../shared/visit-rules.ts";
 import type { VisitLinkRow } from "../shared/visit-rules.ts";
-import { admit, claimBed, updateProfile } from "../shared/ward-rules.ts";
+import { admit, updateProfile } from "../shared/ward-rules.ts";
+import { claimBed } from "../shared/bed-rules.ts";
 import type { GuestRecord, VisitRole } from "../shared/ward-rules.ts";
 
 const NOW = 1_800_000_000_000;
@@ -100,7 +100,7 @@ test("같은 링크로 1시간에 30번까지만 들어올 수 있어요", () =>
 
 test("문병객은 걷기, 평안, 목례와 한마디, 선물만 할 수 있어요", () => {
   for (const type of ["hello", "walk-to", "bless", "bow", "gift"]) assert.ok(visitorMay(type), type);
-  for (const type of ["lie-down", "get-up", "lamp", "leave-for", "visit-link"]) assert.ok(!visitorMay(type), type);
+  for (const type of ["lie-down", "get-up", "lamp", "leave-for", "guestbook", "hide-apple"]) assert.ok(!visitorMay(type), type);
 });
 
 test("주인이 없을 때 주인 침대로 보낸 것만 주인에게 전해요", () => {
@@ -123,12 +123,7 @@ test("문병객은 주인 침대 곁에 서고, 여럿이면 조금씩 비켜 �
   assert.notDeepEqual(spots[0], spots[1]);
 });
 
-test("주소창의 /visit/{토큰}만 읽어요", () => {
-  assert.equal(readVisitPath(`/visit/${TOKEN}`), TOKEN);
-  assert.equal(readVisitPath(`/visit/${TOKEN}/`), TOKEN);
-  assert.equal(readVisitPath("/visit/short"), null);
-  assert.equal(readVisitPath(`/visit/${TOKEN}x`), null);
-  assert.equal(readVisitPath(`/x/visit/${TOKEN}`), null);
+test("방명록에서 문병 오면 입장 제목이 바뀌어요", () => {
   assert.equal(visitTitle("따뜻한 곰"), "따뜻한 곰님에게 문병 왔어요");
 });
 
@@ -160,7 +155,7 @@ const patient = (n: number): GuestRecord => ({
   lastAction: {},
 });
 
-test("문병객은 정원이 차도 들어오고, 평상복으로 침대 곁에서 시작해요", () => {
+test("문병객은 정원이 차도 들어오고, 문병객 모습으로 침대 곁에서 시작해요", () => {
   const full = Array.from({ length: WARD_CAPACITY }, (_, i) => patient(i));
   assert.equal(admit(full, 0, hello(), WARD_CAPACITY, "newguest").kind, "full");
   const spot = visitorSpot(4, 0);
@@ -179,12 +174,12 @@ test("문병객은 정원에 세지 않아요", () => {
   assert.equal(admit(others, 0, hello(), WARD_CAPACITY, "newguest").kind, "admitted");
 });
 
-test("문병객은 침대를 차지하지 못하고, 옷을 바꿔도 평상복이에요", () => {
+test("문병객은 침대를 차지하지 못하고, 옷을 바꿔도 문병객 모습이에요", () => {
   const visitor: GuestRecord = { ...patient(1), visit: role, outfit: "visitor" };
-  assert.equal(claimBed([], visitor, 4, NOW).granted, false);
+  assert.equal(claimBed([], visitor, 4).granted, false);
   // 화면에서 환자복을 보내도 서버가 문병객 옷으로 둬요.
   const sneaky: GuestRecord = { ...visitor, outfit: "patient" };
-  assert.equal(claimBed([], sneaky, 4, NOW).granted, false);
+  assert.equal(claimBed([], sneaky, 4).granted, false);
   const updated = updateProfile(visitor, hello({ outfit: "patient" }));
   assert.equal(updated.kind, "updated");
   if (updated.kind === "updated") assert.equal(updated.record.outfit, "visitor");
@@ -200,39 +195,41 @@ test("30초 안에 돌아온 문병객은 같은 역할을 이어받아요", () 
   assert.equal(back.record.outfit, "visitor");
 });
 
-test("hello는 visitToken을 선택적으로 받고, 버전은 5예요", () => {
-  assert.equal(PROTOCOL_VERSION, 5);
+test("hello는 visitToken을 선택적으로 받고, 버전은 10이에요", () => {
+  assert.equal(PROTOCOL_VERSION, 10);
   const withToken = JSON.stringify(hello({ visitToken: TOKEN }));
   assert.equal(parseMessage(clientMessageSchema, withToken)?.type, "hello");
   assert.ok(parseMessage(clientMessageSchema, JSON.stringify(hello())));
   assert.equal(parseMessage(clientMessageSchema, JSON.stringify(hello({ visitToken: "bad" }))), null);
   assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ ...hello(), v: 1 })), null);
-  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 5, type: "visit-link", action: "create" })));
-  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 5, type: "visit-link", action: "on" })), null);
+  assert.ok(parseMessage(clientMessageSchema, JSON.stringify({ v: 10, type: "guestbook", action: "create" })));
+  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 10, type: "guestbook", action: "on" })), null);
+  // 예전 문병 링크 메시지는 더 받지 않아요.
+  assert.equal(parseMessage(clientMessageSchema, JSON.stringify({ v: 10, type: "visit-link", action: "create" })), null);
   assert.ok(
-    parseMessage(serverMessageSchema, JSON.stringify({ v: 5, type: "visit-link", token: TOKEN, active: true, visits: 0 })),
+    parseMessage(serverMessageSchema, JSON.stringify({ v: 10, type: "guestbook", token: TOKEN, active: true, count: 0, apples: [] })),
   );
-  assert.ok(parseMessage(serverMessageSchema, JSON.stringify({ v: 5, type: "visit-denied", reason: "busy" })));
+  assert.ok(parseMessage(serverMessageSchema, JSON.stringify({ v: 10, type: "visit-denied", reason: "busy" })));
 });
 
 test("v4의 새 메시지도 zod로 검사해요", () => {
   const read = (value: unknown) => parseMessage(clientMessageSchema, JSON.stringify(value));
-  assert.ok(read({ v: 5, type: "hug-request", targetId: "abcd1234" }));
-  assert.ok(read({ v: 5, type: "hug-answer", requestId: "abcdefabcdef", accept: true }));
-  assert.ok(read({ v: 5, type: "discharge", closeLink: false }));
-  assert.ok(read({ v: 5, type: "sleep", sleeping: true }));
-  assert.ok(read({ v: 5, type: "bow", phrase: 5 }));
-  assert.equal(read({ v: 5, type: "hug-request", targetId: "guest-raw-id" }), null);
-  assert.equal(read({ v: 5, type: "hug-answer", requestId: "short", accept: true }), null);
-  assert.equal(read({ v: 5, type: "discharge" }), null);
-  assert.equal(read({ v: 4, type: "hug-request", targetId: "abcd1234" }), null);
+  assert.ok(read({ v: 10, type: "hug-request", targetId: "abcd1234" }));
+  assert.ok(read({ v: 10, type: "hug-answer", requestId: "abcdefabcdef", accept: true }));
+  assert.ok(read({ v: 10, type: "discharge", closeLink: false }));
+  assert.ok(read({ v: 10, type: "sleep", sleeping: true }));
+  assert.ok(read({ v: 10, type: "bow", phrase: 5 }));
+  assert.equal(read({ v: 10, type: "hug-request", targetId: "guest-raw-id" }), null);
+  assert.equal(read({ v: 10, type: "hug-answer", requestId: "short", accept: true }), null);
+  assert.equal(read({ v: 10, type: "discharge" }), null);
+  assert.equal(read({ v: 5, type: "hug-request", targetId: "abcd1234" }), null);
   const server = (value: unknown) => parseMessage(serverMessageSchema, JSON.stringify(value));
-  assert.ok(server({ v: 5, type: "hug-offer", requestId: "abcdefabcdef", fromId: "abcd1234" }));
-  assert.ok(server({ v: 5, type: "farewell-count", count: 4 }));
-  assert.ok(server({ v: 5, type: "event", event: { kind: "planter", room: 2, total: 1234 } }));
-  assert.ok(server({ v: 5, type: "event", event: { kind: "window-open", room: 0 } }));
-  assert.ok(server({ v: 5, type: "event", event: { kind: "hug", a: "abcd1234", b: "efgh5678", bed: null } }));
-  assert.equal(server({ v: 5, type: "event", event: { kind: "planter", room: 2, total: -1 } }), null);
+  assert.ok(server({ v: 10, type: "hug-offer", requestId: "abcdefabcdef", fromId: "abcd1234" }));
+  assert.ok(server({ v: 10, type: "farewell-count", count: 4 }));
+  assert.ok(server({ v: 10, type: "event", event: { kind: "planter", room: 2, total: 1234 } }));
+  assert.ok(server({ v: 10, type: "event", event: { kind: "window-open", room: 0 } }));
+  assert.ok(server({ v: 10, type: "event", event: { kind: "hug", a: "abcd1234", b: "efgh5678", bed: null } }));
+  assert.equal(server({ v: 10, type: "event", event: { kind: "planter", room: 2, total: -1 } }), null);
 });
 
 test("문병객도 안아 주기는 보낼 수 있지만 퇴원은 할 수 없어요", () => {

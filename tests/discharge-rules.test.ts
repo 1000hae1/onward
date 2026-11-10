@@ -43,7 +43,7 @@ test("내 침대에 있는 환자만 퇴원할 수 있어요", () => {
   assert.equal(canDischarge(startDischarge(patient(), NOW)), "already");
 });
 
-test("퇴원하면 침대를 비우고 평상복으로 바뀌어요", () => {
+test("퇴원하면 침대를 비우고 문병객 모습으로 바뀌어요", () => {
   const out = startDischarge(patient(), NOW);
   assert.equal(out.bed, null);
   assert.equal(out.lyingSince, null);

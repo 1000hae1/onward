@@ -44,8 +44,11 @@ const guest = (index: number): Guest => ({
   x: -12.345678901234,
   z: 3.98765432101,
   bed: index,
+  lying: true,
+  bench: null,
   address: "A".repeat(22),
   hugOk: true,
+  sleeping: true,
 });
 
 /** 정원 30명에 잠시 끊긴 사람 6명까지 든, 가장 큰 snapshot이에요. */
@@ -61,12 +64,15 @@ function fullSnapshot(): string {
     seasonalGifts: true,
     serverNow: NOW,
     catVisits: [],
+    catPlays: [],
+    catRests: [],
     restored: false,
     inbox: Array.from({ length: 10 }, () => ({ nickname: "따뜻한 곰", animal: "bear", kind: "gift", item: 3, at: NOW })),
     stats: { visitors: 30, blessings: 100, lamps: 72 },
     visit: null,
     greet: false,
     welcomeBack: false,
+    fiveLeafUsed: null,
     morningRooms: [],
     planters: [0, 0, 0, 0, 0, 0],
   });
