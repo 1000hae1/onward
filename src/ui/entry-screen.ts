@@ -5,6 +5,7 @@ import { avatarPortrait } from "../avatar/portraits";
 import type { Profile } from "./profile";
 import { createButton, createChoiceRow, createPictureChoiceRow, createText } from "./widgets";
 import { entryHeading } from "./entry-text";
+import { track } from "../analytics";
 
 export interface EntryOptions {
   initial: Profile;
@@ -34,6 +35,7 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
   const speciesRow = createPictureChoiceRow<SpeciesId>(
     SPECIES.map((spec) => ({ value: spec.id, label: spec.label })),
     (species) => {
+      track("animal_select", { animal: species });
       const nickname = profile.nicknameAuto
         ? swapNicknameAnimal(profile.nickname, speciesById(species).label)
         : profile.nickname;
@@ -58,7 +60,10 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
   input.autocomplete = "off";
   input.enterKeyHint = "go";
   input.value = profile.nickname;
+  /** 닉네임을 직접 고쳤는지만 기억해요. 글자는 통계에 보내지 않아요. */
+  let nicknameTyped = false;
   input.addEventListener("input", () => {
+    nicknameTyped = true;
     serverMessage = "";
     update({ ...profile, nickname: input.value, nicknameAuto: false });
   });
@@ -173,6 +178,8 @@ export function createEntryScreen(root: HTMLElement, options: EntryOptions): voi
     viewport?.removeEventListener("scroll", fitViewport);
     root.hidden = true;
     root.replaceChildren();
+    track("nickname_edit", { edited: nicknameTyped });
+    track("enter_ward", { returning: options.returning === true });
     options.onEnter({ ...profile, nickname: checked.value });
   });
 

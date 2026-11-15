@@ -68,8 +68,9 @@ import { buildWinter } from "./ward/winter";
 import { fetchGuestbook, forgetVisitToken, takeVisitToken } from "./net/guestbook-api";
 import type { GuestbookMessage, OwnerGuestbook } from "./guestbook/owner-panel";
 import { createAppleTree } from "./ward/apple-tree-view";
-import { createGuestbookOpener } from "./guestbook/opener";
+import { createGuestbookOpener, OPEN_RETRY_TEXT, OPEN_SLOW_TEXT } from "./guestbook/opener";
 import { createTreeStatus } from "./ui/tree-status";
+import { track, trackAction } from "./analytics";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
 import { CAT_NOT_LYING_TEXT, CAT_PET_ONLY_TEXT, CAT_REST_TEXT } from "../shared/cat-play-rules";
@@ -321,6 +322,9 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     loadPanel: loadOwnerPanel,
     show: (message) => ownerGuestbook?.open(message),
     status: (text, busy) => {
+      // 3초가 지나면 "조금 오래 걸리고 있어요", 10초가 지나거나 받지 못하면 "다시 눌러 주세요"예요.
+      if (text === OPEN_SLOW_TEXT) track("guestbook_loading_slow");
+      else if (text === OPEN_RETRY_TEXT) track("guestbook_fail");
       treeStatus.set(text, busy);
       appleTree.setBusy(busy);
     },
@@ -329,8 +333,10 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   /** 사과나무를 누르거나 설정에서 열어요. 이미 열려 있거나 기다리는 중이면 다시 묻지 않아요. */
   const openOwnerGuestbook = (): void => {
     if (ownerGuestbook?.isOpen) return;
-    guestbookOpener.start(performance.now());
+    if (guestbookOpener.start(performance.now())) track("guestbook_open", { role: "owner" });
   };
+  /** 연결이 이어졌다가 끊긴 뒤 아직 다시 이어지지 않았어요. 끊김과 다시 이어짐을 한 번씩만 세요. */
+  let wsDropped = false;
   const morningWindows = createMorningWindows(scene);
   /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
   const morningPreview = parseTimeOverride(window.location.search) === "morning";
@@ -856,7 +862,13 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       debug?.setStatus(status);
       debug?.setPlace(client.ward, instance);
       if (status === "online" || status === "connecting") {
-        if (status === "online") gate?.hide();
+        if (status === "online") {
+          gate?.hide();
+          if (wsDropped) {
+            wsDropped = false;
+            track("ws_reconnect");
+          }
+        }
         return;
       }
       if (status === "paused" || status === "rested") {
@@ -878,6 +890,10 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         return;
       }
       if (status === "reconnecting") {
+        if (!wsDropped) {
+          wsDropped = true;
+          track("ws_disconnect");
+        }
         // 다른 사람과 고양이는 그대로 두고 기다려요. 다시 이어지면 snapshot으로 맞춰요.
         setBanner("연결이 잠시 끊겼어요. 다시 이어지는 중이에요.");
         return;
@@ -907,7 +923,10 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     myId: () => myId,
     myNickname: () => current.nickname,
     serverNow: () => serverNow(),
-    send: (catId, kind) => client.send({ type: "cat-play", catId, kind }),
+    send: (catId, kind) => {
+      trackAction("cat_play");
+      client.send({ type: "cat-play", catId, kind });
+    },
     openMenu: (menu) => actionBar?.openCat(menu),
     toast: (text) => toast(text),
     leaving: () => dischargeUntil !== null,
@@ -944,7 +963,12 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
 
   player.setNet({
     askBed: (bed) => client.askBed(bed),
-    claimBed: (bed) => client.claimBed(bed),
+    // 침대는 서버가 내줬을 때만 bed_claim으로 세요.
+    claimBed: (bed) =>
+      client.claimBed(bed).then((granted) => {
+        if (granted) track("bed_claim");
+        return granted;
+      }),
     isBedTaken: (bed) => client.online && remotes.ownerOfBed(bed) !== null,
     othersBed: (bed) => {
       // 다른 분의 침대예요. 눕지 않고 그분 메뉴를 보여 줘요. 내 침대가 없으면 고를 수 있는 곳도 알려요.
@@ -961,7 +985,11 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       const hint = guide && guide.kind !== "pick-here" ? ` ${bedGuideText(guide)}` : "";
       toast((moving ? BED_MOVE_TAKEN_TEXT : BED_CLAIM_TAKEN_TEXT) + hint);
     },
-    askSeat: (seat) => client.askSeat(seat),
+    askSeat: (seat) =>
+      client.askSeat(seat).then((granted) => {
+        if (granted) trackAction("bench_sit");
+        return granted;
+      }),
     isSeatTaken: (seat) => client.online && remotes.isSeatTaken(seat),
     standUp: () => client.send({ type: "stand" }),
     seatRefused: (full) => toast(full ? BENCH_FULL_TEXT : SEAT_TAKEN_TEXT),
@@ -1147,6 +1175,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         returning: savedProfile !== null && loadGuestToken() !== null,
         ...visitEntry(),
       });
+      track("entry_view");
       if (!storageWorks()) notice?.show(NO_STORAGE_TEXT, 8);
     } else {
       enterWard(profile);
@@ -1227,6 +1256,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
             labels?.setAsleep(sleeping);
             player.setInputEnabled(!sleeping);
             lastInputMs = Date.now();
+            if (sleeping) trackAction("sleep");
             // 서버가 같은 병동 사람들에게 한 번 알려요. 잠든 동안 안아 주기·목례·한마디는 오지 않고, 평안은 쌓여요.
             client.send({ type: "sleep", sleeping });
           },

@@ -14,6 +14,7 @@ import { giftIcon } from "./icons/gift-icons";
 import type { HugMenuState } from "../../shared/hug-rules";
 import { CAT_PLAY_LABELS } from "../../shared/cat-play-rules";
 import type { CatPlayKind } from "../../shared/cat-play-rules";
+import { track, trackAction } from "../analytics";
 
 /** 고양이를 눌렀을 때 나오는 메뉴예요. 할 수 없는 놀이는 버튼을 끄고 이유를 보여 줘요. */
 export interface CatMenu {
@@ -157,6 +158,10 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   };
 
   const closeSheet = (): void => {
+    // 침대 확인 창을 [이 침대 쓰기]·[옮길게요] 없이 닫았어요(취소 버튼, 막, Esc, 다른 메뉴).
+    if (sheetName === "claim-bed" || sheetName === "move-bed") {
+      track("bed_confirm_cancel", { mode: sheetName === "claim-bed" ? "claim" : "move" });
+    }
     backdrop.hidden = true;
     root.classList.remove("modal-open");
     sheet.hidden = true;
@@ -220,20 +225,24 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   /** 처음 침대를 고를 때 물어요. [이 침대 쓰기]를 누르면 서버가 배정을 확정한 뒤에 가서 누워요. */
   const confirmClaim = (proceed: () => void): void => {
     const yes = createButton(CLAIM_YES_TEXT, () => {
+      sheetName = null;
       closeSheet();
       proceed();
     });
     openSheet("claim-bed", CLAIM_CONFIRM_TEXT, [yes], CLAIM_NO_TEXT, true);
+    track("bed_confirm_open", { mode: "claim" });
     yes.focus();
   };
 
   /** 내 침대가 있는데 다른 빈 침대를 눌렀을 때 옮길지 물어요. Esc나 [그대로 있을게요]는 그대로예요. */
   const confirmMove = (proceed: () => void): void => {
     const yes = createButton(MOVE_YES_TEXT, () => {
+      sheetName = null;
       closeSheet();
       proceed();
     });
     openSheet("move-bed", MOVE_CONFIRM_TEXT, [yes], MOVE_NO_TEXT, true);
+    track("bed_confirm_open", { mode: "move" });
     yes.focus();
   };
 
@@ -392,6 +401,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     row.append(
       createButton("퇴원할게요", () => {
         closeSheet();
+        track("discharge");
         sink.discharge(closeLink);
       }),
     );
@@ -436,12 +446,14 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
           "평안을 보낼 침대를 눌러 주세요. 빈 침대에도 남길 수 있어요.",
           "누구에게 평안을 보낼까요?",
           (bed) => {
+            trackAction("bless");
             player.playGesture("pray");
             lightDelay = { left: LIGHT_DELAY_SECONDS, to: bedHeadSpot(BEDS[bed]) };
             if (sink.online()) sink.bless(bed);
           },
           (person) => {
             player.whenUp(() => {
+              trackAction("bless");
               player.playGesture("pray");
               if (person.present) {
                 // 같은 병실에 있으면 그분 머리 위로 빛이 날아가요.
@@ -468,6 +480,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
           choiceList(morning() ? BLESSINGS : BLESSINGS.slice(0, MORNING_PHRASE), (id) => {
             closeSheet();
             player.whenUp(() => {
+              trackAction("bow");
               player.playGesture("bow");
               const text = blessingText(id);
               if (text) labels.showBubble(text);
@@ -492,11 +505,13 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
                 "선물을 놓을 침대를 눌러 주세요. 빈 침대에도 놓을 수 있어요.",
                 "누구에게 선물을 남길까요?",
                 (bed) => {
+                  trackAction("gift");
                   // 서버에 닿으면 서버가 칸을 정해 알려 줄 때 날아가요.
                   if (sink.online()) sink.gift(bed, gift);
                   else offerings.sendGift(player.handSpot(), bed, gift, stillMotion());
                 },
                 (person) => {
+                  trackAction("gift");
                   // 함께 있는 분이 누워 있으면 그 침대 머리맡에 놓고, 아니면 다음에 들어오실 때 전해요.
                   if (person.present?.bed != null) sink.gift(person.present.bed, gift);
                   else sink.leaveFor(person.address, "gift", gift);
@@ -514,6 +529,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   function lampButton(): HTMLButtonElement {
     return createEmojiButton("🕯️", "창가에 불빛", () => {
       closeSheet();
+      trackAction("lamp");
       if (sink.online()) {
         // 서버가 받아 주면 빛이 창틀로 날아가고 안내가 떠요. 받지 않으면 이유가 떠요.
         sink.lamp();

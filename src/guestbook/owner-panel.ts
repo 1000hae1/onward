@@ -7,6 +7,7 @@ import type { AppleCard } from "../../shared/guestbook-rules";
 import type { ServerMessage } from "../../shared/protocol";
 import { copyText, guestbookUrl, loadMyLink, saveMyLink, shareLink } from "../net/guestbook-api";
 import { loadGuestbookFonts } from "../ui/fonts";
+import { track } from "../analytics";
 import { createGuestbookHeader } from "./header";
 import { createTreeView } from "./tree-view";
 
@@ -92,6 +93,7 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
       row.className = "gb-link-row";
       const copy = button("복사", "gb-secondary", () => {
         void copyText(url).then((ok) => {
+          if (ok) track("guestbook_link_share", { method: "copy" });
           copy.textContent = ok ? "복사했어요" : "길게 눌러 복사해 주세요";
           window.setTimeout(() => (copy.textContent = "복사"), COPIED_MS);
         });
@@ -99,6 +101,8 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
       copy.setAttribute("aria-live", "polite");
       const send = button("보내기", "gb-secondary", () => {
         void shareLink(url).then((result) => {
+          if (result === "shared") track("guestbook_link_share", { method: "share" });
+          else if (result === "copied") track("guestbook_link_share", { method: "copy" });
           if (result === "copied") send.textContent = "복사했어요";
           else if (result === "failed") send.textContent = "길게 눌러 복사해 주세요";
           else return;
@@ -136,6 +140,7 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
       manage.append(
         button("링크 끄기", "gb-secondary", () => options.request("off")),
         button("새 링크 만들기", "gb-secondary", () => {
+          track("visit_link_create");
           pendingCreate = true;
           options.request("create");
         }),
@@ -143,6 +148,7 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
     } else {
       manage.append(
         button("링크 만들기", "gb-secondary", () => {
+          track("visit_link_create");
           pendingCreate = true;
           options.request("create");
         }),

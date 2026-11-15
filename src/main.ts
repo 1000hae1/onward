@@ -6,6 +6,7 @@ const guestbookToken = stashGuestbookPath();
 import { createLoadingScreen, loadingProgress, nextPaint } from "./ui/loading-screen";
 import type { LoadingParts } from "./ui/loading-screen";
 import { applyLargeText, loadViewPrefs } from "./ui/view-prefs";
+import { track } from "./analytics";
 
 /** 병원 서버가 이 시간 안에 대답하지 않으면 닿지 않은 것으로 봐요. */
 const HEALTH_TIMEOUT_MS = 10_000;
@@ -34,8 +35,10 @@ if (guestbookToken !== null && guestbookRoot) {
   // 방명록 링크로 왔어요. 3D 병동은 불러오지 않고 방명록만 가볍게 열어요.
   loading?.hideNow();
   if (canvas) canvas.hidden = true;
+  track("guestbook_open", { role: "visitor" });
   void import("./guestbook/visitor-page").then(({ startGuestbookPage }) => startGuestbookPage(guestbookRoot, guestbookToken));
 } else if (canvas) {
+  track("loading_start");
   const parts: LoadingParts = { code: false, server: false, built: false };
   const advance = (part: keyof LoadingParts): void => {
     parts[part] = true;
@@ -60,6 +63,7 @@ if (guestbookToken !== null && guestbookRoot) {
           })
           .catch((error: unknown) => {
             console.warn("병원 서버에 닿지 않았어요.", error);
+            track("connect_fail");
             loading?.showError(() => {
               loading.clearError();
               attempt();
@@ -86,6 +90,8 @@ if (guestbookToken !== null && guestbookRoot) {
       advance("built");
       await nextPaint();
       loading?.hideLoading();
+      // 페이지를 연 뒤부터 병동을 다 지을 때까지 걸린 시간이에요.
+      track("loading_done", { load_ms: performance.now() });
       // 상단의 병동 이름과 접속자 수는 화면이 서버 소식을 받아 채워요.
       const hud = document.querySelector<HTMLElement>("#hud");
       if (hud) hud.hidden = false;
