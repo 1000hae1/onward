@@ -12,7 +12,8 @@ import { WRITER_KEY_PATTERN } from "../shared/guestbook-rules.ts";
 import { statsTimestamp } from "../shared/presence-rules.ts";
 import { handleAdmin } from "./admin.ts";
 import { guestbookPage } from "./guestbook-page.ts";
-import { logError } from "./log.ts";
+import { liveReport, LIVE_REPORT_TIMEOUT_MS } from "./live-report.ts";
+import { logError, logEvent } from "./log.ts";
 import type { LogRoute } from "./log.ts";
 import { hashIp, requireSecret } from "./security.ts";
 import { IP_HASH_HEADER } from "./ward-room.ts";
@@ -205,6 +206,28 @@ export default {
       // 무엇이 잘못됐는지는 길 이름과 오류 종류만 남겨요. 화면에는 자세히 알리지 않아요.
       logError(routeOf(new URL(request.url).pathname), error, 500);
       return Response.json({ error: "server_error" }, { status: 500, headers: { "Cache-Control": "no-store" } });
+    }
+  },
+  /**
+   * 10분마다(wrangler.jsonc의 triggers) 메타모아에 지금 접속자 수를 알려요. 숫자 하나만 보내요.
+   * 키가 없거나 실패해도 다시 시도하지 않아요. 다음 10분에 다시 보내요.
+   */
+  async scheduled(_controller, env) {
+    const started = Date.now();
+    try {
+      // /api/stats와 같은 집계예요(환자와 문병객을 합한 수). 캐시는 거치지 않아요.
+      const counted = await env.DIRECTORY.getByName("directory").presenceStats(started);
+      const report = liveReport(counted.online, env.METAMOA_KEY);
+      if (report.kind === "skip") {
+        logEvent("info", { route: "cron:live", detail: "METAMOA_KEY가 없어서 건너뛰어요" });
+        return;
+      }
+      const response = await fetch(report.url, { ...report.init, signal: AbortSignal.timeout(LIVE_REPORT_TIMEOUT_MS) });
+      // 답의 본문은 읽지 않고 닫아요.
+      await response.body?.cancel();
+      logEvent(response.ok ? "info" : "error", { route: "cron:live", status: response.status, ms: Date.now() - started });
+    } catch (error) {
+      logError("cron:live", error);
     }
   },
 } satisfies ExportedHandler<Env>;

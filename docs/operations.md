@@ -39,6 +39,16 @@ npx wrangler secret put ADMIN_KEY    --name onward-preview
 Worker가 아직 없으면 `secret put`이 Worker를 먼저 만들지 물어봐요. 만들어도 괜찮아요. 처음 배포 전에 넣어 두면 첫 접속부터 바로 동작해요.
 비밀값이 없거나 32자보다 짧으면 그 기능이 멈춰요(입장, IP 해시, 운영자 API).
 
+### 메타모아 접속자 수 키
+
+메타모아에서 받은 키를 production에만 넣어요. 메타모아가 준 값이라 32자 규칙은 따르지 않아요.
+
+```sh
+npx wrangler secret put METAMOA_KEY --name onward
+```
+
+키가 없으면 보내지 않고 로그만 한 줄 남겨요(아래 "메타모아 접속자 수 보내기").
+
 ### 방문 통계 토큰
 
 1. Cloudflare 대시보드 → **Analytics & Logs → Web Analytics → Add a site**
@@ -179,6 +189,29 @@ curl -H "Authorization: Bearer $ADMIN_KEY" "https://<배포 주소>/admin/metric
 
 - 날짜는 한국 날짜예요. 400일이 지나면 지워져요.
 - 머문 시간과 평안 빌기 수는 사람이 **정말 나갈 때**(30초 유예 끝, 퇴원, 차단) 병실이 인원 보고에 실어 보내요. 그래서 directory 요청이 따로 늘지 않아요. 다만 배포나 재시작으로 병실이 갑자기 내려가면, 그때 머물던 사람의 숫자는 빠질 수 있어요.
+
+### 메타모아 접속자 수 보내기
+
+- `wrangler.jsonc`의 Cron Trigger(`*/10 * * * *`)로 10분마다 `worker/index.ts`의 `scheduled`가 돌아요. production에만 있고 preview는 보내지 않아요.
+- `/api/stats`와 같은 집계(환자와 문병객을 합한 수)를 `{"count": 숫자}`로 보내요. 이용자 정보는 보내지 않아요.
+- 실패해도 다시 시도하지 않아요. 다음 10분에 다시 보내요.
+
+로컬에서 시험하기:
+
+```sh
+npm run dev
+curl "http://localhost:5173/cdn-cgi/handler/scheduled?cron=*/10+*+*+*+*"
+```
+
+터미널에 `{"level":"info","route":"cron:live",...}` 한 줄이 보여요. `.dev.vars`의 `METAMOA_KEY`가 비어 있으면 "건너뛰어요"가 보이고, 값을 넣으면 실제로 메타모아에 보내요.
+
+배포 뒤에 확인하기:
+
+```sh
+npx wrangler tail onward --format pretty
+```
+
+10분마다(매시 0·10·20…분) `route: "cron:live"` 줄이 보여요. `status: 200`이면 보낸 거예요. `401`·`403`이면 키를 다시 확인하세요. 대시보드 **Workers → onward → Settings → Triggers**에서도 크론이 보이고, **Logs**에서 지난 실행을 볼 수 있어요.
 
 ### 방문 통계
 

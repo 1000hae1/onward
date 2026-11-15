@@ -17,7 +17,8 @@ export type LogRoute =
   | "ward:message"
   | "ward:hello"
   | "ward:alarm"
-  | "directory:alarm";
+  | "directory:alarm"
+  | "cron:live";
 
 export interface LogFields {
   route: LogRoute;

@@ -23,6 +23,9 @@
     // 추적(traces)에는 요청 URL 전체가 담겨요. 방명록 토큰이 남지 않게 꺼 둬요.
     "traces": { "enabled": false }
   },
+  // 10분마다 메타모아에 지금 접속자 수(숫자 하나)를 보내요(worker/index.ts의 scheduled).
+  // production에만 있어요. env 아래에는 물려받지 않아서 미리보기(onward-preview)는 보내지 않아요.
+  "triggers": { "crons": ["*/10 * * * *"] },
   "durable_objects": {
     "bindings": [
       { "name": "WARD_ROOM", "class_name": "WardRoom" },

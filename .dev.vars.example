@@ -3,3 +3,6 @@
 TOKEN_SECRET=
 IP_SALT=
 ADMIN_KEY=
+# 메타모아에 접속자 수를 보낼 때 쓰는 키예요. 비워 두면 보내지 않고 건너뛰어요.
+# 배포한 곳에는 npx wrangler secret put METAMOA_KEY 로 넣어요.
+METAMOA_KEY=
