@@ -20,6 +20,8 @@ export interface OwnerGuestbookOptions {
   hide(appleId: number): void;
   /** 닫았어요. */
   onClose(): void;
+  /** 링크를 복사하거나 보냈어요. 첫 안내를 마치는 데 써요. */
+  onLinkShared?(): void;
 }
 
 export interface OwnerGuestbook {
@@ -93,7 +95,10 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
       row.className = "gb-link-row";
       const copy = button("복사", "gb-secondary", () => {
         void copyText(url).then((ok) => {
-          if (ok) track("guestbook_link_share", { method: "copy" });
+          if (ok) {
+            track("guestbook_link_share", { method: "copy" });
+            options.onLinkShared?.();
+          }
           copy.textContent = ok ? "복사했어요" : "길게 눌러 복사해 주세요";
           window.setTimeout(() => (copy.textContent = "복사"), COPIED_MS);
         });
@@ -103,6 +108,7 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
         void shareLink(url).then((result) => {
           if (result === "shared") track("guestbook_link_share", { method: "share" });
           else if (result === "copied") track("guestbook_link_share", { method: "copy" });
+          if (result === "shared" || result === "copied") options.onLinkShared?.();
           if (result === "copied") send.textContent = "복사했어요";
           else if (result === "failed") send.textContent = "길게 눌러 복사해 주세요";
           else return;

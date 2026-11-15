@@ -34,6 +34,8 @@ function savedTokens(): Record<string, string> {
 async function openGuest(browser: Browser, name: string) {
   // 휴대폰만 한 작은 화면이에요. 헤드리스 브라우저가 그릴 양이 줄어서 조작이 멈추지 않아요.
   const context = await browser.newContext({ viewport: { width: 390, height: 700 } });
+  // 병아리 간호사의 첫 안내는 이 시험과 상관없어서 끈 채로 시작해요.
+  await context.addInitScript(() => window.localStorage.setItem("onward.onboarding", "done"));
   const token = savedTokens()[name];
   if (token) {
     await context.addInitScript((value) => {

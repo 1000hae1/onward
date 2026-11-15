@@ -82,7 +82,9 @@ import { isMorningWindow } from "../shared/morning";
 import { planterText } from "../shared/planter";
 import { dischargeNoticeText, farewellCardText } from "../shared/discharge-rules";
 import { WELCOME_BACK_TEXT } from "../shared/return-rules";
-import { bedHeadSpot, doorSpots, roomAt, ROOMS, windowLampSpot } from "../shared/ward-layout";
+import { bedHeadSpot, doorSpots, NURSES, roomAt, ROOMS, windowLampSpot } from "../shared/ward-layout";
+import { createOnboarding } from "./ui/onboarding";
+import { createNurseGuide } from "./ward/nurse-guide";
 import { createPlanters } from "./ward/planter-view";
 import { createMorningWindows } from "./ward/morning-window";
 import { createWarmGlows } from "./ward/warm-glow";
@@ -304,6 +306,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
           request: (action) => client.send({ type: "guestbook", action }),
           hide: (appleId) => client.send({ type: "hide-apple", appleId }),
           onClose: () => undefined,
+          onLinkShared: () => onboarding.notify("link-shared"),
         });
         if (pendingGuestbook) ownerGuestbook.update(pendingGuestbook);
         pendingGuestbook = null;
@@ -1017,9 +1020,37 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     const text = nextGreeting();
     for (const { nurse, label } of nurseGreetings) {
       nurse.bow(reduceMotion.matches);
-      label.showBubble(text);
+      // 첫 안내 중인 간호사는 안내 말풍선과 겹치지 않게 고개만 숙여요.
+      if (!(nurse === guideNurse && onboarding.active)) label.showBubble(text);
     }
     announcer?.say(`간호사들이 "${text}" 하고 인사했어요.`);
+  });
+
+  // 처음 들어온 분에게 가운데 간호사가 다가와 한 단계씩 알려 줘요. 내 화면에서만이고 서버에는 보내지 않아요.
+  const guideIndex = Math.min(1, facilities.nurses.length - 1);
+  const guideNurse = guideIndex >= 0 ? facilities.nurses[guideIndex] : null;
+  const onboardingRoot = element("onboarding");
+  const onboarding = createOnboarding({
+    root: onboardingRoot ?? document.createElement("div"),
+    guide: guideNurse ? createNurseGuide(guideNurse, player.nav, NURSES[guideIndex]) : null,
+    nurseHead: (target) => guideNurse?.headWorld(target) ?? null,
+    read: readStorage,
+    write: (key, value) => {
+      if (value === null) removeStorage(key);
+      else writeStorage(key, value);
+    },
+    announce: (text) => announcer?.say(text),
+    highlightPray: (on) => actionBar?.highlightPray(on),
+    openTree: () => openOwnerGuestbook(),
+    context: () => ({
+      me: { x: player.walkX, z: player.walkZ },
+      ownedBed: player.ownedBed,
+      canLie: current.outfit === "patient",
+      roomIndex: roomAt(player.walkX, player.walkZ)?.index ?? null,
+      isTakenByOther: (bed) => client.online && remotes.ownerOfBed(bed) !== null,
+      isFree: (bed) => bed !== player.ownedBed && bed !== player.claimedBed && !(client.online && remotes.isBedTaken(bed)),
+      treeTop: (target) => appleTree.top(target),
+    }),
   });
 
   /** 내 침대가 없는 환자에게 침대 고르는 법을 알려 줄지예요. 침대가 다 차도 병동에는 머물 수 있어요. */
@@ -1077,6 +1108,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         },
         onOpenGuestbook: openOwnerGuestbook,
         onDischarge: () => actionBar?.openDischarge(),
+        onReplayOnboarding: () => onboarding.replay(),
         onOpenIntro: (done) => {
           if (introRoot) showIntroCard(introRoot, { source: "settings", onEnter: done });
         },
@@ -1143,10 +1175,17 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         },
         morning: () => isMorningWindow(serverNow()),
         fiveLeafUsed: () => fiveLeaf.used(today()),
+        onAction: (kind) => {
+          if (kind === "bless") onboarding.notify("blessed");
+        },
       });
     }
+    // 처음 들어온 분이면 병아리 간호사의 첫 안내를 시작해요. 방명록·문병 링크로 왔으면 하지 않아요.
+    onboarding.begin({ returning: arrivedReturning, viaLink: visitToken !== null });
   };
 
+  /** 입장 화면을 "돌아왔네요"로 열었는지예요. 첫 안내를 보여 줄지 정할 때 써요. */
+  let arrivedReturning = false;
   const entryRoot = element("entry");
   const introRoot = element("intro");
   /** 서버가 닉네임을 받지 않으면 입장 화면을 다시 열어 고칠 수 있게 해요. */
@@ -1174,6 +1213,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
       player.setInputEnabled(false);
       // 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 같은 분이 돌아온 거예요.
       const returning = savedProfile !== null && loadGuestToken() !== null;
+      arrivedReturning = returning;
       const showEntry = (): void => {
         createEntryScreen(entryRoot, {
           initial: profile,
@@ -1440,6 +1480,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     lighting.update(dt);
     hospital.signboard.update(dt);
     // 등불은 모든 캐릭터가 자리를 잡은 뒤에 따라가요.
+    // 첫 안내 간호사가 걸은 뒤에 등불과 말풍선이 따라가요.
+    onboarding.update(dt, camera, reduceMotion.matches);
     for (const nurse of facilities.nurses) nurse.update(dt);
     lanterns.begin();
     const myLanternGround = player.lanternWorld(myLanternPoint);
@@ -1514,6 +1556,14 @@ function readStorage(key: string): string | null {
     return window.localStorage.getItem(key);
   } catch {
     return null;
+  }
+}
+
+function removeStorage(key: string): void {
+  try {
+    window.localStorage.removeItem(key);
+  } catch {
+    // 지우지 못해도 이번 방문 동안은 그대로예요.
   }
 }
 

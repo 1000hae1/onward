@@ -100,6 +100,8 @@ async function lieDown(guest: Guest): Promise<number> {
 test("잠든 모습이 다른 사람에게 보이고, 평안은 쌓였다가 깨어날 때 전해져요", async ({ baseURL, browser }) => {
   const a = await connect(baseURL ?? "", "a", "잠꾸러기");
   const context = await browser.newContext({ viewport: { width: 390, height: 700 } });
+  // 병아리 간호사의 첫 안내는 이 시험과 상관없어서 끈 채로 시작해요.
+  await context.addInitScript(() => window.localStorage.setItem("onward.onboarding", "done"));
   const savedB = tokens().b;
   if (savedB) {
     await context.addInitScript((value) => {

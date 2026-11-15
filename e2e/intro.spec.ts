@@ -48,6 +48,7 @@ test("돌아온 분에게는 소개 카드 없이 바로 '돌아왔네요'예요
 });
 
 test("설정의 [온기병동 소개]로 다시 보고, 닫으면 설정 버튼으로 돌아가요", async ({ page }) => {
+  await page.addInitScript(() => window.localStorage.setItem("onward.onboarding", "done"));
   await page.goto(WARD_URL);
   await page.getByRole("button", { name: ENTER }).click({ timeout: 30_000 });
   await page.locator("#entry-nickname").fill("소개곰");

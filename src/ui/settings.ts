@@ -4,6 +4,7 @@ import type { QualityChoice } from "../ward/quality";
 import { createButton, createChoiceRow, createText } from "./widgets";
 import { FEEDBACK_FORM_URL } from "../config";
 import { INTRO_TEXT } from "./intro-rules";
+import { ONBOARDING_TEXT } from "./onboarding-rules";
 
 export interface SettingsOptions {
   initial: Profile;
@@ -12,6 +13,8 @@ export interface SettingsOptions {
   onDischarge(): void;
   /** [온기병동 소개]를 눌렀어요. 카드를 닫으면 done을 불러 포커스를 [설정] 버튼으로 돌려요. */
   onOpenIntro(done: () => void): void;
+  /** [안내 다시 보기]예요. 병아리 간호사의 첫 안내를 처음부터 다시 해요. */
+  onReplayOnboarding(): void;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
   /** 가볍게 보기와 글자 크게예요. 이 기기에만 저장해요. */
@@ -112,6 +115,10 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
     createButton(INTRO_TEXT.settingsLabel, () => {
       setOpen(false);
       options.onOpenIntro(() => toggle.focus());
+    }),
+    createButton(ONBOARDING_TEXT.replay, () => {
+      setOpen(false);
+      options.onReplayOnboarding();
     }),
     feedbackLink(),
     (() => {

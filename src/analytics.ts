@@ -16,6 +16,10 @@ export interface AnalyticsEvents {
   loading_start: Record<string, never>;
   loading_done: { load_ms: number };
   intro_view: { from: "first" | "settings" };
+  onboarding_step: { step: 1 | 2 | 3 };
+  onboarding_done: Record<string, never>;
+  onboarding_skip: { step: 1 | 2 | 3 };
+  onboarding_quit: { step: 1 | 2 | 3 };
   intro_enter: { from: "first" | "settings" };
   entry_view: Record<string, never>;
   animal_select: { animal: "rabbit" | "bear" | "penguin" | "otter" | "deer" };
@@ -48,7 +52,7 @@ const ALLOWED_WORDS: Readonly<Record<string, readonly string[]>> = {
   method: ["share", "copy"],
   from: ["first", "settings"],
 };
-const NUMBER_KEYS = new Set(["load_ms"]);
+const NUMBER_KEYS = new Set(["load_ms", "step"]);
 const BOOLEAN_KEYS = new Set(["edited", "returning"]);
 const FIRST_ACTION_KINDS: ReadonlySet<string> = new Set<FirstActionKind>(["bless", "bow", "gift", "lamp"]);
 

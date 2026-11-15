@@ -15,6 +15,7 @@ import type { HugMenuState } from "../../shared/hug-rules";
 import { CAT_PLAY_LABELS } from "../../shared/cat-play-rules";
 import type { CatPlayKind } from "../../shared/cat-play-rules";
 import { track, trackAction } from "../analytics";
+import type { ActionKind } from "../analytics";
 
 /** 고양이를 눌렀을 때 나오는 메뉴예요. 할 수 없는 놀이는 버튼을 끄고 이유를 보여 줘요. */
 export interface CatMenu {
@@ -72,6 +73,8 @@ export interface ActionBarOptions {
   morning(): boolean;
   /** 오잎클로버를 오늘 이미 놓았는지예요. 화면에서 버튼을 흐리게 할 뿐이고, 정하는 것은 서버예요. */
   fiveLeafUsed(): boolean;
+  /** 행동을 했어요. 첫 안내가 평안 빌기를 알아채는 데 써요. */
+  onAction?(kind: ActionKind): void;
 }
 
 /** 오잎클로버를 오늘 이미 놓았을 때 버튼 아래에 작게 적는 말이에요. */
@@ -88,6 +91,8 @@ export interface ActionBar {
   openCat(menu: CatMenu): void;
   /** 열려 있는 메뉴를 닫아요. */
   closeMenu(): void;
+  /** 첫 안내 2단계에서 [평안 빌기]를 은은하게 반짝여요. */
+  highlightPray(on: boolean): void;
   /** 화면 아래 버튼을 감추거나 다시 보여요. 퇴원하는 동안 감춰요. */
   setHidden(hidden: boolean): void;
   /** "이 침대로 옮길까요?"를 물어요. [옮길게요]를 누르면 proceed를 불러요. */
@@ -429,6 +434,12 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     openSheet(name, `${person.nickname}님`, hugNote ? [row, hugNote] : [row]);
   };
 
+  /** 행동을 세고, 첫 안내에도 알려요. */
+  const act = (kind: ActionKind): void => {
+    trackAction(kind);
+    options.onAction?.(kind);
+  };
+
   const bedButton = createButton(
     "내 침대",
     toggleable("bed", renderBedMenu),
@@ -436,8 +447,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   bedButton.hidden = true;
   const lamp = lampButton();
 
-  buttons.append(
-    createEmojiButton(
+  const prayButton = createEmojiButton(
       "🙏",
       "평안 빌기",
       toggleable("pray", () => {
@@ -446,14 +456,14 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
           "평안을 보낼 침대를 눌러 주세요. 빈 침대에도 남길 수 있어요.",
           "누구에게 평안을 보낼까요?",
           (bed) => {
-            trackAction("bless");
+            act("bless");
             player.playGesture("pray");
             lightDelay = { left: LIGHT_DELAY_SECONDS, to: bedHeadSpot(BEDS[bed]) };
             if (sink.online()) sink.bless(bed);
           },
           (person) => {
             player.whenUp(() => {
-              trackAction("bless");
+              act("bless");
               player.playGesture("pray");
               if (person.present) {
                 // 같은 병실에 있으면 그분 머리 위로 빛이 날아가요.
@@ -470,7 +480,9 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
           },
         );
       }),
-    ),
+    );
+  buttons.append(
+    prayButton,
     createEmojiButton(
       "🙇",
       "목례와 한마디",
@@ -480,7 +492,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
           choiceList(morning() ? BLESSINGS : BLESSINGS.slice(0, MORNING_PHRASE), (id) => {
             closeSheet();
             player.whenUp(() => {
-              trackAction("bow");
+              act("bow");
               player.playGesture("bow");
               const text = blessingText(id);
               if (text) labels.showBubble(text);
@@ -505,13 +517,13 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
                 "선물을 놓을 침대를 눌러 주세요. 빈 침대에도 놓을 수 있어요.",
                 "누구에게 선물을 남길까요?",
                 (bed) => {
-                  trackAction("gift");
+                  act("gift");
                   // 서버에 닿으면 서버가 칸을 정해 알려 줄 때 날아가요.
                   if (sink.online()) sink.gift(bed, gift);
                   else offerings.sendGift(player.handSpot(), bed, gift, stillMotion());
                 },
                 (person) => {
-                  trackAction("gift");
+                  act("gift");
                   // 함께 있는 분이 누워 있으면 그 침대 머리맡에 놓고, 아니면 다음에 들어오실 때 전해요.
                   if (person.present?.bed != null) sink.gift(person.present.bed, gift);
                   else sink.leaveFor(person.address, "gift", gift);
@@ -529,7 +541,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   function lampButton(): HTMLButtonElement {
     return createEmojiButton("🕯️", "창가에 불빛", () => {
       closeSheet();
-      trackAction("lamp");
+      act("lamp");
       if (sink.online()) {
         // 서버가 받아 주면 빛이 창틀로 날아가고 안내가 떠요. 받지 않으면 이유가 떠요.
         sink.lamp();
@@ -555,6 +567,9 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     openPerson,
     openCat,
     closeMenu: closeSheet,
+    highlightPray(on) {
+      prayButton.classList.toggle("onboard-glow", on);
+    },
     setHidden(hidden) {
       if (hidden) closeSheet();
       buttons.hidden = hidden;
