@@ -21,10 +21,20 @@ const BEAK = "#f39a3d";
 const CHEEK = "#ffb4a0";
 const EYE = "#2c2a28";
 
-/** 허리 높이예요. 인사할 때 이 높이를 축으로 윗몸을 숙여요. */
-const WAIST_Y = 0.45;
+/** 허리 높이예요. 인사할 때 이 높이를 축으로 윗몸을 숙여요. 몸통이 낮아서 허리도 낮아요. */
+const WAIST_Y = 0.32;
+/**
+ * 2등신이에요. 큰 머리 하나와 달걀처럼 둥근 몸통 하나, 두 덩어리로 보여요.
+ * 아래 모양은 처음 그린 좌표로 적어 두고, 머리는 키우고 몸통은 바닥까지 내려 한 덩어리로 맞춰요.
+ */
+const BODY_FROM_Y = 0.76;
+const BODY_TO_Y = 0.48;
+const BODY_STRETCH: Vec3 = [1.1, 1.0, 1.08];
+const HEAD_FROM: Vec3 = [0, 1.38, 0.02];
+const HEAD_TO_Y = 1.27;
+const HEAD_SCALE = 1.36;
 /** 머리 꼭대기 높이예요. 말풍선이 이 위에 떠요. */
-const HEAD_TOP_Y = 1.78;
+const HEAD_TOP_Y = HEAD_TO_Y + (1.78 - HEAD_FROM[1]) * HEAD_SCALE;
 
 /** 크게 보이는 몸통과 머리는 면을 넉넉히 써서 둥글게 그려요. */
 const roundBall = (color: string, at: Vec3, size: Vec3): BufferGeometry =>
@@ -34,8 +44,8 @@ const roundBall = (color: string, at: Vec3, size: Vec3): BufferGeometry =>
 function buildLower(): BufferGeometry {
   const parts: BlobSpec[] = [
     { shape: "ball", color: BEAK, at: [0.13, 0.035, 0.07], size: [0.09, 0.035, 0.13], mirror: true },
-    // 가운 아랫단이에요. 숙일 때 다리 쪽이 비지 않게 받쳐요.
-    { shape: "ball", color: GOWN, at: [0, 0.32, 0], size: [0.36, 0.26, 0.34] },
+    // 가운 아랫단이에요. 몸통 안쪽에 숨어 있다가, 숙일 때만 다리 쪽이 비지 않게 받쳐요.
+    { shape: "ball", color: GOWN, at: [0, 0.27, 0], size: [0.42, 0.26, 0.4] },
   ];
   return merged(blobs(parts));
 }
@@ -43,7 +53,7 @@ function buildLower(): BufferGeometry {
 /** 허리 위예요. 기준점이 허리라서 그대로 돌리면 고개 숙여 인사하는 모습이 돼요. */
 function buildUpper(): BufferGeometry {
   const lift: Vec3 = [0, -WAIST_Y, 0];
-  const parts: BlobSpec[] = [
+  const bodyParts: BlobSpec[] = [
     // 하얀 가운 소매와 소매 끝으로 나온 날개 끝이에요.
     { shape: "ball", color: GOWN, at: [0.42, 0.86, 0], size: [0.12, 0.17, 0.14], tilt: [0, 0, 0.35], mirror: true },
     { shape: "ball", color: FEATHER_DEEP, at: [0.48, 0.71, 0.03], size: [0.08, 0.1, 0.1], tilt: [0, 0, 0.3], mirror: true },
@@ -53,6 +63,8 @@ function buildUpper(): BufferGeometry {
     { shape: "ball", color: TEAL, at: [0, 0.72, 0.445], size: [0.026, 0.026, 0.014], small: true },
     { shape: "ball", color: TEAL_LIGHT, at: [0.22, 0.66, 0.37], size: [0.09, 0.075, 0.03], tilt: [-0.3, 0.45, 0] },
     { shape: "pill", color: "#e9879a", at: [0.25, 0.75, 0.37], size: [0.013, 0.07, 1], tilt: [-0.3, 0.45, 0], small: true },
+  ];
+  const headParts: BlobSpec[] = [
     // 눈과 볼, 부리예요.
     { shape: "ball", color: EYE, at: [0.115, 1.41, 0.322], size: [0.034, 0.046, 0.02], tilt: [-0.15, 0.35, 0], mirror: true, small: true },
     { shape: "ball", color: CHEEK, at: [0.205, 1.3, 0.258], size: [0.06, 0.036, 0.02], tilt: [0, 0.65, 0], mirror: true, small: true },
@@ -64,14 +76,20 @@ function buildUpper(): BufferGeometry {
     { shape: "ball", color: TEAL, at: [0.022, 1.765, 0.185], size: [0.026, 0.026, 0.012], mirror: true, small: true },
     { shape: "cone", color: TEAL, at: [0, 1.737, 0.188], size: [0.04, 0.045, 0], tilt: [Math.PI, 0, 0], small: true },
   ];
-  return merged([
-    // 통통한 몸통은 가운이 감싸고, 큰 머리는 노란 깃털이에요.
-    place(roundBall(GOWN, [0, 0.76, 0], [0.46, 0.46, 0.43]), lift),
-    place(roundBall(FEATHER, [0, 1.38, 0.02], [0.34, 0.33, 0.33]), lift),
-    place(place(paint(new CylinderGeometry(0.18, 0.21, 0.14, 16), GOWN), [0, 1.72, 0], [-0.18, 0, 0]), lift),
-    place(place(paint(new CylinderGeometry(0.212, 0.214, 0.035, 16), TEAL), [0, 1.67, 0.01], [-0.18, 0, 0]), lift),
-    ...blobs(parts, lift),
+  // 통통한 몸통은 가운이 감싸요. 몸통 중심을 기준으로 줄여서 내려요.
+  const body = merged([roundBall(GOWN, [0, BODY_FROM_Y, 0], [0.46, 0.46, 0.43]), ...blobs(bodyParts)]);
+  place(body, [0, -BODY_FROM_Y, 0]);
+  place(body, [0, BODY_TO_Y, 0], [0, 0, 0], BODY_STRETCH);
+  // 큰 머리는 노란 깃털이에요. 머리 중심을 기준으로 키워서 몸통 위에 얹어요.
+  const head = merged([
+    roundBall(FEATHER, HEAD_FROM, [0.34, 0.33, 0.33]),
+    place(paint(new CylinderGeometry(0.18, 0.21, 0.14, 16), GOWN), [0, 1.72, 0], [-0.18, 0, 0]),
+    place(paint(new CylinderGeometry(0.212, 0.214, 0.035, 16), TEAL), [0, 1.67, 0.01], [-0.18, 0, 0]),
+    ...blobs(headParts),
   ]);
+  place(head, [-HEAD_FROM[0], -HEAD_FROM[1], -HEAD_FROM[2]]);
+  place(head, [HEAD_FROM[0], HEAD_TO_Y, HEAD_FROM[2]], [0, 0, 0], [HEAD_SCALE, HEAD_SCALE, HEAD_SCALE]);
+  return merged([place(body, lift), place(head, lift)]);
 }
 
 export interface ChickNurse {
