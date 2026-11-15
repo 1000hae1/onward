@@ -22,7 +22,8 @@ export interface OwnerGuestbookOptions {
 }
 
 export interface OwnerGuestbook {
-  open(): void;
+  /** 화면을 열어요. 이미 받은 내용(fresh)이 있으면 그것으로 채우고 서버에 다시 묻지 않아요. */
+  open(fresh?: GuestbookMessage): void;
   close(): void;
   readonly isOpen: boolean;
   update(message: GuestbookMessage): void;
@@ -175,13 +176,14 @@ export function createOwnerGuestbook(root: HTMLElement, options: OwnerGuestbookO
     get isOpen() {
       return open;
     },
-    open() {
+    open(fresh) {
       loadGuestbookFonts();
       open = true;
       note = "";
       root.hidden = false;
       close.focus();
-      options.request("info");
+      if (fresh) this.update(fresh);
+      else options.request("info");
     },
     close: hide,
     update(message) {

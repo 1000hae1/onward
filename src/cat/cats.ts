@@ -1,7 +1,8 @@
 import { Vector3 } from "three";
 import type { Object3D } from "three";
 import type { LanternSink } from "../ward/lantern-rules";
-import { pickBox, turnToward } from "../ward/camera-view";
+import { hitBox, turnToward } from "../ward/camera-view";
+import type { TapHit } from "../ward/tap-pick";
 import {
   bedApproach,
   bedCatSeat,
@@ -84,8 +85,8 @@ export type CatTarget =
 
 export interface CatsHandle {
   update(dt: number, stillMotion: boolean): void;
-  /** 누른 시선에 고양이가 있으면 그 고양이를 돌려줘요. */
-  tap(origin: Vector3, reach: Vector3): CatTarget | null;
+  /** 누른 시선에 고양이가 있으면 맞은 구간과, 고르면 그 고양이를 돌려주는 pick이에요. */
+  tap(origin: Vector3, reach: Vector3): { hit: TapHit; pick(): CatTarget } | null;
   /** 서버가 알린 놀이예요. 내 고양이 놀이면 me가 그 고양이 번호예요. */
   play(play: CatPlayMessage, me: string | null): void;
   /** 곁에서 자던 고양이가 until에 깨어나요. */
@@ -573,11 +574,16 @@ export function createCats(
         minY: y,
         maxY: y + CAT_TAP_HEIGHT,
       }));
-      const picked = pickBox(origin, reach, boxes, WALL_BOXES);
+      const picked = hitBox(origin, reach, boxes, WALL_BOXES);
       if (picked === null) return null;
-      const chosen = candidates[picked];
-      chosen.moves.notice = 0;
-      return chosen.target(chosen.moves);
+      const chosen = candidates[picked.index];
+      return {
+        hit: picked,
+        pick: () => {
+          chosen.moves.notice = 0;
+          return chosen.target(chosen.moves);
+        },
+      };
     },
   };
 }

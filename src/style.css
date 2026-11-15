@@ -939,3 +939,75 @@ a:focus-visible,
     background: #30343b;
   }
 }
+
+/* 확인 창 뒤의 투명한 막이에요. 뒤의 3D 화면을 누르지 못하게 하고, 누르면 창만 닫혀요(action-bar.ts). */
+.sheet-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 30;
+  background: rgba(10, 14, 22, 0.18);
+  touch-action: none;
+}
+
+.sheet-backdrop[hidden] {
+  display: none;
+}
+
+#action-bar.modal-open {
+  z-index: 31;
+}
+
+/* 사과나무를 눌렀을 때 나무 위에 뜨는 기다림 표시예요(tree-status.ts). */
+#tree-status {
+  position: fixed;
+  z-index: 25;
+  margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.4rem 0.8rem;
+  border-radius: 999px;
+  background: rgba(27, 36, 51, 0.85);
+  color: #f6efe2;
+  font-size: 0.875rem;
+  white-space: nowrap;
+  pointer-events: none;
+  transform: translate(-50%, -100%);
+}
+
+#tree-status[hidden] {
+  display: none;
+}
+
+#tree-status.tree-status-center {
+  left: 50%;
+  top: auto;
+  bottom: calc(env(safe-area-inset-bottom) + 9rem);
+  transform: translateX(-50%);
+}
+
+.tree-spinner {
+  flex: none;
+  width: 0.9rem;
+  height: 0.9rem;
+  border: 2px solid rgba(246, 239, 226, 0.35);
+  border-top-color: #f6efe2;
+  border-radius: 50%;
+  animation: tree-spin 0.9s linear infinite;
+}
+
+.tree-spinner[hidden] {
+  display: none;
+}
+
+@keyframes tree-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tree-spinner {
+    animation-duration: 2.4s;
+  }
+}

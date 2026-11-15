@@ -23,6 +23,7 @@ import type { CatsHandle, CatTarget } from "../cat/cats";
 import type { RemoteGuests } from "../net/remote-guests";
 import type { CatMenu } from "../ui/action-bar";
 import type { PlayerControls } from "./controls";
+import type { TapHit } from "./tap-pick";
 
 /** 혼자 머물 때 내 고양이를 가리키는 번호예요. 서버에 보내지 않아요. */
 const LOCAL_ME = "me000000";
@@ -47,8 +48,8 @@ export interface CatPlayFlowOptions {
 }
 
 export interface CatPlayFlow {
-  /** 누른 시선에 고양이가 있으면 메뉴를 열고 true를 돌려줘요. */
-  tap(origin: Vector3, reach: Vector3): boolean;
+  /** 누른 시선에 고양이가 있으면 맞은 구간과, 고르면 메뉴를 여는 동작을 돌려줘요. */
+  tap(origin: Vector3, reach: Vector3): { hit: TapHit; open(): void } | null;
   /** 길게 누르면 메뉴 없이 바로 쓰다듬어요. */
   longPress(origin: Vector3, reach: Vector3): boolean;
   /** 들어올 때 받은 놀이와 쉬기예요. */
@@ -79,12 +80,26 @@ export function createCatPlayFlow(options: CatPlayFlowOptions): CatPlayFlow {
 
   const me = (): string => (options.online() ? options.myId() : LOCAL_ME);
 
-  const pickedFrom = (origin: Vector3, reach: Vector3): Picked | null => {
-    const mine: CatTarget | null = cats.tap(origin, reach);
-    if (mine) return mine.kind === "ward" ? { catId: mine.catId, ownerName: null, room: mine.room } : { catId: me(), ownerName: null, room: null };
-    if (!options.online()) return null;
-    const other = remotes.tapCat(origin, reach);
-    return other ? { catId: other.owner.id, ownerName: other.owner.nickname, room: null } : null;
+  /** 시선에 가장 먼저 맞은 고양이예요. 내 화면의 고양이와 다른 분의 고양이 가운데 앞의 것이에요. */
+  const pickedFrom = (origin: Vector3, reach: Vector3): { hit: TapHit; pick(): Picked } | null => {
+    const mine = cats.tap(origin, reach);
+    const other = options.online() ? remotes.tapCat(origin, reach) : null;
+    const fromMine = mine && {
+      hit: mine.hit,
+      pick: (): Picked => {
+        const cat: CatTarget = mine.pick();
+        return cat.kind === "ward" ? { catId: cat.catId, ownerName: null, room: cat.room } : { catId: me(), ownerName: null, room: null };
+      },
+    };
+    const fromOther = other && {
+      hit: other.hit,
+      pick: (): Picked => {
+        const { owner } = other.pick();
+        return { catId: owner.id, ownerName: owner.nickname, room: null };
+      },
+    };
+    if (fromMine && fromOther) return fromOther.hit.enter < fromMine.hit.enter ? fromOther : fromMine;
+    return fromMine ?? fromOther;
   };
 
   const lyingRoom = (): number | null => {
@@ -206,14 +221,19 @@ export function createCatPlayFlow(options: CatPlayFlowOptions): CatPlayFlow {
 
   const flow: CatPlayFlow = {
     tap(origin, reach) {
-      const picked = pickedFrom(origin, reach);
-      if (!picked) return false;
-      if (options.leaving()) return true;
-      options.openMenu({ title: titleFor(picked), choices: choicesFor(picked), pick: (kind) => request(picked, kind) });
-      return true;
+      const found = pickedFrom(origin, reach);
+      if (!found) return null;
+      return {
+        hit: found.hit,
+        open: () => {
+          const picked = found.pick();
+          if (options.leaving()) return;
+          options.openMenu({ title: titleFor(picked), choices: choicesFor(picked), pick: (kind) => request(picked, kind) });
+        },
+      };
     },
     longPress(origin, reach) {
-      const picked = pickedFrom(origin, reach);
+      const picked = pickedFrom(origin, reach)?.pick();
       if (!picked) return false;
       const pet = choicesFor(picked).find((choice) => choice.kind === "pet");
       if (pet && !pet.enabled) {

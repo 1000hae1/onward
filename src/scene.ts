@@ -68,6 +68,8 @@ import { buildWinter } from "./ward/winter";
 import { fetchGuestbook, forgetVisitToken, takeVisitToken } from "./net/guestbook-api";
 import type { GuestbookMessage, OwnerGuestbook } from "./guestbook/owner-panel";
 import { createAppleTree } from "./ward/apple-tree-view";
+import { createGuestbookOpener } from "./guestbook/opener";
+import { createTreeStatus } from "./ui/tree-status";
 import { VISIT_BUSY_TEXT, VISIT_CLOSED_TEXT, visitorArrivedText, visitTitle } from "../shared/visit-rules";
 import type { DeniedReason } from "../shared/protocol";
 import { CAT_NOT_LYING_TEXT, CAT_PET_ONLY_TEXT, CAT_REST_TEXT } from "../shared/cat-play-rules";
@@ -250,6 +252,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   const remoteLabels = document.querySelector<HTMLElement>("#remote-labels");
   const offerings = createOfferings(scene, softCircle);
   const myHeadPoint = new Vector3();
+  const treeTopPoint = new Vector3();
   const myHead = () => {
     const head = player.headWorld(myHeadPoint);
     return head ? { x: head.x, y: head.y, z: head.z } : { x: player.x, y: 1, z: player.z };
@@ -282,25 +285,51 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   let ownerGuestbook: OwnerGuestbook | null = null;
   /** 아직 화면을 불러오는 중에 온 방명록이에요. 불러오면 바로 채워요. */
   let pendingGuestbook: GuestbookMessage | null = null;
-  /** 방명록 화면은 처음 열 때 따로 불러와요. 방명록 링크 화면과 Three.js를 나눠 두려고요. */
-  const openOwnerGuestbook = (): void => {
-    if (ownerGuestbook) {
-      ownerGuestbook.open();
-      return;
-    }
+  /**
+   * 방명록 화면은 처음 열 때 따로 불러와요. 방명록 링크 화면과 Three.js를 나눠 두려고요.
+   * 나무가 보이기 시작하면 미리 불러 둬서, 누를 때는 서버 답만 기다려요.
+   */
+  let panelLoading: Promise<void> | null = null;
+  const loadOwnerPanel = (): Promise<void> => {
+    if (ownerGuestbook) return Promise.resolve();
     const root = element("guestbook");
-    if (!root) return;
-    void import("./guestbook/owner-panel").then(({ createOwnerGuestbook }) => {
-      ownerGuestbook ??= createOwnerGuestbook(root, {
-        nickname: () => current.nickname,
-        request: (action) => client.send({ type: "guestbook", action }),
-        hide: (appleId) => client.send({ type: "hide-apple", appleId }),
-        onClose: () => undefined,
-      });
-      if (pendingGuestbook) ownerGuestbook.update(pendingGuestbook);
-      pendingGuestbook = null;
-      ownerGuestbook.open();
-    });
+    if (!root) return Promise.reject(new Error("no guestbook root"));
+    panelLoading ??= import("./guestbook/owner-panel").then(
+      ({ createOwnerGuestbook }) => {
+        ownerGuestbook ??= createOwnerGuestbook(root, {
+          nickname: () => current.nickname,
+          request: (action) => client.send({ type: "guestbook", action }),
+          hide: (appleId) => client.send({ type: "hide-apple", appleId }),
+          onClose: () => undefined,
+        });
+        if (pendingGuestbook) ownerGuestbook.update(pendingGuestbook);
+        pendingGuestbook = null;
+      },
+      (error: unknown) => {
+        // 다음에 누르면 다시 받아요.
+        panelLoading = null;
+        throw error;
+      },
+    );
+    return panelLoading;
+  };
+  const treeStatus = createTreeStatus(document.body);
+  const guestbookOpener = createGuestbookOpener({
+    online: () => client.online,
+    now: () => performance.now(),
+    request: () => client.send({ type: "guestbook", action: "info" }),
+    loadPanel: loadOwnerPanel,
+    show: (message) => ownerGuestbook?.open(message),
+    status: (text, busy) => {
+      treeStatus.set(text, busy);
+      appleTree.setBusy(busy);
+    },
+    toast: (text) => toast(text),
+  });
+  /** 사과나무를 누르거나 설정에서 열어요. 이미 열려 있거나 기다리는 중이면 다시 묻지 않아요. */
+  const openOwnerGuestbook = (): void => {
+    if (ownerGuestbook?.isOpen) return;
+    guestbookOpener.start(performance.now());
   };
   const morningWindows = createMorningWindows(scene);
   /** 테스트용 ?time=morning이면 이 화면에서만 모든 창문을 열어 둬요. 서버의 아침 판단은 그대로예요. */
@@ -347,20 +376,30 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   /** 고양이와 놀기예요. 연결을 만든 뒤 이어 줘요. */
   let catFlow: CatPlayFlow | null = null;
   player.setLongPress((origin, reach) => catFlow?.longPress(origin, reach) ?? false);
-  player.setTapFilter((origin, reach) => {
-    if (catFlow?.tap(origin, reach)) return true;
+  // 누를 수 있는 것들이에요. 침대와 벤치는 controls가 직접 살펴요. 가장 앞에 맞은 것 하나만 반응해요.
+  player.setTapSources([
+    (origin, reach) => {
+      const cat = catFlow?.tap(origin, reach);
+      return cat ? { layer: "object", ...cat.hit, value: cat.open } : null;
+    },
     // 창가 화분을 누르면 이 병실에 모인 평안을 알려 줘요. 그 병실 안에 있을 때만이에요.
-    const planterRoom = planters.tap(origin, reach);
-    if (planterRoom !== null && roomAt(player.walkX, player.walkZ)?.index === planterRoom) {
-      toast(planterText(planters.total(planterRoom)));
-      return true;
-    }
+    (origin, reach) => {
+      const planter = planters.tap(origin, reach);
+      if (!planter || roomAt(player.walkX, player.walkZ)?.index !== planter.room) return null;
+      return { layer: "object", ...planter.hit, value: () => toast(planterText(planters.total(planter.room))) };
+    },
     // 다른 동물을 누르면 메뉴가 나와요. 서버에 닿아 있을 때만이에요.
-    const guest = client.online ? remotes.tap(origin, reach) : null;
-    if (!guest || !actionBar) return false;
-    openPersonMenu(guest);
-    return true;
-  });
+    (origin, reach) => {
+      if (!client.online || !actionBar) return null;
+      const found = remotes.tap(origin, reach);
+      return found ? { layer: "object", ...found.hit, value: () => openPersonMenu(found.guest) } : null;
+    },
+    // 내 침대 옆 사과나무를 누르면 바로 "내 사과나무"를 열어요. 걸어가지 않아요.
+    (origin, reach) => {
+      const hit = appleTree.tap(origin, reach);
+      return hit ? { layer: "object", ...hit, value: () => openOwnerGuestbook() } : null;
+    },
+  ]);
   /** 다른 동물 메뉴를 열어요. 그 동물을 누르거나, 그분의 침대를 눌렀을 때예요. */
   const openPersonMenu = (guest: Guest): void => {
     if (!actionBar) return;
@@ -724,6 +763,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     },
     onDenied(denied) {
       if (denied.action === "cat" && catFlow?.onDenied(denied.reason)) return;
+      // 사과나무를 여는 중에 거절되면 기다림을 풀고 "다시 눌러 주세요"를 보여요.
+      if (denied.action === "guestbook" && guestbookOpener.denied(performance.now())) return;
       if (denied.action === "discharge") {
         toast("내 침대를 고른 뒤 퇴원할 수 있어요.");
         return;
@@ -768,6 +809,8 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     onGuestbook(message) {
       myTree = { active: message.active, count: message.count };
       appleTree.setTree(myTree);
+      // 사과나무를 눌러 기다리던 답이면 그 내용으로 화면을 열어요.
+      if (guestbookOpener.receive(message)) return;
       if (ownerGuestbook) ownerGuestbook.update(message);
       else pendingGuestbook = message;
     },
@@ -1303,6 +1346,20 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     offerings.update(dt, reduceMotion.matches);
     planters.update(dt, reduceMotion.matches);
     appleTree.setBed(visitingNow ? null : player.lyingBed);
+    appleTree.update(dt, reduceMotion.matches);
+    guestbookOpener.update(performance.now());
+    const treeTop = appleTree.top(treeTopPoint);
+    // 나무가 보이기 시작하면 "내 사과나무" 화면 코드를 미리 받아 둬요.
+    if (treeTop && !ownerGuestbook && !panelLoading) loadOwnerPanel().catch(() => undefined);
+    if (treeStatus.shown) {
+      const screen = treeTop?.project(camera);
+      const onScreen = screen && screen.z < 1 && Math.abs(screen.x) <= 0.95 && Math.abs(screen.y) <= 0.95;
+      treeStatus.place(
+        onScreen
+          ? { x: ((screen.x + 1) / 2) * window.innerWidth, y: ((1 - screen.y) / 2) * window.innerHeight }
+          : null,
+      );
+    }
     morningWindows.update(dt, reduceMotion.matches);
     glows.update(dt, reduceMotion.matches);
     moments?.update(dt);

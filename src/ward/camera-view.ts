@@ -8,6 +8,11 @@ export interface Point3 {
 
 /** 선분 a→b가 상자에 처음 닿는 지점을 0~1 비율로 돌려줘요. 닿지 않으면 null이에요. */
 function firstHit(a: Point3, b: Point3, box: WallBox): number | null {
+  return span(a, b, box)?.enter ?? null;
+}
+
+/** 선분 a→b가 상자에 들어가고 나오는 비율이에요. 닿지 않으면 null이에요. */
+function span(a: Point3, b: Point3, box: WallBox): { enter: number; exit: number } | null {
   let enter = 0;
   let exit = 1;
   const axes = [
@@ -26,7 +31,7 @@ function firstHit(a: Point3, b: Point3, box: WallBox): number | null {
     exit = Math.min(exit, Math.max(t1, t2));
     if (enter > exit) return null;
   }
-  return enter;
+  return { enter, exit };
 }
 
 /** a에서 b까지 가는 동안 벽에 처음 닿는 비율을 돌려줘요. 막히지 않으면 1이에요. */
@@ -39,6 +44,32 @@ export function firstBlocked(a: Point3, b: Point3, boxes: readonly WallBox[]): n
   return nearest;
 }
 
+/** 시선이 상자에 들어간 비율(enter)과 나온 비율(exit)이에요. index는 고른 상자 번호예요. */
+export interface BoxHit {
+  index: number;
+  enter: number;
+  exit: number;
+}
+
+/** a에서 b로 가는 시선에 가장 먼저 닿는 상자와 그 구간을 돌려줘요. 벽에 먼저 막히면 null이에요. */
+export function hitBox(
+  a: Point3,
+  b: Point3,
+  targets: readonly WallBox[],
+  walls: readonly WallBox[],
+): BoxHit | null {
+  let best: BoxHit | null = null;
+  let nearest = firstBlocked(a, b, walls);
+  targets.forEach((box, index) => {
+    const hit = span(a, b, box);
+    if (hit !== null && hit.enter < nearest) {
+      nearest = hit.enter;
+      best = { index, enter: hit.enter, exit: hit.exit };
+    }
+  });
+  return best;
+}
+
 /** a에서 b로 가는 시선에 가장 먼저 닿는 상자 번호를 돌려줘요. 벽에 먼저 막히면 null이에요. */
 export function pickBox(
   a: Point3,
@@ -46,16 +77,7 @@ export function pickBox(
   targets: readonly WallBox[],
   walls: readonly WallBox[],
 ): number | null {
-  let best: number | null = null;
-  let nearest = firstBlocked(a, b, walls);
-  targets.forEach((box, index) => {
-    const hit = firstHit(a, b, box);
-    if (hit !== null && hit < nearest) {
-      nearest = hit;
-      best = index;
-    }
-  });
-  return best;
+  return hitBox(a, b, targets, walls)?.index ?? null;
 }
 
 /**

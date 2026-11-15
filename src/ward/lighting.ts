@@ -15,7 +15,8 @@ import type { TimeSlot } from "./time-of-day";
 
 const TRANSITION_SECONDS = 6;
 const FOCUS_FOLLOW_RATE = 2.5;
-const ROOM_LIGHT_Y = 3.1;
+/** 천장등 빛이 나오는 높이예요. 천장보다 조금 아래라 바닥까지 고르게 닿아요. */
+const ROOM_LIGHT_Y = 3.6;
 const NURSE_LIGHT_DISTANCE = 8;
 const FOG_NEAR = 50;
 const FOG_FAR = 230;

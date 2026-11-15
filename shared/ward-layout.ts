@@ -37,16 +37,19 @@ export interface WallBox extends Rect {
   maxY: number;
 }
 
-export const WALL_HEIGHT = 3.6;
+/** 천장 높이예요. 동물들이 답답하지 않게 넉넉해요. */
+export const WALL_HEIGHT = 5;
 export const WALL_THICKNESS = 0.2;
-export const FLOOR_HEIGHT = 4;
+/** 밖에서 보이는 한 층의 높이예요. 천장(WALL_HEIGHT) 위로 바닥 두께만큼 더해요. */
+export const FLOOR_HEIGHT = 5.6;
 export const FLOOR_COUNT = 4;
 /** 밖에서 보이는 건물 높이예요. 들어갈 수 있는 곳은 1층뿐이에요. */
 export const BUILDING_HEIGHT = FLOOR_HEIGHT * FLOOR_COUNT;
 
 export const ROOM: Rect = { minX: -3.5, maxX: 3.5, minZ: -5, maxZ: 5 };
-export const DOOR = { minX: -0.7, maxX: 0.7, minZ: 5, maxZ: 5.2, height: 2.4 };
-export const WINDOW = { minX: -2.4, maxX: 2.4, minY: 0.9, maxY: 2.9 };
+/** 병실 문이에요. 동물이 지나가도 답답하지 않게 넓고 높아요. */
+export const DOOR = { minX: -1.05, maxX: 1.05, minZ: 5, maxZ: 5.2, height: 3.6 };
+export const WINDOW = { minX: -2.4, maxX: 2.4, minY: 1, maxY: 3.9 };
 
 const CORRIDOR_HALF_WIDTH = 1.4;
 const ROOM_CENTER_X = CORRIDOR_HALF_WIDTH + WALL_THICKNESS + ROOM.maxZ;
@@ -80,9 +83,9 @@ export const ENTRANCE = { minX: -1.5, maxX: 1.5, minZ: LOBBY.maxZ, maxZ: BUILDIN
 /** 현관 앞마당이에요. 지금은 이 안에서만 걸을 수 있어요. */
 export const YARD: Rect = { minX: -9, maxX: 9, minZ: BUILDING.maxZ, maxZ: 42 };
 /** 복도 끝의 큰 창이에요. x와 높이 범위예요. */
-export const CORRIDOR_WINDOW = { minX: -1.1, maxX: 1.1, minY: 0.6, maxY: 3 };
+export const CORRIDOR_WINDOW = { minX: -1.1, maxX: 1.1, minY: 0.6, maxY: 4 };
 /** 복도와 로비 사이 위쪽 벽이 시작되는 높이예요. */
-export const HEADER_Y = 3;
+export const HEADER_Y = 4.2;
 
 const ROOM_SLOTS = [
   { number: 101, side: -1, z: ROWS_Z[0] },
@@ -148,7 +151,7 @@ export const FRIDGE_WIDTH = 0.6;
 export const FRIDGE_DEPTH = 0.6;
 export const FRIDGE_HEIGHT = 1.35;
 /** 침대 둘레 커튼 레일의 높이예요. 그 위는 천장까지 막대로 이어져요. */
-export const CURTAIN_RAIL_Y = 2.8;
+export const CURTAIN_RAIL_Y = 3.6;
 /** 침대 가운데에서 레일까지의 거리예요. */
 export const CURTAIN_RAIL_SIDE = 1.35;
 /** 레일이 끝나는 침대 발치 쪽 위치예요. 병실 가운데에서 잰 거리예요. */
@@ -171,7 +174,7 @@ const SLEEP_LAMP_LOCAL_X = ROOM.maxX - 0.07;
 const BED_APPROACH_LOCAL_X = 1.9;
 const BED_APPROACH_OFFSET_Z = 0.8;
 const BED_REST_LOCAL_X = -0.19;
-const BED_TAP_HEIGHT = 1.1;
+const BED_TAP_HEIGHT = 1.2;
 
 const placeInRoom = (
   room: WardRoom,
@@ -349,18 +352,51 @@ export function bedRestYaw(bed: BedPlacement): number {
   return bed.rotationY + Math.PI / 2;
 }
 
-/** 탭으로 침대를 고르는 상자예요. 누운 아바타를 눌러도 잡히도록 위로 넉넉해요. */
-export const BED_BOXES: readonly WallBox[] = BEDS.map((bed) => ({
-  minX: bed.x - BED_WIDTH / 2,
-  maxX: bed.x + BED_WIDTH / 2,
-  minZ: bed.z - BED_LENGTH / 2,
-  maxZ: bed.z + BED_LENGTH / 2,
-  minY: 0,
-  maxY: BED_TAP_HEIGHT,
-}));
+/**
+ * 탭으로 침대를 고르는 보이지 않는 상자예요. 휴대폰에서 누르기 쉽게 침대 모양보다 넉넉해요.
+ * 누운 아바타를 눌러도 잡히도록 위로도 넉넉해요.
+ * 문병객이 서는 곁(+z)과 발치(병실 가운데 쪽)로 많이 넓히고, 협탁과 사과나무가 있는 곁(-z)은 조금만 넓혀요.
+ * 옆 침대와는 2m 넘게 떨어져 있어서 겹치지 않아요.
+ */
+export const BED_TAP_PAD = { foot: 0.25, head: 0.05, aisle: 0.3, nightstand: 0.1 } as const;
+
+export function bedTapBox(bed: BedPlacement): WallBox {
+  const { sign, z } = bedLocal(bed.index);
+  const room = ROOMS[bed.roomIndex];
+  // 침대 길이는 병실 안쪽 x 방향이에요. sign은 머리가 있는 벽 쪽이에요.
+  const footX = sign * (BED_LOCAL_X - BED_LENGTH / 2 - BED_TAP_PAD.foot);
+  const headX = sign * (BED_LOCAL_X + BED_LENGTH / 2 + BED_TAP_PAD.head);
+  const minZ = z - BED_WIDTH / 2 - BED_TAP_PAD.nightstand;
+  const maxZ = z + BED_WIDTH / 2 + BED_TAP_PAD.aisle;
+  const corners = [
+    roomToWorld(room, footX, minZ),
+    roomToWorld(room, footX, maxZ),
+    roomToWorld(room, headX, minZ),
+    roomToWorld(room, headX, maxZ),
+  ];
+  return {
+    minX: Math.min(...corners.map((c) => c.x)),
+    maxX: Math.max(...corners.map((c) => c.x)),
+    minZ: Math.min(...corners.map((c) => c.z)),
+    maxZ: Math.max(...corners.map((c) => c.z)),
+    minY: 0,
+    maxY: BED_TAP_HEIGHT,
+  };
+}
+
+export const BED_BOXES: readonly WallBox[] = BEDS.map(bedTapBox);
 
 /** 침대 위 이불의 높이예요. 고양이가 앉는 높이예요. */
 export const BED_SURFACE_Y = 0.645;
+/**
+ * 눈에 보이는 침대 몸통이에요(이불과 베개까지). 탭할 때 침대가 다른 것을 가리는지 볼 때만 써요.
+ * 누르는 상자(BED_BOXES)는 이보다 넉넉해요.
+ */
+export const BED_BODY_BOXES: readonly WallBox[] = BEDS.map((bed) => ({
+  ...rectAround(bed.x, bed.z, BED_WIDTH / 2, BED_LENGTH / 2),
+  minY: 0,
+  maxY: BED_SURFACE_Y + 0.12,
+}));
 const BED_FOOT_LOCAL_X = 0.72;
 const BED_MIDDLE_LOCAL_X = 0.2;
 const CAT_CURL_LOCAL_X = 2.45;

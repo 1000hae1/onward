@@ -1,6 +1,7 @@
 import { Vector3 } from "three";
 import type { Camera, Object3D } from "three";
-import { pickBox } from "../ward/camera-view";
+import { hitBox } from "../ward/camera-view";
+import type { TapHit } from "../ward/tap-pick";
 import { blessingText } from "../../shared/gestures";
 import type { Guest, WardEvent } from "../../shared/protocol";
 import {
@@ -140,9 +141,9 @@ export interface RemoteGuests {
   /** 지금 함께 있는 사람들이에요. 오늘 만난 사람 목록에 더할 때 써요. */
   guests(): Guest[];
   /** 누른 곳에 다른 동물이 있으면 그 사람이에요. 벽에 가리면 null이에요. */
-  tap(origin: Vector3, reach: Vector3): Guest | null;
+  tap(origin: Vector3, reach: Vector3): { guest: Guest; hit: TapHit } | null;
   /** 누른 시선에 다른 사람이 데리고 다니는 고양이가 있으면 그 주인이에요. */
-  tapCat(origin: Vector3, reach: Vector3): { owner: Guest; x: number; z: number } | null;
+  tapCat(origin: Vector3, reach: Vector3): { hit: TapHit; pick(): { owner: Guest; x: number; z: number } } | null;
   /**
    * 고양이 놀이를 그려요. 그 사람의 고양이면 그 고양이가 놀고, 노는 사람이 다른 사람이면 손동작을 해요.
    * face는 노는 사람이 바라볼 고양이 자리예요.
@@ -706,11 +707,16 @@ export function createRemoteGuests(
         const { x, z } = remote.companion.moves;
         return { minX: x - CAT_TAP_HALF, maxX: x + CAT_TAP_HALF, minZ: z - CAT_TAP_HALF, maxZ: z + CAT_TAP_HALF, minY: 0, maxY: CAT_TAP_HEIGHT };
       });
-      const picked = pickBox(origin, reach, boxes, WALL_BOXES);
+      const picked = hitBox(origin, reach, boxes, WALL_BOXES);
       if (picked === null) return null;
-      const remote = shown[picked];
-      remote.companion.moves.notice = 0;
-      return { owner: remote.guest, x: remote.companion.moves.x, z: remote.companion.moves.z };
+      const remote = shown[picked.index];
+      return {
+        hit: picked,
+        pick: () => {
+          remote.companion.moves.notice = 0;
+          return { owner: remote.guest, x: remote.companion.moves.x, z: remote.companion.moves.z };
+        },
+      };
     },
     catPlay(event, face, serverNow) {
       const owner = remotes.get(event.catId);
@@ -753,8 +759,8 @@ export function createRemoteGuests(
         minY: 0,
         maxY: GUEST_TAP_HEIGHT,
       }));
-      const picked = pickBox(origin, reach, boxes, WALL_BOXES);
-      return picked === null ? null : shown[picked].guest;
+      const picked = hitBox(origin, reach, boxes, WALL_BOXES);
+      return picked === null ? null : { guest: shown[picked.index].guest, hit: picked };
     },
   };
 }

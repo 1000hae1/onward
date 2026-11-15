@@ -55,10 +55,10 @@ test("병동 바닥에서는 가구와 바깥을 피해요", () => {
   const bed = OBSTACLES[0];
   assert.equal(wardWalkable({ x: (bed.minX + bed.maxX) / 2, z: (bed.minZ + bed.maxZ) / 2 }), false);
   assert.equal(wardWalkable({ x: 500, z: 500 }), false);
-  // 문틀은 좁아서 복도 쪽 사람이 문 가운데에 서면 양옆이 막혀요.
+  // 병실 문은 넉넉해서 문 가운데를 지나는 동안에도 고양이가 곁에서 함께 지나가요.
   const door = DOOR_RECTS[0];
   const middle = { x: (door.minX + door.maxX) / 2, z: (door.minZ + door.maxZ) / 2 };
-  assert.equal(chooseSideSpot(middle, Math.PI / 2, 1, wardWalkable), null);
+  assert.notEqual(chooseSideSpot(middle, Math.PI / 2, 1, wardWalkable), null);
   assert.ok(CORRIDOR.maxX > CORRIDOR.minX);
 });
 

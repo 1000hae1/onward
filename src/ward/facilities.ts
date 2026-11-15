@@ -124,7 +124,7 @@ function buildNurseStation(parent: Object3D): MeshBasicMaterial {
   ]);
 
   // 천장에서 내려온 간판이에요.
-  const signY = 2.75;
+  const signY = 3.3;
   const signZ = station.maxZ - 0.3;
   addSign(parent, "간호사실", centerX, signY, signZ, 3);
 

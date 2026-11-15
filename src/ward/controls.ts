@@ -58,11 +58,12 @@ import {
   enteredThroughFront,
   firstBlocked,
   glancePhase,
-  pickBox,
+  hitBox,
   pullCamera,
   turnToward,
 } from "./camera-view";
 import {
+  BED_BODY_BOXES,
   BED_BOXES,
   BENCH_BOXES,
   bedApproach,
@@ -83,8 +84,14 @@ import {
   WALL_BOXES,
   YARD_BENCH,
 } from "../../shared/ward-layout";
+import type { WallBox } from "../../shared/ward-layout";
 import { createNavGrid, stepAlong } from "./movement";
 import type { NavGrid, Point } from "./movement";
+import { chooseTap, isTap, TAP_MAX_MOVE_PX } from "./tap-pick";
+import type { TapCandidate } from "./tap-pick";
+
+/** 누를 수 있는 것 하나예요. 시선에 맞으면 맞은 구간과 고르면 할 일을 돌려줘요. 맞지 않으면 null이에요. */
+export type TapSource = (origin: Vector3, reach: Vector3) => TapCandidate<() => void> | null;
 
 const WALK_SPEED = 1.8;
 /** 카메라가 바라보는 높이예요. 아바타 키보다 조금 위예요. */
@@ -104,6 +111,14 @@ const CAMERA_MIN_DISTANCE = 1.4;
 const CAMERA_MAX_DISTANCE = 8;
 /** 벽 앞으로 당긴 카메라가 벽에서 떨어지는 거리예요. */
 const CAMERA_WALL_CLEARANCE = 0.25;
+/**
+ * 카메라를 막는 것들이에요. 벽과 천장에 바닥을 더해요. 멀리서 올려다보면 카메라가 바닥 아래로 내려가
+ * 땅 밑이 보였어요. 바닥 바로 위로 당겨요.
+ */
+const CAMERA_BLOCKERS: readonly WallBox[] = [
+  ...WALL_BOXES,
+  { minX: -1000, maxX: 1000, minZ: -1000, maxZ: 1000, minY: -10, maxY: 0.1 },
+];
 /** 카메라가 이만큼 가까워지면 캐릭터에 가리지 않게 캐릭터를 숨겨요. */
 const HIDE_PLAYER_DISTANCE = 0.6;
 /** 걷는 동안 카메라가 캐릭터 뒤로 돌아가는 빠르기예요. */
@@ -118,8 +133,6 @@ const NURSE_STATION_SPOT = {
   x: NURSE_STATION_CENTER_X,
   z: (NURSE_STATION.minZ + NURSE_STATION.maxZ) / 2,
 };
-const TAP_MAX_MOVE_PX = 8;
-const TAP_MAX_MS = 450;
 /** 손가락으로 이만큼 누르고 있으면 길게 누른 거예요. */
 export const LONG_PRESS_MS = 500;
 const MARKER_SECONDS = 0.9;
@@ -211,8 +224,11 @@ export interface PlayerControls {
   setOwnedBed(bed: number | null): void;
   /** 현관으로 병동에 들어설 때마다 불러요. 간호사가 인사해요. */
   setLobbyListener(listener: (() => void) | null): void;
-  /** 침대와 바닥보다 먼저 탭을 살펴봐요. true를 돌려주면 걷지 않아요. 고양이가 써요. */
-  setTapFilter(filter: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
+  /**
+   * 침대·벤치 말고 누를 수 있는 것들이에요(다른 동물, 고양이, 화분, 사과나무).
+   * 누르면 시선에 가장 앞에 맞은 것 하나만 반응해요. 아무것도 맞지 않으면 바닥으로 걸어가요.
+   */
+  setTapSources(sources: readonly TapSource[]): void;
   /** 휴대폰에서 길게 누르면 불러요. true를 돌려주면 손을 뗄 때 탭으로 보지 않아요. */
   setLongPress(handler: ((origin: Vector3, reach: Vector3) => boolean) | null): void;
   /** 누워 있으면 일어난 뒤에, 아니면 바로 action을 해요. */
@@ -367,7 +383,7 @@ export function createPlayerControls(
   let facingCamera = false;
   let inputEnabled = true;
   let bedPicker: ((bed: number) => void) | null = null;
-  let tapFilter: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
+  let tapSources: readonly TapSource[] = [];
   let longPress: ((origin: Vector3, reach: Vector3) => boolean) | null = null;
   let afterUp: (() => void) | null = null;
   /** walkToSpot으로 가는 중이면 도착해서 할 일이에요. */
@@ -622,29 +638,55 @@ export function createPlayerControls(
     return { origin, direction, reach: origin.clone().addScaledVector(direction, TAP_REACH) };
   };
 
+  /** 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요. */
+  const freshOrder = (): number => {
+    afterUp = null;
+    afterWalk = null;
+    return ++askToken;
+  };
+
   const handleTap = (clientX: number, clientY: number): void => {
     if (!inputEnabled) return;
     const { origin, direction, reach } = rayAt(clientX, clientY);
-    const bed = pickBox(origin, reach, BED_BOXES, WALL_BOXES);
+    const bedHit = hitBox(origin, reach, BED_BOXES, WALL_BOXES);
     if (bedPicker) {
-      if (bed !== null) bedPicker(bed);
+      if (bedHit) bedPicker(bedHit.index);
       return;
     }
-    if (tapFilter?.(origin, reach)) return;
-    // 새로 누른 곳으로 가요. 일어난 뒤에 하려던 동작은 잊어요.
-    afterUp = null;
-    afterWalk = null;
-    const token = ++askToken;
-    if (bed !== null) {
-      chooseBed(bed);
-      return;
+    const candidates: TapCandidate<() => void>[] = [];
+    for (const source of tapSources) {
+      const candidate = source(origin, reach);
+      if (candidate) candidates.push(candidate);
     }
-    const bench = pickBox(origin, reach, BENCH_BOXES, WALL_BOXES);
-    if (bench !== null) {
-      chooseBench(bench, token);
+    if (bedHit) {
+      const body = hitBox(origin, reach, [BED_BODY_BOXES[bedHit.index]], WALL_BOXES);
+      candidates.push({
+        layer: "area",
+        enter: bedHit.enter,
+        cover: body?.enter ?? null,
+        value: () => {
+          freshOrder();
+          chooseBed(bedHit.index);
+        },
+      });
+    }
+    const benchHit = hitBox(origin, reach, BENCH_BOXES, WALL_BOXES);
+    if (benchHit) {
+      candidates.push({
+        layer: "area",
+        enter: benchHit.enter,
+        cover: benchHit.enter,
+        value: () => chooseBench(benchHit.index, freshOrder()),
+      });
+    }
+    const chosen = chooseTap(candidates);
+    if (chosen) {
+      chosen.value();
       return;
     }
 
+    // 누를 수 있는 것이 없으면 바닥이나 벽 앞으로 걸어가요. 침대나 확인 창은 뜨지 않아요.
+    freshOrder();
     const tapped = tappedSpot(origin, direction);
     const goal = tapped && nav.nearestFree(tapped);
     if (!goal) return;
@@ -654,7 +696,8 @@ export function createPlayerControls(
   // 여러 손가락이 닿았던 제스처는 탭으로 보지 않아요.
   const activePointers = new Set<number>();
   let dragging = false;
-  let tapStart: { x: number; y: number; time: number; id: number } | null = null;
+  /** 누르기 시작한 자리와 시간, 그동안 가장 멀리 움직인 거리예요. */
+  let tapStart: { x: number; y: number; time: number; id: number; moved: number } | null = null;
   let pressTimer: ReturnType<typeof setTimeout> | null = null;
   const cancelPress = (): void => {
     if (pressTimer !== null) clearTimeout(pressTimer);
@@ -667,7 +710,7 @@ export function createPlayerControls(
     if (activePointers.size === 2) startZoomFromView();
     tapStart =
       activePointers.size === 1 && event.button === 0
-        ? { x: event.clientX, y: event.clientY, time: event.timeStamp, id: event.pointerId }
+        ? { x: event.clientX, y: event.clientY, time: event.timeStamp, id: event.pointerId, moved: 0 }
         : null;
     cancelPress();
     // 손가락으로 길게 누르면 바로 하는 동작이 있어요(고양이 쓰다듬기).
@@ -686,8 +729,10 @@ export function createPlayerControls(
     if (longPress) event.preventDefault();
   });
   canvas.addEventListener("pointermove", (event) => {
-    if (pressTimer === null || !tapStart || tapStart.id !== event.pointerId) return;
-    if (Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y) > TAP_MAX_MOVE_PX) cancelPress();
+    if (!tapStart || tapStart.id !== event.pointerId) return;
+    // 한 번이라도 멀리 움직였으면 손가락을 제자리로 돌려 와도 화면 돌리기예요.
+    tapStart.moved = Math.max(tapStart.moved, Math.hypot(event.clientX - tapStart.x, event.clientY - tapStart.y));
+    if (tapStart.moved >= TAP_MAX_MOVE_PX) cancelPress();
   });
   canvas.addEventListener("pointerup", (event) => {
     cancelPress();
@@ -696,11 +741,19 @@ export function createPlayerControls(
     const start = tapStart;
     if (!start || start.id !== event.pointerId) return;
     tapStart = null;
-    const moved = Math.hypot(event.clientX - start.x, event.clientY - start.y);
-    if (moved <= TAP_MAX_MOVE_PX && event.timeStamp - start.time <= TAP_MAX_MS) {
-      handleTap(event.clientX, event.clientY);
-    }
+    const moved = Math.max(start.moved, Math.hypot(event.clientX - start.x, event.clientY - start.y));
+    // 누른 자리(start)로 판정해요. 손가락을 뗄 때 조금 밀려도 누르려던 것을 골라요.
+    if (isTap(moved, event.timeStamp - start.time)) handleTap(start.x, start.y);
   });
+  // 손가락을 떼면 브라우저가 같은 자리에 click을 한 번 더 보내요. 탭으로 메뉴가 열리며 버튼이 그 자리로 밀려 오면
+  // 그 버튼(예: 잠들기)이 눌려 버려요. 화면(canvas)에서 시작한 터치는 click을 만들지 않게 해요.
+  canvas.addEventListener(
+    "touchend",
+    (event) => {
+      if (event.cancelable) event.preventDefault();
+    },
+    { passive: false },
+  );
   canvas.addEventListener("pointercancel", (event) => {
     cancelPress();
     activePointers.delete(event.pointerId);
@@ -797,8 +850,8 @@ export function createPlayerControls(
     setLongPress(handler) {
       longPress = handler;
     },
-    setTapFilter(filter) {
-      tapFilter = filter;
+    setTapSources(sources) {
+      tapSources = sources;
     },
     whenUp(action) {
       if (canStartGesture(flow)) {
@@ -1052,7 +1105,7 @@ export function createPlayerControls(
 
       controls.update(dt);
 
-      const pulled = pullCamera(controls.target, desired, WALL_BOXES, CAMERA_WALL_CLEARANCE);
+      const pulled = pullCamera(controls.target, desired, CAMERA_BLOCKERS, CAMERA_WALL_CLEARANCE);
       camera.position.set(pulled.x, pulled.y, pulled.z);
       viewDistance = easeDistance(
         viewDistance,

@@ -4,7 +4,8 @@ import { blobs, merged } from "../avatar/shapes.ts";
 import type { BlobSpec } from "../avatar/species";
 import { planterSpot, ROOMS, WALL_BOXES } from "../../shared/ward-layout";
 import { planterStage } from "../../shared/planter";
-import { pickBox } from "./camera-view";
+import { hitBox } from "./camera-view";
+import type { TapHit } from "./tap-pick";
 
 const POT = "#c98a62";
 const POT_RIM = "#b97a54";
@@ -100,8 +101,8 @@ export interface PlanterView {
   setTotal(room: number, total: number): void;
   total(room: number): number;
   update(dt: number, stillMotion: boolean): void;
-  /** 누른 곳에 화분이 있으면 그 병실 번호예요. */
-  tap(origin: Vector3, reach: Vector3): number | null;
+  /** 누른 곳에 화분이 있으면 그 병실 번호와 맞은 구간이에요. */
+  tap(origin: Vector3, reach: Vector3): { room: number; hit: TapHit } | null;
 }
 
 /** 병실 창틀마다 놓인 작은 화분이에요. 아무도 오지 않아도 시들지 않아요. */
@@ -172,7 +173,8 @@ export function createPlanters(parent: Object3D): PlanterView {
         minY: spot.y,
         maxY: spot.y + TAP_HEIGHT,
       }));
-      return pickBox(origin, reach, boxes, WALL_BOXES);
+      const picked = hitBox(origin, reach, boxes, WALL_BOXES);
+      return picked === null ? null : { room: picked.index, hit: picked };
     },
   };
 }

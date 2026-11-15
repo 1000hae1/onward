@@ -112,6 +112,39 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   const buttons = document.createElement("div");
   buttons.className = "ward-row action-buttons";
   root.append(sheet, buttons);
+  // 확인 창 뒤에 까는 투명한 막이에요. 떠 있는 동안 뒤의 3D 화면은 눌리지도 돌아가지도 않고, 막을 누르면 창만 닫혀요.
+  const backdrop = document.createElement("div");
+  backdrop.className = "sheet-backdrop";
+  backdrop.hidden = true;
+  backdrop.setAttribute("aria-hidden", "true");
+  // 휴대폰에서는 침대를 누른 손을 떼면 브라우저가 같은 자리에 click을 한 번 더 보내요. 그 사이 막이 깔리면 그 click이
+  // 막에 떨어져 창이 바로 닫혀요. 막 위에서 누르기 시작한 것만 받아요.
+  let backdropPressed = false;
+  // 확인 창의 버튼도 같아요. 창 안에서 누르기 시작한 손가락·마우스의 click만 받아요. 키보드(detail 0)는 그대로 받아요.
+  let sheetPressed = false;
+  sheet.addEventListener("pointerdown", () => {
+    sheetPressed = true;
+  }, true);
+  sheet.addEventListener(
+    "click",
+    (event) => {
+      if (event.detail === 0 || sheetPressed || backdrop.hidden) return;
+      event.stopPropagation();
+      event.preventDefault();
+    },
+    true,
+  );
+  backdrop.addEventListener("pointerdown", () => {
+    backdropPressed = true;
+  });
+  backdrop.addEventListener("click", () => {
+    if (!backdropPressed) return;
+    backdropPressed = false;
+    sheetPressed = false;
+    closeSheet();
+  });
+  backdrop.addEventListener("contextmenu", (event) => event.preventDefault());
+  root.before(backdrop);
 
   let sheetName: string | null = null;
   let toastLeft = 0;
@@ -124,6 +157,8 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
   };
 
   const closeSheet = (): void => {
+    backdrop.hidden = true;
+    root.classList.remove("modal-open");
     sheet.hidden = true;
     sheet.replaceChildren();
     sheetName = null;
@@ -138,11 +173,21 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
     buttons.querySelector<HTMLButtonElement>("button")?.focus();
   });
 
-  const openSheet = (name: string, title: string, children: HTMLElement[], cancelLabel = "그만두기"): void => {
+  /** modal이면 확인 창이에요. 뒤에 막을 깔아요. 침대를 골라야 하는 메뉴는 화면을 눌러야 해서 막을 깔지 않아요. */
+  const openSheet = (
+    name: string,
+    title: string,
+    children: HTMLElement[],
+    cancelLabel = "그만두기",
+    modal = false,
+  ): void => {
     closeSheet();
     sheetName = name;
     sheet.append(createText("p", title), ...children, createButton(cancelLabel, closeSheet));
     sheet.hidden = false;
+    backdrop.hidden = !modal;
+    backdropPressed = false;
+    root.classList.toggle("modal-open", modal);
   };
 
   /** 고양이 메뉴예요. 버튼 앞에 이모지를 붙이고, 할 수 없는 놀이는 이유를 아래에 적어요. */
@@ -178,7 +223,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       closeSheet();
       proceed();
     });
-    openSheet("claim-bed", CLAIM_CONFIRM_TEXT, [yes], CLAIM_NO_TEXT);
+    openSheet("claim-bed", CLAIM_CONFIRM_TEXT, [yes], CLAIM_NO_TEXT, true);
     yes.focus();
   };
 
@@ -188,7 +233,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       closeSheet();
       proceed();
     });
-    openSheet("move-bed", MOVE_CONFIRM_TEXT, [yes], MOVE_NO_TEXT);
+    openSheet("move-bed", MOVE_CONFIRM_TEXT, [yes], MOVE_NO_TEXT, true);
     yes.focus();
   };
 
@@ -351,7 +396,7 @@ export function createActionBar(options: ActionBarOptions): ActionBar {
       }),
     );
     children.push(row);
-    openSheet("discharge", DISCHARGE_CONFIRM_TEXT, children);
+    openSheet("discharge", DISCHARGE_CONFIRM_TEXT, children, undefined, true);
   };
 
   /** 다른 동물 메뉴예요. 닉네임은 textContent로만 넣어요. */
