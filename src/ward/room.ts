@@ -58,7 +58,7 @@ import {
   WALL_HEIGHT,
   WINDOW,
 } from "../../shared/ward-layout";
-import type { WardRoom } from "../../shared/ward-layout";
+import type { Placement, WardRoom } from "../../shared/ward-layout";
 import { addInstances, repeatAt, transform } from "./parts";
 
 const SHADOW_Y = 0.012;
@@ -424,8 +424,9 @@ function buildCorridorRails(parent: Object3D): void {
   addInstances(parent, new RoundedBoxGeometry(0.08, 0.07, 1, 1, 0.03), lambert(RAIL_COLOR), rails);
 }
 
-function buildBeds(parent: Object3D): void {
-  const bases = BEDS.map((bed) => transform(bed.x, 0, bed.z, bed.rotationY));
+/** 침대를 놓아요. 병동은 BEDS 전부이고, 개발용 캐릭터 그림 페이지는 한 개만 놓아요. */
+export function buildBeds(parent: Object3D, beds: readonly Placement[] = BEDS): void {
+  const bases = beds.map((bed) => transform(bed.x, 0, bed.z, bed.rotationY));
   const part = (geometry: BufferGeometry, material: Material, locals: Matrix4[]): void => {
     addInstances(parent, geometry, material, repeatAt(bases, locals));
   };

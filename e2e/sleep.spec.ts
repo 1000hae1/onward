@@ -127,6 +127,8 @@ test("잠든 모습이 다른 사람에게 보이고, 평안은 쌓였다가 깨
       });
     });
     await page.goto(`/?ward=${WARD}&debug=1`);
+    // 처음 온 분이라 소개 카드를 먼저 넘겨요.
+    await page.getByRole("button", { name: "병실로 들어가기" }).click({ timeout: 30_000 });
     const input = page.locator("#entry-nickname");
     await expect(input).toBeVisible({ timeout: 30_000 });
     await input.fill("살금곰");

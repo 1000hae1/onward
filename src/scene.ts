@@ -28,6 +28,8 @@ import { createGate } from "./ui/gate";
 import { createActionBar } from "./ui/action-bar";
 import type { ActionBar } from "./ui/action-bar";
 import { createEntryScreen } from "./ui/entry-screen";
+import { showIntroCard } from "./ui/intro-card";
+import { shouldShowIntro } from "./ui/intro-rules";
 import { createHeadLabels } from "./ui/head-labels";
 import { defaultProfile, loadProfile, saveProfile } from "./ui/profile";
 import type { Profile } from "./ui/profile";
@@ -1075,6 +1077,9 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
         },
         onOpenGuestbook: openOwnerGuestbook,
         onDischarge: () => actionBar?.openDischarge(),
+        onOpenIntro: (done) => {
+          if (introRoot) showIntroCard(introRoot, { source: "settings", onEnter: done });
+        },
         view,
         onViewChange: (next) => {
           const choiceChanged = next.quality !== view.quality;
@@ -1143,6 +1148,7 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
   };
 
   const entryRoot = element("entry");
+  const introRoot = element("intro");
   /** 서버가 닉네임을 받지 않으면 입장 화면을 다시 열어 고칠 수 있게 해요. */
   const reopenEntry = (message?: string): void => {
     if (!entryRoot) return;
@@ -1166,17 +1172,26 @@ export function startScene(canvas: HTMLCanvasElement, health: string): void {
     if (entryRoot) {
       player.setFacingCamera(true);
       player.setInputEnabled(false);
-      createEntryScreen(entryRoot, {
-        initial: profile,
-        onPreview: applyProfile,
-        onEnter: enterWard,
-        message,
-        // 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 같은 분이 돌아온 거예요.
-        returning: savedProfile !== null && loadGuestToken() !== null,
-        ...visitEntry(),
-      });
-      track("entry_view");
-      if (!storageWorks()) notice?.show(NO_STORAGE_TEXT, 8);
+      // 이 기기에 저장된 모습과 서버가 준 토큰이 함께 있으면 같은 분이 돌아온 거예요.
+      const returning = savedProfile !== null && loadGuestToken() !== null;
+      const showEntry = (): void => {
+        createEntryScreen(entryRoot, {
+          initial: profile,
+          onPreview: applyProfile,
+          onEnter: enterWard,
+          message,
+          returning,
+          ...visitEntry(),
+        });
+        track("entry_view");
+        if (!storageWorks()) notice?.show(NO_STORAGE_TEXT, 8);
+      };
+      // 처음 온 분에게는 동물 고르기 앞에 소개 카드를 한 번 보여 줘요. 링크로 온 분은 바로 입장 화면이에요.
+      if (introRoot && shouldShowIntro({ returning, viaLink: visitToken !== null })) {
+        showIntroCard(introRoot, { source: "first", onEnter: showEntry });
+      } else {
+        showEntry();
+      }
     } else {
       enterWard(profile);
     }

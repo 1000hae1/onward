@@ -60,6 +60,8 @@ async function openGuest(browser: Browser, name: string) {
 
 async function enter(page: Page, nickname: string): Promise<void> {
   await page.goto(WARD_URL);
+  // 처음 온 분이라 소개 카드를 먼저 넘겨요.
+  await page.getByRole("button", { name: "병실로 들어가기" }).click({ timeout: 30_000 });
   const input = page.locator("#entry-nickname");
   await expect(input).toBeVisible({ timeout: 30_000 });
   await input.fill(nickname);

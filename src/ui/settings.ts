@@ -3,12 +3,15 @@ import type { ViewPrefs } from "./view-prefs";
 import type { QualityChoice } from "../ward/quality";
 import { createButton, createChoiceRow, createText } from "./widgets";
 import { FEEDBACK_FORM_URL } from "../config";
+import { INTRO_TEXT } from "./intro-rules";
 
 export interface SettingsOptions {
   initial: Profile;
   canUsePersonalActions(): boolean;
   onOpenGuestbook(): void;
   onDischarge(): void;
+  /** [온기병동 소개]를 눌렀어요. 카드를 닫으면 done을 불러 포커스를 [설정] 버튼으로 돌려요. */
+  onOpenIntro(done: () => void): void;
   onChange(profile: Profile): void;
   onOpenChange(open: boolean): void;
   /** 가볍게 보기와 글자 크게예요. 이 기기에만 저장해요. */
@@ -105,6 +108,10 @@ export function createSettings(root: HTMLElement, options: SettingsOptions): Set
       if (!options.canUsePersonalActions()) return;
       setOpen(false);
       options.onDischarge();
+    }),
+    createButton(INTRO_TEXT.settingsLabel, () => {
+      setOpen(false);
+      options.onOpenIntro(() => toggle.focus());
     }),
     feedbackLink(),
     (() => {

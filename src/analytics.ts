@@ -15,6 +15,8 @@ export type FirstActionKind = "bless" | "bow" | "gift" | "lamp";
 export interface AnalyticsEvents {
   loading_start: Record<string, never>;
   loading_done: { load_ms: number };
+  intro_view: { from: "first" | "settings" };
+  intro_enter: { from: "first" | "settings" };
   entry_view: Record<string, never>;
   animal_select: { animal: "rabbit" | "bear" | "penguin" | "otter" | "deer" };
   nickname_edit: { edited: boolean };
@@ -44,6 +46,7 @@ const ALLOWED_WORDS: Readonly<Record<string, readonly string[]>> = {
   kind: ["bless", "bow", "gift", "lamp", "sleep", "cat_play", "bench_sit"],
   role: ["owner", "visitor"],
   method: ["share", "copy"],
+  from: ["first", "settings"],
 };
 const NUMBER_KEYS = new Set(["load_ms"]);
 const BOOLEAN_KEYS = new Set(["edited", "returning"]);

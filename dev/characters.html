@@ -1,0 +1,55 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="robots" content="noindex" />
+<title>캐릭터 그림 뽑기</title>
+<!--
+  개발용 페이지예요. npm run dev에서만 열려요(/dev/characters.html).
+  vite build는 index.html만 묶어서 배포에는 들어가지 않아요.
+-->
+<style>
+  :root { color-scheme: light; }
+  body { margin: 0; font: 14px/1.5 system-ui, sans-serif; background: #f6f3ee; color: #2c2a28; }
+  main { display: flex; flex-wrap: wrap; gap: 24px; padding: 24px 16px; align-items: flex-start; }
+  .preview {
+    width: min(512px, 100%);
+    aspect-ratio: 1;
+    border-radius: 12px;
+    border: 1px solid #ddd5c8;
+    /* 투명한 곳이 보이도록 체크무늬를 깔아요. */
+    background: repeating-conic-gradient(#e9e4dc 0% 25%, #ffffff 0% 50%) 50% / 24px 24px;
+  }
+  .preview canvas { width: 100%; height: 100%; display: block; }
+  .panel { flex: 1 1 320px; max-width: 560px; }
+  h1 { font-size: 18px; margin: 0 0 4px; }
+  h2 { font-size: 14px; margin: 18px 0 8px; color: #6b5f52; }
+  p { margin: 0 0 8px; color: #6b5f52; }
+  .buttons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button {
+    font: inherit; padding: 8px 12px; border-radius: 8px; cursor: pointer;
+    border: 1px solid #cfc4b4; background: #fffdf9; color: inherit;
+  }
+  button:hover { background: #fff3e2; }
+  button:disabled { opacity: .5; cursor: wait; }
+  button.all { background: #5f9e98; border-color: #5f9e98; color: #fff; font-weight: 600; }
+  button.all:hover { background: #4f8a84; }
+  #status { margin-top: 16px; min-height: 1.5em; }
+</style>
+</head>
+<body>
+<main>
+  <div class="preview"><canvas id="shot" width="1024" height="1024"></canvas></div>
+  <div class="panel">
+    <h1>캐릭터 그림 뽑기</h1>
+    <p>버튼을 누르면 배경이 투명한 1024×1024 PNG를 받아요.</p>
+    <div id="groups"></div>
+    <h2>한꺼번에</h2>
+    <div class="buttons"><button class="all" id="all" type="button">전부 받기</button></div>
+    <p id="status" role="status"></p>
+  </div>
+</main>
+<script type="module" src="./character-shots.ts"></script>
+</body>
+</html>

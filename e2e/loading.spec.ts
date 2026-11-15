@@ -37,6 +37,8 @@ test("서버에 닿지 않으면 앉아서 기다리고, 다시 시도하면 병
   blocked = false;
   await page.locator("#loading-retry").click();
   await expect(page.locator("#loading")).toHaveCount(0);
+  // 처음 온 분이라 소개 카드가 먼저 보여요.
+  await page.getByRole("button", { name: "병실로 들어가기" }).click();
   await expect(page.locator("#entry")).toBeVisible();
 });
 

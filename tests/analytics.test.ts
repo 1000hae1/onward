@@ -72,3 +72,9 @@ test("gtag 코드는 방명록 토큰·쿼리·제목을 GA로 보내지 않아�
   // localhost에서는 스크립트를 받지 않아요.
   assert.match(code, /localhost/);
 });
+
+test("소개 카드 이벤트는 어디서 열었는지(first/settings)만 받아요", () => {
+  assert.deepEqual(cleanParams({ from: "first" }), { from: "first" });
+  assert.deepEqual(cleanParams({ from: "settings" }), { from: "settings" });
+  assert.deepEqual(cleanParams({ from: "guestbook" }), {});
+});
