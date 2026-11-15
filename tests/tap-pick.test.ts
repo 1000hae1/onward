@@ -108,10 +108,21 @@ test("침대 옆 바닥을 내려다보며 누르면 넉넉한 히트박스에 �
 });
 
 test("병실 문은 넓고 높아요. 창문, 커튼 레일, 문 위 벽은 천장 아래에 있어요", () => {
-  assert.ok(DOOR.maxX - DOOR.minX >= 2);
+  assert.ok(DOOR.maxX - DOOR.minX >= 2.6);
   assert.ok(DOOR.height >= 3.5);
   assert.ok(DOOR.height < WALL_HEIGHT);
   assert.ok(WINDOW.maxY < WALL_HEIGHT);
   assert.ok(CURTAIN_RAIL_Y < WALL_HEIGHT);
   assert.ok(HEADER_Y < WALL_HEIGHT);
+});
+
+test("병실 안과 문턱은 그 병실이고, 복도는 어느 병실도 아니에요", async () => {
+  const { doorSpots, roomIndexNear, ROOMS, DOOR_RECTS } = await import("../shared/ward-layout.ts");
+  for (const room of ROOMS) {
+    const { inside, outside } = doorSpots(room);
+    assert.equal(roomIndexNear(inside.x, inside.z), room.index);
+    assert.equal(roomIndexNear(outside.x, outside.z), null);
+    const door = DOOR_RECTS[room.index];
+    assert.equal(roomIndexNear((door.minX + door.maxX) / 2, (door.minZ + door.maxZ) / 2), room.index);
+  }
 });

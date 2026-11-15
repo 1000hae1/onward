@@ -47,8 +47,8 @@ export const FLOOR_COUNT = 4;
 export const BUILDING_HEIGHT = FLOOR_HEIGHT * FLOOR_COUNT;
 
 export const ROOM: Rect = { minX: -3.5, maxX: 3.5, minZ: -5, maxZ: 5 };
-/** 병실 문이에요. 동물이 지나가도 답답하지 않게 넓고 높아요. */
-export const DOOR = { minX: -1.05, maxX: 1.05, minZ: 5, maxZ: 5.2, height: 3.6 };
+/** 병실 문이에요. 동물이 지나가도 답답하지 않게 넓고 높아요. 높이에 맞춰 가로도 넉넉해요. */
+export const DOOR = { minX: -1.4, maxX: 1.4, minZ: 5, maxZ: 5.2, height: 3.6 };
 export const WINDOW = { minX: -2.4, maxX: 2.4, minY: 1, maxY: 3.9 };
 
 const CORRIDOR_HALF_WIDTH = 1.4;
@@ -495,6 +495,14 @@ export function roomAt(x: number, z: number): WardRoom | null {
 
 function rectAround(x: number, z: number, halfX: number, halfZ: number): Rect {
   return { minX: x - halfX, maxX: x + halfX, minZ: z - halfZ, maxZ: z + halfZ };
+}
+
+/** 이 자리가 있는 병실 번호예요. 문턱에 서 있어도 그 병실로 봐요. 병실 밖이면 null이에요. */
+export function roomIndexNear(x: number, z: number): number | null {
+  const room = roomAt(x, z);
+  if (room) return room.index;
+  const door = DOOR_RECTS.findIndex((rect) => x >= rect.minX && x <= rect.maxX && z >= rect.minZ && z <= rect.maxZ);
+  return door >= 0 ? ROOMS[door].index : null;
 }
 
 export function roomRect(room: WardRoom): Rect {

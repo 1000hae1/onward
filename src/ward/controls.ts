@@ -31,6 +31,7 @@ import {
   becomeVisitor,
   bedProgress,
   bedTapIntent,
+  canChooseBedFrom,
   canStartGesture,
   FREE,
   getUp,
@@ -77,6 +78,7 @@ import {
   OBSTACLES,
   PLAYER_RADIUS,
   PLAYER_START,
+  roomIndexNear,
   seatApproach,
   seatRest,
   seatYaw,
@@ -658,7 +660,8 @@ export function createPlayerControls(
       const candidate = source(origin, reach);
       if (candidate) candidates.push(candidate);
     }
-    if (bedHit) {
+    // 병실 밖에서는 침대를 고르지 않아요. 바닥을 누른 것처럼 그쪽으로 걸어가기만 해요.
+    if (bedHit && canChooseBedFrom(BEDS[bedHit.index].roomIndex, roomIndexNear(position.x, position.z))) {
       const body = hitBox(origin, reach, [BED_BODY_BOXES[bedHit.index]], WALL_BOXES);
       candidates.push({
         layer: "area",

@@ -5,6 +5,7 @@ import {
   becomeVisitor,
   bedProgress,
   bedTapIntent,
+  canChooseBedFrom,
   canStartGesture,
   FREE,
   tapBed,
@@ -157,4 +158,11 @@ test("처음 고를 때만 쓸지 묻고, 내 침대는 바로 눕고, 다른 �
   assert.equal(bedTapIntent(4, { canLie: true, ownedBed: 2, takenByOther: false }), "move");
   // 문병객은 눕지 않고 곁에서 목례만 해요.
   assert.equal(bedTapIntent(4, { canLie: false, ownedBed: null, takenByOther: true }), "visit");
+});
+
+test("병실 밖에서는 침대를 고르지 않고, 그 병실 안에서만 골라요", () => {
+  assert.equal(canChooseBedFrom(2, null), false);
+  assert.equal(canChooseBedFrom(2, 1), false);
+  assert.equal(canChooseBedFrom(2, 2), true);
+  assert.equal(canChooseBedFrom(0, 0), true);
 });

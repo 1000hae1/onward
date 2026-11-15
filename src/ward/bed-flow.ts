@@ -90,6 +90,14 @@ export function bedTapIntent(
   return context.ownedBed === null ? "claim" : "move";
 }
 
+/**
+ * 지금 있는 곳에서 이 침대를 고를 수 있는지예요. 병실 밖(복도·로비)에서는 침대를 고르지 않아요.
+ * 그 병실 안이나 문턱에 들어선 뒤에만 골라요. 복도에서 문 너머로 누르면 창이 뜨지 않게 해요.
+ */
+export function canChooseBedFrom(bedRoom: number, hereRoom: number | null): boolean {
+  return hereRoom !== null && hereRoom === bedRoom;
+}
+
 /** 빈 바닥을 탭했을 때예요. */
 export function tapFloor(flow: BedFlow, point: FlowPoint, duration: number): FlowStep {
   const order: WalkOrder = { kind: "spot", point };
